@@ -1,0 +1,131 @@
+#!/bin/bash
+# ============================================
+# KOBEAI ADMIN CLI v1.0
+# ============================================
+
+set -e
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+# Installation directory
+KOBEAI_HOME="${KOBEAI_HOME:-/opt/kobeai}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Load environment
+if [[ -f "$KOBEAI_HOME/.env" ]]; then
+    source "$KOBEAI_HOME/.env"
+fi
+
+# ============================================
+# HELP
+# ============================================
+show_help() {
+    cat << EOF
+${BOLD}${GREEN}╔══════════════════════════════════════════════════════════════╗
+║                    KOBEAI ADMIN CLI v1.0                        ║
+╚══════════════════════════════════════════════════════════════╝${NC}
+
+${BOLD}USAGE:${NC} kobeai-admin <command> [options]
+
+${BOLD}${CYAN}MODEL MANAGEMENT:${NC}
+  ${GREEN}models install${NC}                Install all AI models (Mistral, Phi, DeepSeek)
+  ${GREEN}models install --model <name>${NC} Install specific model
+  ${GREEN}models list${NC}                   List all installed models
+  ${GREEN}models status${NC}                 Check which models are ready
+  ${GREEN}models remove <name>${NC}          Remove a model
+  ${GREEN}models export${NC}                 Export models to portable archive
+  ${GREEN}models import <file>${NC}          Import models from archive
+
+${BOLD}${CYAN}SYSTEM CONTROL:${NC}
+  ${GREEN}system start${NC}                  Start all KobeAI services
+  ${GREEN}system stop${NC}                   Stop all services
+  ${GREEN}system restart${NC}                Restart all services
+  ${GREEN}system status${NC}                 Show status of all services
+  ${GREEN}system logs [service]${NC}         View logs (api, teacher, parent, ollama)
+
+${BOLD}${CYAN}MONITORING:${NC}
+  ${GREEN}health${NC}                        Full system health check
+  ${GREEN}stats${NC}                         Show system statistics
+  ${GREEN}connections${NC}                   Show active connections
+
+${BOLD}${CYAN}BACKUP:${NC}
+  ${GREEN}backup${NC}                        Create full system backup
+  ${GREEN}restore <file>${NC}                Restore from backup
+
+${BOLD}${CYAN}CONFIGURATION:${NC}
+  ${GREEN}config show${NC}                   Show current configuration
+  ${GREEN}config set <key> <value>${NC}      Update configuration
+  ${GREEN}server-url <url>${NC}              Set server URL for watches
+
+${BOLD}${CYAN}OTHER:${NC}
+  ${GREEN}version${NC}                       Show version
+  ${GREEN}help${NC}                          Show this help
+
+${BOLD}EXAMPLES:${NC}
+  kobeai-admin models install                    # Install all AI models
+  kobeai-admin models install --model mistral:7b # Install only Mistral
+  kobeai-admin system status                     # Check all services
+  kobeai-admin health                            # Full health check
+  kobeai-admin backup                            # Create backup
+
+EOF
+}
+
+case "$1" in
+    models)
+        shift
+        source "$SCRIPT_DIR/models.sh"
+        models_command "$@"
+        ;;
+    system)
+        shift
+        source "$SCRIPT_DIR/system.sh"
+        system_command "$@"
+        ;;
+    health)
+        source "$SCRIPT_DIR/system.sh"
+        health_check
+        ;;
+    stats)
+        source "$SCRIPT_DIR/system.sh"
+        show_stats
+        ;;
+    connections)
+        source "$SCRIPT_DIR/system.sh"
+        show_connections
+        ;;
+    backup)
+        source "$SCRIPT_DIR/system.sh"
+        create_backup
+        ;;
+    restore)
+        source "$SCRIPT_DIR/system.sh"
+        restore_backup "$2"
+        ;;
+    config)
+        shift
+        source "$SCRIPT_DIR/system.sh"
+        config_command "$@"
+        ;;
+    server-url)
+        source "$SCRIPT_DIR/system.sh"
+        set_server_url "$2"
+        ;;
+    version)
+        echo "KobeAI Admin CLI v1.0"
+        ;;
+    help|--help|-h)
+        show_help
+        ;;
+    *)
+        show_help
+        exit 1
+        ;;
+esac
