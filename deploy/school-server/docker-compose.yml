@@ -65,6 +65,19 @@ services:
       retries: 3
     networks: [kobeai]
 
+  migrate:
+    build:
+      context: ../..
+      dockerfile: deploy/school-server/Dockerfile.migrate
+    image: kobeai/migrate:latest
+    container_name: kobeai-migrate
+    restart: "no"
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-kobeai}:${POSTGRES_PASSWORD:-kobeai}@postgres:5432/${POSTGRES_DB:-kobeai}
+    networks: [kobeai]
+
   backend:
     build:
       context: ../..
@@ -75,6 +88,7 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
       redis:    { condition: service_healthy }
+      migrate:  { condition: service_completed_successfully }
     environment:
       NODE_ENV: production
       PORT: 8000

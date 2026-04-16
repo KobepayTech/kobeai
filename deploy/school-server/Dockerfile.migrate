@@ -1,0 +1,25 @@
+# =============================================================================
+# KobeAI DB migration runner — one-shot container that applies the schema
+# via `drizzle-kit push` and exits. Compose runs this before `backend` starts.
+# Build context MUST be the monorepo root.
+# =============================================================================
+
+FROM node:20-alpine AS deps
+RUN apk add --no-cache libc6-compat python3 make g++
+WORKDIR /repo
+RUN corepack enable && corepack prepare pnpm@9 --activate
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json tsconfig.json ./
+COPY artifacts/api-server/package.json ./artifacts/api-server/
+COPY artifacts/teacher-dashboard/package.json ./artifacts/teacher-dashboard/
+COPY artifacts/parent-app/package.json ./artifacts/parent-app/
+COPY artifacts/mockup-sandbox/package.json ./artifacts/mockup-sandbox/
+COPY lib ./lib
+COPY scripts ./scripts
+
+RUN pnpm install --frozen-lockfile --ignore-scripts \
+    --filter @workspace/db... \
+    --filter "./lib/**"
+
+WORKDIR /repo/lib/db
+ENTRYPOINT ["sh", "-c", "echo '[migrate] applying schema...' && pnpm drizzle-kit push --config ./drizzle.config.ts && echo '[migrate] done.'"]

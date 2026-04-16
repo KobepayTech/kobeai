@@ -122,20 +122,56 @@ sudo kobeai-admin server-url http://192.168.1.100   # update watch URL
 
 See `admin-cli/README.md` for the full command list.
 
-## What still needs work
+## TLS (Let's Encrypt)
 
-The compose file and Dockerfiles are real and will build, but a few product
-gaps remain before this is a polished pilot:
+The default stack serves plain HTTP — fine for a LAN-only school server.
+If the box is reachable from the internet on a real domain, swap the nginx
+front door for Caddy, which auto-issues and renews Let's Encrypt certs:
 
-1. **AI provider wiring.** The API currently ignores `AI_PROVIDER`; it
-   returns canned answers. Wiring `/api/v1/watch/ask` and the parent chat
-   to call Ollama at `${OLLAMA_BASE_URL}/api/generate` is the next step.
-2. **`/api/v1/admin/stats` endpoint.** `kobeai-admin stats` will print
-   `(API stats not available)` until this exists.
-3. **Database migrations on first boot.** The compose stack starts Postgres
-   but doesn't run schema migrations yet. Add a `kobeai-migrate` one-shot
-   service or run `pnpm --filter @workspace/db db:push` from the backend
-   container as a startup hook.
-4. **TLS.** nginx serves HTTP only. For internet-exposed deployments, drop
-   in a Let's Encrypt sidecar (e.g. caddy as a replacement) or add SSL
-   certs to `nginx/default.conf`.
+```bash
+# 1. Set DOMAIN + ADMIN_EMAIL in /opt/kobeai/.env
+DOMAIN=kobeai.your-school.tz
+ADMIN_EMAIL=admin@your-school.tz
+
+# 2. Start with the TLS overlay
+cd /opt/kobeai
+docker compose -f docker-compose.yml -f /path/to/repo/deploy/school-server/docker-compose.tls.yml up -d
+```
+
+Ports 80 and 443 must both be reachable from the public internet for the
+ACME HTTP-01 challenge to succeed. The overlay disables the `nginx` service
+and brings up `kobeai-caddy` instead. Certs and Caddy state persist in
+`/opt/kobeai/data/caddy/`.
+
+## AI provider
+
+The API picks its tutor backend from the `AI_PROVIDER` env var:
+
+| `AI_PROVIDER` | Behaviour                                                          |
+|---------------|--------------------------------------------------------------------|
+| `canned`      | Built-in mock answers (default in dev / Replit). Zero deps.        |
+| `ollama`      | Calls Ollama at `${OLLAMA_BASE_URL}/api/generate` with `${OLLAMA_MODEL}`. Falls back to canned on timeout/error. |
+
+For school-server deployments, `install.sh` defaults to `ollama` and the
+backend container is wired to `http://ollama:11434`. Set
+`OLLAMA_TIMEOUT_MS` (default 30000) if your hardware is slow.
+
+## Database migrations
+
+The compose stack now runs a one-shot `kobeai-migrate` container before the
+backend starts. It executes `drizzle-kit push` against the freshly-booted
+Postgres, applying any schema in `lib/db/src/schema/`. The backend has a
+`service_completed_successfully` dependency on it, so it won't start until
+the schema is up to date. Re-run manually any time with:
+
+```bash
+cd /opt/kobeai && docker compose run --rm migrate
+```
+
+## Admin stats
+
+`kobeai-admin stats` calls `/api/v1/admin/stats` on the backend and returns
+a snapshot of students, teachers, quizzes, AI question volume, and watch
+device presence. Today the numbers are derived from the demo data; once a
+real schema is in place, swap the body of `routes/admin.ts` for live
+Drizzle `count()` queries.

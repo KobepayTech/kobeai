@@ -1,0 +1,48 @@
+# =============================================================================
+# KobeAI Caddy reverse proxy — drop-in TLS replacement for nginx.
+#
+# Usage:
+#   In `.env`, set DOMAIN to a real DNS name pointing at this server, e.g.
+#       DOMAIN=kobeai.school.tz
+#   Then start with the TLS overlay:
+#       docker compose -f docker-compose.yml -f docker-compose.tls.yml up -d
+#
+# Caddy will automatically obtain and renew Let's Encrypt certs for ${DOMAIN}.
+# Leave DOMAIN unset (or set to ":80") to serve plain HTTP without certs —
+# useful for offline LAN-only deployments.
+# =============================================================================
+
+{
+    # Tell Caddy to use the email below for ACME / Let's Encrypt registration.
+    # Override with ADMIN_EMAIL in .env.
+    email {$ADMIN_EMAIL:admin@example.com}
+}
+
+{$DOMAIN::80} {
+    encode zstd gzip
+
+    # Health probe
+    handle /health {
+        respond "ok" 200
+    }
+
+    # API
+    handle_path /api/* {
+        reverse_proxy backend:8000
+    }
+
+    # Ollama (debug only — comment this block out in production)
+    handle_path /ai/* {
+        reverse_proxy ollama:11434
+    }
+
+    # Teacher dashboard (built with BASE_PATH=/teacher/)
+    handle_path /teacher/* {
+        reverse_proxy teacher:80
+    }
+
+    # Default: parent app
+    handle {
+        reverse_proxy parent:80
+    }
+}
