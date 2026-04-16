@@ -1,0 +1,49 @@
+# =============================================================================
+# KobeAI API Server - production image for on-prem school deployment
+# Build context MUST be the monorepo root (the docker-compose file does this).
+# =============================================================================
+
+# ---- Stage 1: install workspace deps -----------------------------------------
+FROM node:20-alpine AS deps
+RUN apk add --no-cache libc6-compat python3 make g++
+WORKDIR /repo
+
+RUN corepack enable && corepack prepare pnpm@9 --activate
+
+# Copy only the manifests pnpm needs to resolve the workspace graph.
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json tsconfig.json ./
+COPY artifacts/api-server/package.json ./artifacts/api-server/
+COPY artifacts/teacher-dashboard/package.json ./artifacts/teacher-dashboard/
+COPY artifacts/parent-app/package.json ./artifacts/parent-app/
+COPY artifacts/api-server/build.mjs ./artifacts/api-server/
+COPY artifacts/mockup-sandbox/package.json ./artifacts/mockup-sandbox/
+COPY lib ./lib
+COPY scripts ./scripts
+
+RUN pnpm install --frozen-lockfile --ignore-scripts \
+    --filter @workspace/api-server... \
+    --filter "./lib/**"
+
+# ---- Stage 2: build ----------------------------------------------------------
+FROM deps AS build
+WORKDIR /repo
+COPY artifacts/api-server ./artifacts/api-server
+RUN pnpm --filter @workspace/api-server run build
+
+# ---- Stage 3: runtime --------------------------------------------------------
+FROM node:20-alpine AS runtime
+RUN apk add --no-cache tini curl
+WORKDIR /app
+
+ENV NODE_ENV=production
+ENV PORT=8000
+
+COPY --from=build /repo/artifacts/api-server/dist ./dist
+COPY --from=build /repo/artifacts/api-server/package.json ./package.json
+
+EXPOSE 8000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD curl -fsS http://localhost:8000/api/healthz || exit 1
+
+ENTRYPOINT ["/sbin/tini", "--"]
+CMD ["node", "--enable-source-maps", "./dist/index.mjs"]

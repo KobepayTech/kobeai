@@ -1,0 +1,77 @@
+# =============================================================================
+# Generic web artifact image (teacher-dashboard or parent-app)
+# Pick which artifact to build with --build-arg ARTIFACT=teacher-dashboard
+# Build context MUST be the monorepo root.
+# =============================================================================
+
+ARG ARTIFACT=teacher-dashboard
+
+# ---- Stage 1: install workspace deps -----------------------------------------
+FROM node:20-alpine AS deps
+ARG ARTIFACT
+RUN apk add --no-cache libc6-compat python3 make g++
+WORKDIR /repo
+RUN corepack enable && corepack prepare pnpm@9 --activate
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json tsconfig.json ./
+COPY artifacts/api-server/package.json ./artifacts/api-server/
+COPY artifacts/teacher-dashboard/package.json ./artifacts/teacher-dashboard/
+COPY artifacts/parent-app/package.json ./artifacts/parent-app/
+COPY artifacts/mockup-sandbox/package.json ./artifacts/mockup-sandbox/
+COPY lib ./lib
+COPY scripts ./scripts
+
+RUN pnpm install --frozen-lockfile --ignore-scripts \
+    --filter "@workspace/${ARTIFACT}..." \
+    --filter "./lib/**"
+
+# ---- Stage 2: build ----------------------------------------------------------
+FROM deps AS build
+ARG ARTIFACT
+WORKDIR /repo
+COPY artifacts/${ARTIFACT} ./artifacts/${ARTIFACT}
+
+# Vite needs PORT and BASE_PATH at build time (these are also read by the server,
+# but the build itself reads BASE_PATH for asset URLs).
+ARG BASE_PATH=/
+ENV PORT=3000
+ENV BASE_PATH=${BASE_PATH}
+ENV NODE_ENV=production
+
+RUN pnpm --filter "@workspace/${ARTIFACT}" run build
+
+# ---- Stage 3: runtime --------------------------------------------------------
+# Serve the built static SPA with nginx — fast, tiny, no Node at runtime.
+FROM nginx:1.27-alpine AS runtime
+ARG ARTIFACT
+RUN apk add --no-cache curl
+
+# SPA fallback config so client-side routes (wouter) work on refresh.
+RUN cat > /etc/nginx/conf.d/default.conf <<'CONF'
+server {
+  listen 80 default_server;
+  server_name _;
+  root /usr/share/nginx/html;
+  index index.html;
+
+  # Long-cache hashed assets, no-cache the entry HTML.
+  location /assets/ {
+    expires 1y;
+    add_header Cache-Control "public, immutable";
+    try_files $uri =404;
+  }
+
+  location / {
+    add_header Cache-Control "no-cache";
+    try_files $uri $uri/ /index.html;
+  }
+
+  location = /healthz { return 200 "ok\n"; add_header Content-Type text/plain; }
+}
+CONF
+
+COPY --from=build /repo/artifacts/${ARTIFACT}/dist/public /usr/share/nginx/html
+
+EXPOSE 80
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD curl -fsS http://localhost/healthz || exit 1

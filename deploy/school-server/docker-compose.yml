@@ -1,0 +1,136 @@
+# =============================================================================
+# KobeAI School Server — full on-prem stack
+# Run from the repo root:  docker compose -f deploy/school-server/docker-compose.yml up -d
+# Or use the install.sh bootstrap which wires up /opt/kobeai for the admin CLI.
+# =============================================================================
+
+name: kobeai
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: kobeai-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-kobeai}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kobeai}
+      POSTGRES_DB: ${POSTGRES_DB:-kobeai}
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kobeai}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [kobeai]
+
+  redis:
+    image: redis:7-alpine
+    container_name: kobeai-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - ./data/redis:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks: [kobeai]
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: kobeai-ollama
+    restart: unless-stopped
+    volumes:
+      - ./data/ollama:/root/.ollama
+    ports:
+      - "11434:11434"
+    # Uncomment if the school server has an NVIDIA GPU
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks: [kobeai]
+
+  backend:
+    build:
+      context: ../..
+      dockerfile: deploy/school-server/Dockerfile.api
+    image: kobeai/backend:latest
+    container_name: kobeai-backend
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis:    { condition: service_healthy }
+    environment:
+      NODE_ENV: production
+      PORT: 8000
+      DATABASE_URL: postgres://${POSTGRES_USER:-kobeai}:${POSTGRES_PASSWORD:-kobeai}@postgres:5432/${POSTGRES_DB:-kobeai}
+      REDIS_URL: redis://redis:6379
+      SESSION_SECRET: ${SESSION_SECRET}
+      AI_PROVIDER: ${AI_PROVIDER:-canned}
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-mistral:7b}
+    ports:
+      - "8000:8000"
+    networks: [kobeai]
+
+  teacher:
+    build:
+      context: ../..
+      dockerfile: deploy/school-server/Dockerfile.web
+      args:
+        ARTIFACT: teacher-dashboard
+        BASE_PATH: /teacher/
+    image: kobeai/teacher-dashboard:latest
+    container_name: kobeai-teacher
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    networks: [kobeai]
+
+  parent:
+    build:
+      context: ../..
+      dockerfile: deploy/school-server/Dockerfile.web
+      args:
+        ARTIFACT: parent-app
+    image: kobeai/parent-app:latest
+    container_name: kobeai-parent
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    networks: [kobeai]
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: kobeai-nginx
+    restart: unless-stopped
+    depends_on: [backend, teacher, parent]
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks: [kobeai]
+
+networks:
+  kobeai:
+    driver: bridge
