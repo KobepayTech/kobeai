@@ -1,0 +1,957 @@
+🚀 KOBEAI ADMIN CLI — ONE-COMMAND MODEL MANAGEMENT
+
+Here's a complete admin CLI tool that lets you manage AI models, check system status, and control services with simple commands.
+
+---
+
+📁 FILE STRUCTURE
+
+```
+kobeai/
+├── admin-cli/
+│   ├── kobeai-admin           # Main CLI script
+│   ├── models.sh              # Model management functions
+│   ├── system.sh              # System control functions
+│   └── install-cli.sh         # CLI installer
+```
+
+---
+
+🔧 1. MAIN CLI SCRIPT
+
+admin-cli/kobeai-admin
+
+```bash
+#!/bin/bash
+# ============================================
+# KOBEAI ADMIN CLI v1.0
+# ============================================
+
+set -e
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+# Installation directory
+KOBEAI_HOME="${KOBEAI_HOME:-/opt/kobeai}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Load environment
+if [[ -f "$KOBEAI_HOME/.env" ]]; then
+    source "$KOBEAI_HOME/.env"
+fi
+
+# ============================================
+# HELP
+# ============================================
+show_help() {
+    cat << EOF
+${BOLD}${GREEN}╔══════════════════════════════════════════════════════════════╗
+║                    KOBEAI ADMIN CLI v1.0                        ║
+╚══════════════════════════════════════════════════════════════╝${NC}
+
+${BOLD}USAGE:${NC} kobeai-admin <command> [options]
+
+${BOLD}${CYAN}📦 MODEL MANAGEMENT:${NC}
+  ${GREEN}models install${NC}           Install all AI models (Mistral, Phi, DeepSeek)
+  ${GREEN}models install --model <name>${NC} Install specific model
+  ${GREEN}models list${NC}               List all installed models
+  ${GREEN}models status${NC}             Check which models are ready
+  ${GREEN}models remove <name>${NC}      Remove a model
+  ${GREEN}models export${NC}             Export models to portable archive
+  ${GREEN}models import <file>${NC}      Import models from archive
+
+${BOLD}${CYAN}🖥️ SYSTEM CONTROL:${NC}
+  ${GREEN}system start${NC}              Start all KobeAI services
+  ${GREEN}system stop${NC}               Stop all services
+  ${GREEN}system restart${NC}            Restart all services
+  ${GREEN}system status${NC}             Show status of all services
+  ${GREEN}system logs [service]${NC}     View logs (api, teacher, parent, ollama)
+
+${BOLD}${CYAN}📊 MONITORING:${NC}
+  ${GREEN}health${NC}                    Full system health check
+  ${GREEN}stats${NC}                     Show system statistics
+  ${GREEN}connections${NC}               Show active connections
+
+${BOLD}${CYAN}💾 BACKUP:${NC}
+  ${GREEN}backup${NC}                    Create full system backup
+  ${GREEN}restore <file>${NC}            Restore from backup
+
+${BOLD}${CYAN}🔧 CONFIGURATION:${NC}
+  ${GREEN}config show${NC}               Show current configuration
+  ${GREEN}config set <key> <value>${NC}  Update configuration
+  ${GREEN}server-url <url>${NC}          Set server URL for watches
+
+${BOLD}${CYAN}ℹ️ OTHER:${NC}
+  ${GREEN}version${NC}                   Show version
+  ${GREEN}help${NC}                      Show this help
+
+${BOLD}EXAMPLES:${NC}
+  kobeai-admin models install                    # Install all AI models
+  kobeai-admin models install --model mistral:7b # Install only Mistral
+  kobeai-admin system status                     # Check all services
+  kobeai-admin health                            # Full health check
+  kobeai-admin backup                            # Create backup
+
+EOF
+}
+
+# ============================================
+# MAIN COMMAND ROUTER
+# ============================================
+case "$1" in
+    models)
+        shift
+        source "$SCRIPT_DIR/models.sh"
+        models_command "$@"
+        ;;
+    system)
+        shift
+        source "$SCRIPT_DIR/system.sh"
+        system_command "$@"
+        ;;
+    health)
+        source "$SCRIPT_DIR/system.sh"
+        health_check
+        ;;
+    stats)
+        source "$SCRIPT_DIR/system.sh"
+        show_stats
+        ;;
+    connections)
+        source "$SCRIPT_DIR/system.sh"
+        show_connections
+        ;;
+    backup)
+        source "$SCRIPT_DIR/system.sh"
+        create_backup
+        ;;
+    restore)
+        source "$SCRIPT_DIR/system.sh"
+        restore_backup "$2"
+        ;;
+    config)
+        shift
+        source "$SCRIPT_DIR/system.sh"
+        config_command "$@"
+        ;;
+    server-url)
+        source "$SCRIPT_DIR/system.sh"
+        set_server_url "$2"
+        ;;
+    version)
+        echo "KobeAI Admin CLI v1.0"
+        ;;
+    help|--help|-h)
+        show_help
+        ;;
+    *)
+        show_help
+        exit 1
+        ;;
+esac
+```
+
+---
+
+🤖 2. MODEL MANAGEMENT SCRIPT
+
+admin-cli/models.sh
+
+```bash
+#!/bin/bash
+# ============================================
+# KOBEAI MODEL MANAGEMENT
+# ============================================
+
+# Available models with descriptions
+declare -A MODEL_INFO=(
+    ["mistral:7b"]="Primary AI - General purpose (4.1 GB)"
+    ["phi:2.7b"]="Fast fallback - Quick responses (1.6 GB)"
+    ["deepseek-coder:6.7b"]="Math/Science specialist (3.8 GB)"
+    ["nomic-embed-text"]="Semantic search embeddings (274 MB)"
+)
+
+MODEL_SIZES=(
+    "mistral:7b:4.1 GB"
+    "phi:2.7b:1.6 GB"
+    "deepseek-coder:6.7b:3.8 GB"
+    "nomic-embed-text:274 MB"
+)
+
+models_command() {
+    case "$1" in
+        install)
+            shift
+            install_models "$@"
+            ;;
+        list)
+            list_models
+            ;;
+        status)
+            check_models_status
+            ;;
+        remove)
+            remove_model "$2"
+            ;;
+        export)
+            export_models "$2"
+            ;;
+        import)
+            import_models "$2"
+            ;;
+        *)
+            echo -e "${RED}Unknown models command: $1${NC}"
+            echo "Use: install, list, status, remove, export, import"
+            return 1
+            ;;
+    esac
+}
+
+# ============================================
+# INSTALL MODELS
+# ============================================
+install_models() {
+    local specific_model=""
+    
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --model)
+                specific_model="$2"
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+    
+    echo -e "${BOLD}${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BOLD}${GREEN}║              KOBEAI MODEL INSTALLATION                        ║${NC}"
+    echo -e "${BOLD}${GREEN}╚══════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    
+    # Check if Ollama is running
+    if ! docker ps | grep -q kobeai-ollama; then
+        echo -e "${YELLOW}⚠️  Ollama is not running. Starting...${NC}"
+        docker start kobeai-ollama 2>/dev/null || {
+            echo -e "${RED}❌ Cannot start Ollama. Is KobeAI installed?${NC}"
+            return 1
+        }
+        sleep 5
+    fi
+    
+    # Check internet connectivity
+    echo -e "${CYAN}🌐 Checking internet connectivity...${NC}"
+    if ! curl -s --connect-timeout 5 https://ollama.com > /dev/null; then
+        echo -e "${RED}❌ No internet connection. Models must be downloaded.${NC}"
+        echo -e "${YELLOW}💡 Use 'kobeai-admin models import' to install from offline package.${NC}"
+        return 1
+    fi
+    echo -e "${GREEN}✅ Internet connected${NC}"
+    echo ""
+    
+    if [[ -n "$specific_model" ]]; then
+        # Install specific model
+        install_single_model "$specific_model"
+    else
+        # Install all models
+        echo -e "${BOLD}📦 Available models to install:${NC}"
+        echo ""
+        for model in "${!MODEL_INFO[@]}"; do
+            printf "  ${CYAN}%-25s${NC} - %s\n" "$model" "${MODEL_INFO[$model]}"
+        done
+        echo ""
+        echo -e "${YELLOW}Total download size: ~10 GB${NC}"
+        echo -e "${YELLOW}Estimated time: 15-30 minutes${NC}"
+        echo ""
+        read -p "Continue with installation? (y/n) " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            echo -e "${YELLOW}Installation cancelled.${NC}"
+            return 0
+        fi
+        
+        install_all_models
+    fi
+}
+
+install_single_model() {
+    local model="$1"
+    
+    if [[ -z "${MODEL_INFO[$model]}" ]]; then
+        echo -e "${RED}❌ Unknown model: $model${NC}"
+        echo "Available models: ${!MODEL_INFO[@]}"
+        return 1
+    fi
+    
+    echo -e "${CYAN}📥 Downloading $model...${NC}"
+    echo -e "${YELLOW}   Size: ${MODEL_INFO[$model]}${NC}"
+    echo ""
+    
+    # Show progress animation
+    show_progress() {
+        local pid=$1
+        local delay=0.5
+        local spinstr='|/-\'
+        while ps -p $pid > /dev/null; do
+            local temp=${spinstr#?}
+            printf "  [%c] Downloading... " "$spinstr"
+            local spinstr=$temp${spinstr%"$temp"}
+            sleep $delay
+            printf "\r"
+        done
+        printf "    \r"
+    }
+    
+    # Pull model
+    docker exec kobeai-ollama ollama pull "$model" &
+    local pull_pid=$!
+    show_progress $pull_pid
+    wait $pull_pid
+    
+    if docker exec kobeai-ollama ollama list | grep -q "$model"; then
+        echo -e "${GREEN}✅ Successfully installed: $model${NC}"
+    else
+        echo -e "${RED}❌ Failed to install: $model${NC}"
+        return 1
+    fi
+}
+
+install_all_models() {
+    local total=${#MODEL_INFO[@]}
+    local current=0
+    local failed=0
+    
+    for model in "${!MODEL_INFO[@]}"; do
+        ((current++))
+        echo -e "\n${BOLD}${CYAN}[$current/$total] Installing $model...${NC}"
+        
+        if install_single_model "$model"; then
+            echo -e "${GREEN}   ✅ Complete${NC}"
+        else
+            echo -e "${RED}   ❌ Failed${NC}"
+            ((failed++))
+        fi
+    done
+    
+    echo ""
+    echo -e "${BOLD}═══════════════════════════════════════════════════════════════${NC}"
+    if [[ $failed -eq 0 ]]; then
+        echo -e "${GREEN}✅ All models installed successfully!${NC}"
+    else
+        echo -e "${YELLOW}⚠️  Installation complete with $failed failure(s)${NC}"
+    fi
+    
+    # Show installed models
+    echo ""
+    list_models
+}
+
+# ============================================
+# LIST MODELS
+# ============================================
+list_models() {
+    echo -e "${BOLD}${CYAN}📋 Installed AI Models:${NC}"
+    echo ""
+    
+    if ! docker ps | grep -q kobeai-ollama; then
+        echo -e "${YELLOW}⚠️  Ollama is not running. Start with: kobeai-admin system start${NC}"
+        return 1
+    fi
+    
+    docker exec kobeai-ollama ollama list 2>/dev/null || {
+        echo -e "${YELLOW}No models installed yet.${NC}"
+        echo "Run: kobeai-admin models install"
+    }
+}
+
+# ============================================
+# CHECK MODELS STATUS
+# ============================================
+check_models_status() {
+    echo -e "${BOLD}${CYAN}🔍 Model Status Check:${NC}"
+    echo ""
+    
+    if ! docker ps | grep -q kobeai-ollama; then
+        echo -e "${RED}❌ Ollama is not running${NC}"
+        return 1
+    fi
+    
+    local installed=$(docker exec kobeai-ollama ollama list 2>/dev/null | tail -n +2 | awk '{print $1}')
+    
+    printf "%-30s %-15s %s\n" "MODEL" "STATUS" "SIZE"
+    echo "────────────────────────────────────────────────────────────────"
+    
+    for model in "${!MODEL_INFO[@]}"; do
+        if echo "$installed" | grep -q "${model%:*}"; then
+            printf "%-30s ${GREEN}%-15s${NC} %s\n" "$model" "✅ INSTALLED" "${MODEL_INFO[$model]##* }"
+        else
+            printf "%-30s ${RED}%-15s${NC} %s\n" "$model" "❌ MISSING" "${MODEL_INFO[$model]##* }"
+        fi
+    done
+    
+    echo ""
+    
+    # Check if all models are installed
+    local all_installed=true
+    for model in "${!MODEL_INFO[@]}"; do
+        if ! echo "$installed" | grep -q "${model%:*}"; then
+            all_installed=false
+            break
+        fi
+    done
+    
+    if $all_installed; then
+        echo -e "${GREEN}✅ All models are installed and ready!${NC}"
+    else
+        echo -e "${YELLOW}⚠️  Some models are missing. Run: kobeai-admin models install${NC}"
+    fi
+}
+
+# ============================================
+# REMOVE MODEL
+# ============================================
+remove_model() {
+    local model="$1"
+    
+    if [[ -z "$model" ]]; then
+        echo -e "${RED}Usage: kobeai-admin models remove <model_name>${NC}"
+        list_models
+        return 1
+    fi
+    
+    echo -e "${YELLOW}⚠️  This will remove the model: $model${NC}"
+    read -p "Are you sure? (y/n) " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "Cancelled."
+        return 0
+    fi
+    
+    docker exec kobeai-ollama ollama rm "$model"
+    echo -e "${GREEN}✅ Model removed: $model${NC}"
+}
+
+# ============================================
+# EXPORT MODELS (For offline deployment)
+# ============================================
+export_models() {
+    local output="${1:-$HOME/kobeai-models-$(date +%Y%m%d).tar.gz}"
+    
+    echo -e "${BOLD}${CYAN}📦 Exporting AI Models...${NC}"
+    echo ""
+    
+    # Check if models exist
+    if ! docker exec kobeai-ollama ollama list | grep -q "mistral"; then
+        echo -e "${YELLOW}⚠️  No models found to export.${NC}"
+        echo "Run: kobeai-admin models install"
+        return 1
+    fi
+    
+    echo -e "${YELLOW}Stopping Ollama to ensure data consistency...${NC}"
+    docker stop kobeai-ollama
+    
+    echo -e "${CYAN}Creating archive...${NC}"
+    cd "$KOBEAI_HOME/data"
+    tar -czf "$output" ollama/ 2>/dev/null
+    
+    echo -e "${YELLOW}Starting Ollama...${NC}"
+    docker start kobeai-ollama
+    
+    local size=$(du -h "$output" | cut -f1)
+    echo -e "${GREEN}✅ Models exported to: $output${NC}"
+    echo -e "${GREEN}   Size: $size${NC}"
+    echo ""
+    echo -e "${CYAN}💡 To import on another server:${NC}"
+    echo "   kobeai-admin models import $output"
+}
+
+# ============================================
+# IMPORT MODELS (Offline installation)
+# ============================================
+import_models() {
+    local archive="$1"
+    
+    if [[ -z "$archive" || ! -f "$archive" ]]; then
+        echo -e "${RED}Usage: kobeai-admin models import <archive_file>${NC}"
+        echo "Archive must be a .tar.gz file created with 'models export'"
+        return 1
+    fi
+    
+    echo -e "${BOLD}${CYAN}📥 Importing AI Models from offline package...${NC}"
+    echo ""
+    
+    local size=$(du -h "$archive" | cut -f1)
+    echo -e "Archive: $archive"
+    echo -e "Size: $size"
+    echo ""
+    
+    echo -e "${YELLOW}Stopping Ollama...${NC}"
+    docker stop kobeai-ollama
+    
+    echo -e "${CYAN}Extracting models...${NC}"
+    cd "$KOBEAI_HOME/data"
+    rm -rf ollama/ 2>/dev/null || true
+    tar -xzf "$archive"
+    
+    echo -e "${YELLOW}Starting Ollama...${NC}"
+    docker start kobeai-ollama
+    
+    sleep 5
+    
+    echo ""
+    echo -e "${GREEN}✅ Models imported successfully!${NC}"
+    echo ""
+    list_models
+}
+```
+
+---
+
+🖥️ 3. SYSTEM CONTROL SCRIPT
+
+admin-cli/system.sh
+
+```bash
+#!/bin/bash
+# ============================================
+# KOBEAI SYSTEM CONTROL
+# ============================================
+
+system_command() {
+    case "$1" in
+        start)
+            start_services
+            ;;
+        stop)
+            stop_services
+            ;;
+        restart)
+            restart_services
+            ;;
+        status)
+            show_status
+            ;;
+        logs)
+            show_logs "$2"
+            ;;
+        *)
+            echo -e "${RED}Unknown system command: $1${NC}"
+            echo "Use: start, stop, restart, status, logs"
+            return 1
+            ;;
+    esac
+}
+
+# ============================================
+# SERVICE CONTROL
+# ============================================
+start_services() {
+    echo -e "${CYAN}🚀 Starting KobeAI services...${NC}"
+    cd "$KOBEAI_HOME"
+    docker-compose up -d
+    echo ""
+    echo -e "${GREEN}✅ Services started!${NC}"
+    sleep 3
+    show_status
+}
+
+stop_services() {
+    echo -e "${YELLOW}🛑 Stopping KobeAI services...${NC}"
+    cd "$KOBEAI_HOME"
+    docker-compose down
+    echo -e "${GREEN}✅ Services stopped!${NC}"
+}
+
+restart_services() {
+    echo -e "${CYAN}🔄 Restarting KobeAI services...${NC}"
+    cd "$KOBEAI_HOME"
+    docker-compose restart
+    echo -e "${GREEN}✅ Services restarted!${NC}"
+    sleep 3
+    show_status
+}
+
+# ============================================
+# STATUS & MONITORING
+# ============================================
+show_status() {
+    echo -e "${BOLD}${CYAN}📊 KobeAI Service Status:${NC}"
+    echo ""
+    
+    cd "$KOBEAI_HOME"
+    
+    printf "%-20s %-15s %-10s %s\n" "SERVICE" "STATUS" "PORT" "HEALTH"
+    echo "────────────────────────────────────────────────────────────────"
+    
+    # Check each service
+    check_service "postgres" "kobeai-postgres" "5432" "docker exec kobeai-postgres pg_isready -U kobeai &>/dev/null"
+    check_service "redis" "kobeai-redis" "6379" "docker exec kobeai-redis redis-cli ping &>/dev/null"
+    check_service "ollama" "kobeai-ollama" "11434" "curl -s http://localhost:11434/api/tags &>/dev/null"
+    check_service "backend" "kobeai-backend" "8000" "curl -s http://localhost:8000/health &>/dev/null"
+    check_service "teacher" "kobeai-teacher" "3000" "curl -s http://localhost:3000 &>/dev/null"
+    check_service "parent" "kobeai-parent" "5173" "curl -s http://localhost:5173 &>/dev/null"
+    check_service "nginx" "kobeai-nginx" "80" "curl -s http://localhost/health &>/dev/null"
+    
+    echo ""
+}
+
+check_service() {
+    local name="$1"
+    local container="$2"
+    local port="$3"
+    local health_cmd="$4"
+    
+    if docker ps | grep -q "$container"; then
+        if eval "$health_cmd"; then
+            printf "%-20s ${GREEN}%-15s${NC} %-10s ${GREEN}%s${NC}\n" "$name" "✅ RUNNING" "$port" "HEALTHY"
+        else
+            printf "%-20s ${YELLOW}%-15s${NC} %-10s ${YELLOW}%s${NC}\n" "$name" "⚠️ RUNNING" "$port" "UNHEALTHY"
+        fi
+    else
+        printf "%-20s ${RED}%-15s${NC} %-10s ${RED}%s${NC}\n" "$name" "❌ STOPPED" "$port" "-"
+    fi
+}
+
+# ============================================
+# HEALTH CHECK
+# ============================================
+health_check() {
+    echo -e "${BOLD}${GREEN}🏥 KobeAI Full Health Check${NC}"
+    echo "═══════════════════════════════════════════════════════════════"
+    echo ""
+    
+    local all_healthy=true
+    
+    # Check API
+    echo -e "${CYAN}📡 API Server:${NC}"
+    if curl -s http://localhost:8000/health | grep -q "healthy"; then
+        echo -e "  ${GREEN}✅ API is healthy${NC}"
+        curl -s http://localhost:8000/health | jq . 2>/dev/null || echo "  $(curl -s http://localhost:8000/health)"
+    else
+        echo -e "  ${RED}❌ API is not responding${NC}"
+        all_healthy=false
+    fi
+    
+    # Check Database
+    echo ""
+    echo -e "${CYAN}🗄️ Database:${NC}"
+    if docker exec kobeai-postgres pg_isready -U kobeai &>/dev/null; then
+        local db_size=$(docker exec kobeai-postgres psql -U kobeai -d kobeai -c "SELECT pg_database_size('kobeai')/1024/1024 as size_mb;" -t | xargs)
+        echo -e "  ${GREEN}✅ PostgreSQL is ready${NC}"
+        echo -e "  📊 Database size: ${db_size} MB"
+    else
+        echo -e "  ${RED}❌ PostgreSQL is not responding${NC}"
+        all_healthy=false
+    fi
+    
+    # Check Redis
+    echo ""
+    echo -e "${CYAN}⚡ Redis Cache:${NC}"
+    if docker exec kobeai-redis redis-cli ping &>/dev/null; then
+        local redis_memory=$(docker exec kobeai-redis redis-cli INFO memory | grep used_memory_human | cut -d: -f2 | xargs)
+        echo -e "  ${GREEN}✅ Redis is ready${NC}"
+        echo -e "  💾 Memory used: $redis_memory"
+    else
+        echo -e "  ${RED}❌ Redis is not responding${NC}"
+        all_healthy=false
+    fi
+    
+    # Check AI Models
+    echo ""
+    echo -e "${CYAN}🤖 AI Models:${NC}"
+    if curl -s http://localhost:11434/api/tags &>/dev/null; then
+        local model_count=$(curl -s http://localhost:11434/api/tags | jq '.models | length' 2>/dev/null || echo "0")
+        echo -e "  ${GREEN}✅ Ollama is ready${NC}"
+        echo -e "  📦 Models installed: $model_count"
+        curl -s http://localhost:11434/api/tags | jq -r '.models[] | "  - \(.name) (\(.size/1024/1024/1024*100 | floor)/100 GB)"' 2>/dev/null
+    else
+        echo -e "  ${RED}❌ Ollama is not responding${NC}"
+        all_healthy=false
+    fi
+    
+    # Check Teacher Dashboard
+    echo ""
+    echo -e "${CYAN}📊 Teacher Dashboard:${NC}"
+    if curl -s -o /dev/null -w "%{http_code}" http://localhost:3000 | grep -q "200"; then
+        echo -e "  ${GREEN}✅ Dashboard is accessible${NC}"
+    else
+        echo -e "  ${YELLOW}⚠️ Dashboard may not be fully ready${NC}"
+    fi
+    
+    # Check Parent App
+    echo ""
+    echo -e "${CYAN}📱 Parent App:${NC}"
+    if curl -s -o /dev/null -w "%{http_code}" http://localhost:5173 | grep -q "200"; then
+        echo -e "  ${GREEN}✅ Parent app is accessible${NC}"
+    else
+        echo -e "  ${YELLOW}⚠️ Parent app may not be fully ready${NC}"
+    fi
+    
+    # System Resources
+    echo ""
+    echo -e "${CYAN}💻 System Resources:${NC}"
+    echo "  CPU: $(top -bn1 | grep "Cpu(s)" | awk '{print $2}' | cut -d'%' -f1)% used"
+    echo "  Memory: $(free -h | awk '/^Mem:/ {print $3 "/" $2}')"
+    echo "  Disk: $(df -h / | awk 'NR==2 {print $3 "/" $2 " (" $5 ")"}')"
+    
+    # Final verdict
+    echo ""
+    echo "═══════════════════════════════════════════════════════════════"
+    if $all_healthy; then
+        echo -e "${GREEN}${BOLD}✅ SYSTEM FULLY OPERATIONAL${NC}"
+    else
+        echo -e "${YELLOW}${BOLD}⚠️ SYSTEM HAS ISSUES - Check logs with: kobeai-admin system logs${NC}"
+    fi
+}
+
+# ============================================
+# STATISTICS
+# ============================================
+show_stats() {
+    echo -e "${BOLD}${CYAN}📊 KobeAI System Statistics${NC}"
+    echo "═══════════════════════════════════════════════════════════════"
+    
+    # Get stats from API if available
+    if curl -s http://localhost:8000/health &>/dev/null; then
+        echo ""
+        echo -e "${CYAN}📈 Today's Activity:${NC}"
+        curl -s http://localhost:8000/api/v1/admin/stats 2>/dev/null | jq . 2>/dev/null || echo "  (API stats not available)"
+    fi
+    
+    echo ""
+    echo -e "${CYAN}🐳 Container Resources:${NC}"
+    docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}" $(docker ps --format '{{.Names}}' | grep kobeai) 2>/dev/null
+}
+
+# ============================================
+# CONNECTIONS
+# ============================================
+show_connections() {
+    echo -e "${BOLD}${CYAN}🔌 Active Connections${NC}"
+    echo "═══════════════════════════════════════════════════════════════"
+    echo ""
+    
+    echo -e "${CYAN}📱 Connected Watches:${NC}"
+    docker exec kobeai-redis redis-cli SCARD "online_devices" 2>/dev/null || echo "  0"
+    
+    echo ""
+    echo -e "${CYAN}👥 Active API Connections:${NC}"
+    netstat -an | grep :8000 | grep ESTABLISHED | wc -l | xargs echo "  "
+}
+
+# ============================================
+# LOGS
+# ============================================
+show_logs() {
+    local service="$1"
+    
+    cd "$KOBEAI_HOME"
+    
+    if [[ -n "$service" ]]; then
+        docker-compose logs -f --tail=100 "$service"
+    else
+        docker-compose logs -f --tail=50
+    fi
+}
+
+# ============================================
+# BACKUP
+# ============================================
+create_backup() {
+    local backup_dir="$KOBEAI_HOME/backups"
+    local timestamp=$(date +%Y%m%d_%H%M%S)
+    local backup_file="$backup_dir/kobeai_backup_$timestamp.tar.gz"
+    
+    mkdir -p "$backup_dir"
+    
+    echo -e "${CYAN}💾 Creating backup...${NC}"
+    
+    cd "$KOBEAI_HOME"
+    
+    # Backup database
+    docker exec kobeai-postgres pg_dump -U kobeai kobeai > "$backup_dir/db_$timestamp.sql"
+    
+    # Backup config
+    tar -czf "$backup_file" .env docker-compose*.yml config/ 2>/dev/null
+    
+    echo -e "${GREEN}✅ Backup created: $backup_file${NC}"
+    echo "   Database: $backup_dir/db_$timestamp.sql"
+}
+
+restore_backup() {
+    local backup_file="$1"
+    
+    if [[ -z "$backup_file" || ! -f "$backup_file" ]]; then
+        echo -e "${RED}Usage: kobeai-admin restore <backup_file>${NC}"
+        return 1
+    fi
+    
+    echo -e "${YELLOW}⚠️ This will overwrite current configuration!${NC}"
+    read -p "Are you sure? (y/n) " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "Cancelled."
+        return 0
+    fi
+    
+    cd "$KOBEAI_HOME"
+    tar -xzf "$backup_file"
+    echo -e "${GREEN}✅ Configuration restored${NC}"
+}
+
+# ============================================
+# CONFIGURATION
+# ============================================
+config_command() {
+    case "$1" in
+        show)
+            echo -e "${CYAN}Current Configuration:${NC}"
+            cat "$KOBEAI_HOME/.env" | grep -v "^#" | grep -v "^$"
+            ;;
+        set)
+            if [[ -n "$2" && -n "$3" ]]; then
+                sed -i "s/^$2=.*/$2=$3/" "$KOBEAI_HOME/.env"
+                echo -e "${GREEN}✅ Updated $2=$3${NC}"
+            else
+                echo -e "${RED}Usage: kobeai-admin config set <KEY> <VALUE>${NC}"
+            fi
+            ;;
+        *)
+            echo -e "${RED}Usage: kobeai-admin config show|set${NC}"
+            ;;
+    esac
+}
+
+set_server_url() {
+    local url="$1"
+    
+    if [[ -z "$url" ]]; then
+        echo -e "${RED}Usage: kobeai-admin server-url <url>${NC}"
+        echo "Example: kobeai-admin server-url http://192.168.1.100:8000"
+        return 1
+    fi
+    
+    sed -i "s/^SERVER_URL=.*/SERVER_URL=$url/" "$KOBEAI_HOME/.env"
+    echo -e "${GREEN}✅ Server URL set to: $url${NC}"
+    echo -e "${YELLOW}💡 Restart services: kobeai-admin system restart${NC}"
+}
+```
+
+---
+
+🔧 4. CLI INSTALLER
+
+admin-cli/install-cli.sh
+
+```bash
+#!/bin/bash
+# ============================================
+# INSTALL KOBEAI ADMIN CLI
+# ============================================
+
+set -e
+
+GREEN='\033[0;32m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+echo -e "${CYAN}Installing KobeAI Admin CLI...${NC}"
+
+# Set installation directory
+INSTALL_DIR="/usr/local/bin"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Copy main script
+cp "$SCRIPT_DIR/kobeai-admin" "$INSTALL_DIR/"
+chmod +x "$INSTALL_DIR/kobeai-admin"
+
+# Copy module scripts
+mkdir -p "/opt/kobeai/admin-cli"
+cp "$SCRIPT_DIR/models.sh" "/opt/kobeai/admin-cli/"
+cp "$SCRIPT_DIR/system.sh" "/opt/kobeai/admin-cli/"
+
+# Create symlink
+ln -sf "/opt/kobeai/admin-cli" "$HOME/.kobeai"
+
+echo -e "${GREEN}✅ KobeAI Admin CLI installed!${NC}"
+echo ""
+echo "Usage: kobeai-admin help"
+echo ""
+echo "Quick commands:"
+echo "  kobeai-admin models install    # Install all AI models"
+echo "  kobeai-admin system status     # Check services"
+echo "  kobeai-admin health            # Full health check"
+```
+
+---
+
+🚀 USAGE EXAMPLES
+
+```bash
+# Install the CLI
+cd admin-cli
+chmod +x install-cli.sh
+sudo ./install-cli.sh
+
+# Now you can use these commands anywhere:
+
+# Check system status
+kobeai-admin system status
+
+# Full health check
+kobeai-admin health
+
+# Install ALL AI models (Mistral, Phi, DeepSeek)
+kobeai-admin models install
+
+# Install only Mistral
+kobeai-admin models install --model mistral:7b
+
+# Check which models are installed
+kobeai-admin models status
+
+# List installed models
+kobeai-admin models list
+
+# Export models for offline deployment
+kobeai-admin models export
+
+# Import models on a school server (no internet)
+kobeai-admin models import /path/to/kobeai-models.tar.gz
+
+# Set server URL for watches
+kobeai-admin server-url http://192.168.1.100:8000
+
+# View logs
+kobeai-admin system logs api
+
+# Create backup
+kobeai-admin backup
+
+# Show help
+kobeai-admin help
+```
+
+---
+
+✅ SUMMARY
+
+Feature Command
+Install all AI models kobeai-admin models install
+Check model status kobeai-admin models status
+System health check kobeai-admin health
+Service status kobeai-admin system status
+Export models (offline) kobeai-admin models export
+Import models (offline) kobeai-admin models import <file>
+Set server URL kobeai-admin server-url <url>
+View logs kobeai-admin system logs
+
+The admin can now control everything with simple commands!

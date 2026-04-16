@@ -6,6 +6,7 @@ import bursarRouter from "./bursar";
 import quizzesRouter from "./quizzes";
 import walletRouter from "./wallet";
 import watchRouter from "./watch";
+import watchCompatRouter from "./watch-compat";
 import parentRouter from "./parent";
 
 const router: IRouter = Router();
@@ -17,6 +18,7 @@ router.use(bursarRouter);
 router.use(quizzesRouter);
 router.use(walletRouter);
 router.use(watchRouter);
+router.use(watchCompatRouter);
 router.use(parentRouter);
 
 export default router;
