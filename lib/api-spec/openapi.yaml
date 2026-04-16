@@ -3,13 +3,28 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: KobeAI API specification
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: auth
+    description: Authentication
+  - name: teacher
+    description: Teacher dashboard
+  - name: bursar
+    description: Bursar/finance management
+  - name: quizzes
+    description: Quiz management
+  - name: wallet
+    description: Student wallet & points
+  - name: watch
+    description: Watch/AI assistant
+  - name: parent
+    description: Parent portal
+
 paths:
   /healthz:
     get:
@@ -24,6 +39,347 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /v1/auth/login:
+    post:
+      operationId: login
+      tags: [auth]
+      summary: Login (student or teacher)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "401":
+          description: Unauthorized
+
+  /v1/auth/teacher/login:
+    post:
+      operationId: teacherLogin
+      tags: [auth]
+      summary: Teacher login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TeacherLoginRequest"
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TeacherLoginResponse"
+        "401":
+          description: Unauthorized
+
+  /v1/auth/parent/login:
+    post:
+      operationId: parentLogin
+      tags: [auth]
+      summary: Parent login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ParentLoginRequest"
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ParentLoginResponse"
+        "401":
+          description: Unauthorized
+
+  /v1/teacher/dashboard/stats:
+    get:
+      operationId: getTeacherDashboardStats
+      tags: [teacher]
+      summary: Get teacher dashboard statistics
+      responses:
+        "200":
+          description: Dashboard stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TeacherDashboardStats"
+
+  /v1/teacher/students:
+    get:
+      operationId: getStudents
+      tags: [teacher]
+      summary: Get all students
+      parameters:
+        - name: grade
+          in: query
+          schema:
+            type: string
+        - name: search
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Students list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudentsListResponse"
+
+  /v1/teacher/attendance:
+    get:
+      operationId: getAttendance
+      tags: [teacher]
+      summary: Get attendance records
+      parameters:
+        - name: date
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Attendance records
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AttendanceListResponse"
+
+  /v1/teacher/leaderboard:
+    get:
+      operationId: getLeaderboard
+      tags: [teacher]
+      summary: Get student leaderboard
+      responses:
+        "200":
+          description: Leaderboard
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LeaderboardResponse"
+
+  /v1/bursar/students/balances:
+    get:
+      operationId: getStudentBalances
+      tags: [bursar]
+      summary: Get all student wallet balances
+      responses:
+        "200":
+          description: Student balances
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudentBalancesResponse"
+
+  /v1/bursar/deposit:
+    post:
+      operationId: addDeposit
+      tags: [bursar]
+      summary: Add deposit to student wallet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DepositRequest"
+      responses:
+        "200":
+          description: Deposit successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DepositResponse"
+
+  /v1/bursar/billing/summary:
+    get:
+      operationId: getBillingSummary
+      tags: [bursar]
+      summary: Get monthly billing summary
+      responses:
+        "200":
+          description: Billing summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BillingSummary"
+
+  /v1/quizzes:
+    get:
+      operationId: getQuizzes
+      tags: [quizzes]
+      summary: Get available quizzes
+      responses:
+        "200":
+          description: Quizzes list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuizzesListResponse"
+
+  /v1/quizzes/{quizId}/start:
+    get:
+      operationId: startQuiz
+      tags: [quizzes]
+      summary: Start a quiz
+      parameters:
+        - name: quizId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Quiz started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuizStartResponse"
+
+  /v1/quizzes/{quizId}/submit:
+    post:
+      operationId: submitQuiz
+      tags: [quizzes]
+      summary: Submit quiz answers
+      parameters:
+        - name: quizId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QuizSubmitRequest"
+      responses:
+        "200":
+          description: Quiz submitted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuizSubmitResponse"
+
+  /v1/wallet/balance:
+    get:
+      operationId: getWalletBalance
+      tags: [wallet]
+      summary: Get wallet balance and transactions
+      responses:
+        "200":
+          description: Wallet data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WalletResponse"
+
+  /v1/watch/ask:
+    post:
+      operationId: askQuestion
+      tags: [watch]
+      summary: Ask AI a question
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AskQuestionRequest"
+      responses:
+        "200":
+          description: AI response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AskQuestionResponse"
+
+  /v1/watch/attendance/checkin:
+    post:
+      operationId: checkIn
+      tags: [watch]
+      summary: Check in for attendance
+      responses:
+        "200":
+          description: Check-in successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AttendanceCheckInResponse"
+
+  /v1/parent/dashboard:
+    get:
+      operationId: getParentDashboard
+      tags: [parent]
+      summary: Get parent dashboard with children info
+      responses:
+        "200":
+          description: Parent dashboard data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ParentDashboardResponse"
+
+  /v1/parent/child/{childId}/activity:
+    get:
+      operationId: getChildActivity
+      tags: [parent]
+      summary: Get child activity feed
+      parameters:
+        - name: childId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Child activity
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChildActivityResponse"
+
+  /v1/parent/wallet:
+    get:
+      operationId: getParentWallet
+      tags: [parent]
+      summary: Get parent wallet/children balances
+      responses:
+        "200":
+          description: Parent wallet data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ParentWalletResponse"
+
+  /v1/parent/wallet/add-funds:
+    post:
+      operationId: addFunds
+      tags: [parent]
+      summary: Add funds to child wallet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddFundsRequest"
+      responses:
+        "200":
+          description: Funds added
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AddFundsResponse"
+
 components:
   schemas:
     HealthStatus:
@@ -34,3 +390,751 @@ components:
       required:
         - status
 
+    LoginRequest:
+      type: object
+      properties:
+        student_id:
+          type: string
+        pin:
+          type: string
+        device_id:
+          type: string
+      required:
+        - student_id
+        - pin
+        - device_id
+
+    LoginResponse:
+      type: object
+      properties:
+        access_token:
+          type: string
+        token_type:
+          type: string
+        student_name:
+          type: string
+        grade:
+          type: string
+        wallet_balance:
+          type: number
+      required:
+        - access_token
+        - token_type
+        - student_name
+        - grade
+        - wallet_balance
+
+    TeacherLoginRequest:
+      type: object
+      properties:
+        email:
+          type: string
+        password:
+          type: string
+      required:
+        - email
+        - password
+
+    TeacherLoginResponse:
+      type: object
+      properties:
+        access_token:
+          type: string
+        token_type:
+          type: string
+        teacher_name:
+          type: string
+        school:
+          type: string
+        role:
+          type: string
+      required:
+        - access_token
+        - token_type
+        - teacher_name
+        - school
+        - role
+
+    ParentLoginRequest:
+      type: object
+      properties:
+        phone:
+          type: string
+        pin:
+          type: string
+      required:
+        - phone
+        - pin
+
+    ParentLoginResponse:
+      type: object
+      properties:
+        access_token:
+          type: string
+        token_type:
+          type: string
+        parent_name:
+          type: string
+      required:
+        - access_token
+        - token_type
+        - parent_name
+
+    ActivityItem:
+      type: object
+      properties:
+        id:
+          type: string
+        student_name:
+          type: string
+        action:
+          type: string
+        points:
+          type: number
+        timestamp:
+          type: string
+      required:
+        - id
+        - student_name
+        - action
+        - points
+        - timestamp
+
+    TeacherDashboardStats:
+      type: object
+      properties:
+        total_students:
+          type: number
+        active_today:
+          type: number
+        total_points:
+          type: number
+        avg_performance:
+          type: number
+        questions_today:
+          type: number
+        online_watches:
+          type: number
+        recent_activity:
+          type: array
+          items:
+            $ref: "#/components/schemas/ActivityItem"
+      required:
+        - total_students
+        - active_today
+        - total_points
+        - avg_performance
+        - questions_today
+        - online_watches
+        - recent_activity
+
+    Student:
+      type: object
+      properties:
+        id:
+          type: string
+        student_id:
+          type: string
+        name:
+          type: string
+        grade:
+          type: string
+        points:
+          type: number
+        status:
+          type: string
+        last_active:
+          type: string
+      required:
+        - id
+        - student_id
+        - name
+        - grade
+        - points
+        - status
+
+    StudentsListResponse:
+      type: object
+      properties:
+        students:
+          type: array
+          items:
+            $ref: "#/components/schemas/Student"
+        total:
+          type: number
+      required:
+        - students
+        - total
+
+    AttendanceRecord:
+      type: object
+      properties:
+        id:
+          type: string
+        student_id:
+          type: string
+        student_name:
+          type: string
+        grade:
+          type: string
+        check_in_time:
+          type: string
+        status:
+          type: string
+        points_earned:
+          type: number
+      required:
+        - id
+        - student_id
+        - student_name
+        - grade
+        - status
+        - points_earned
+
+    AttendanceListResponse:
+      type: object
+      properties:
+        records:
+          type: array
+          items:
+            $ref: "#/components/schemas/AttendanceRecord"
+        date:
+          type: string
+        total_present:
+          type: number
+        total_absent:
+          type: number
+        total_students:
+          type: number
+      required:
+        - records
+        - date
+        - total_present
+        - total_absent
+        - total_students
+
+    LeaderboardEntry:
+      type: object
+      properties:
+        rank:
+          type: number
+        student_id:
+          type: string
+        name:
+          type: string
+        grade:
+          type: string
+        points:
+          type: number
+        badge:
+          type: string
+      required:
+        - rank
+        - student_id
+        - name
+        - grade
+        - points
+
+    LeaderboardResponse:
+      type: object
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/LeaderboardEntry"
+        period:
+          type: string
+      required:
+        - entries
+        - period
+
+    StudentBalance:
+      type: object
+      properties:
+        id:
+          type: string
+        student_id:
+          type: string
+        name:
+          type: string
+        grade:
+          type: string
+        balance:
+          type: number
+        total_deposited:
+          type: number
+        status:
+          type: string
+      required:
+        - id
+        - student_id
+        - name
+        - grade
+        - balance
+        - total_deposited
+        - status
+
+    BalanceSummary:
+      type: object
+      properties:
+        total_accounts:
+          type: number
+        total_balance:
+          type: number
+        low_balance_count:
+          type: number
+      required:
+        - total_accounts
+        - total_balance
+        - low_balance_count
+
+    StudentBalancesResponse:
+      type: object
+      properties:
+        students:
+          type: array
+          items:
+            $ref: "#/components/schemas/StudentBalance"
+        summary:
+          $ref: "#/components/schemas/BalanceSummary"
+      required:
+        - students
+        - summary
+
+    DepositRequest:
+      type: object
+      properties:
+        student_id:
+          type: string
+        amount:
+          type: number
+        deposit_method:
+          type: string
+        notes:
+          type: string
+      required:
+        - student_id
+        - amount
+
+    DepositResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        deposit_id:
+          type: string
+        receipt_number:
+          type: string
+        new_balance:
+          type: number
+        message:
+          type: string
+      required:
+        - success
+        - deposit_id
+        - receipt_number
+        - new_balance
+        - message
+
+    BillingSummary:
+      type: object
+      properties:
+        period:
+          type: string
+        total_ai_questions:
+          type: number
+        total_quizzes:
+          type: number
+        ai_cost:
+          type: number
+        quiz_cost:
+          type: number
+        subscription_fee:
+          type: number
+        total_amount:
+          type: number
+        status:
+          type: string
+      required:
+        - period
+        - total_ai_questions
+        - total_quizzes
+        - ai_cost
+        - quiz_cost
+        - subscription_fee
+        - total_amount
+        - status
+
+    QuizSummary:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        subject:
+          type: string
+        questions_count:
+          type: number
+        points_possible:
+          type: number
+        duration_minutes:
+          type: number
+      required:
+        - id
+        - title
+        - subject
+        - questions_count
+        - points_possible
+        - duration_minutes
+
+    QuizzesListResponse:
+      type: object
+      properties:
+        quizzes:
+          type: array
+          items:
+            $ref: "#/components/schemas/QuizSummary"
+      required:
+        - quizzes
+
+    QuizQuestion:
+      type: object
+      properties:
+        id:
+          type: string
+        text:
+          type: string
+        options:
+          type: array
+          items:
+            type: string
+        points:
+          type: number
+      required:
+        - id
+        - text
+        - options
+        - points
+
+    QuizStartResponse:
+      type: object
+      properties:
+        attempt_id:
+          type: string
+        quiz_id:
+          type: string
+        title:
+          type: string
+        subject:
+          type: string
+        questions:
+          type: array
+          items:
+            $ref: "#/components/schemas/QuizQuestion"
+        time_limit_minutes:
+          type: number
+        total_points:
+          type: number
+      required:
+        - attempt_id
+        - quiz_id
+        - title
+        - subject
+        - questions
+        - time_limit_minutes
+        - total_points
+
+    QuizAnswer:
+      type: object
+      properties:
+        question_id:
+          type: string
+        answer:
+          type: string
+      required:
+        - question_id
+        - answer
+
+    QuizSubmitRequest:
+      type: object
+      properties:
+        attempt_id:
+          type: string
+        answers:
+          type: array
+          items:
+            $ref: "#/components/schemas/QuizAnswer"
+      required:
+        - attempt_id
+        - answers
+
+    QuizSubmitResponse:
+      type: object
+      properties:
+        score:
+          type: number
+        total_points:
+          type: number
+        points_earned:
+          type: number
+        correct_answers:
+          type: number
+        total_questions:
+          type: number
+        message:
+          type: string
+      required:
+        - score
+        - total_points
+        - points_earned
+        - correct_answers
+        - total_questions
+        - message
+
+    Transaction:
+      type: object
+      properties:
+        id:
+          type: string
+        amount:
+          type: number
+        type:
+          type: string
+        description:
+          type: string
+        created_at:
+          type: string
+      required:
+        - id
+        - amount
+        - type
+        - description
+        - created_at
+
+    WalletResponse:
+      type: object
+      properties:
+        balance:
+          type: number
+        total_earned:
+          type: number
+        level:
+          type: number
+        daily_earned:
+          type: number
+        daily_limit:
+          type: number
+        recent_transactions:
+          type: array
+          items:
+            $ref: "#/components/schemas/Transaction"
+      required:
+        - balance
+        - total_earned
+        - level
+        - daily_earned
+        - daily_limit
+        - recent_transactions
+
+    AskQuestionRequest:
+      type: object
+      properties:
+        question:
+          type: string
+        subject:
+          type: string
+        conversation_id:
+          type: string
+      required:
+        - question
+
+    AskQuestionResponse:
+      type: object
+      properties:
+        answer:
+          type: string
+        points_earned:
+          type: number
+        new_balance:
+          type: number
+        follow_up_suggestions:
+          type: array
+          items:
+            type: string
+        conversation_id:
+          type: string
+        model_used:
+          type: string
+      required:
+        - answer
+        - points_earned
+        - new_balance
+        - follow_up_suggestions
+        - conversation_id
+        - model_used
+
+    AttendanceCheckInResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        points_earned:
+          type: number
+        check_in_time:
+          type: string
+        already_checked_in:
+          type: boolean
+        new_balance:
+          type: number
+      required:
+        - success
+        - message
+        - points_earned
+        - check_in_time
+        - already_checked_in
+        - new_balance
+
+    ChildInfo:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        grade:
+          type: string
+        balance:
+          type: number
+        today_points:
+          type: number
+        total_points:
+          type: number
+        attendance_streak:
+          type: number
+      required:
+        - id
+        - name
+        - grade
+        - balance
+        - today_points
+        - total_points
+        - attendance_streak
+
+    ParentDashboardResponse:
+      type: object
+      properties:
+        parent_name:
+          type: string
+        children:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChildInfo"
+      required:
+        - parent_name
+        - children
+
+    ChildActivityItem:
+      type: object
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+        description:
+          type: string
+        points:
+          type: number
+        timestamp:
+          type: string
+        subject:
+          type: string
+      required:
+        - id
+        - type
+        - description
+        - points
+        - timestamp
+
+    ChildActivityResponse:
+      type: object
+      properties:
+        child_name:
+          type: string
+        activities:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChildActivityItem"
+      required:
+        - child_name
+        - activities
+
+    ChildWalletInfo:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        grade:
+          type: string
+        balance:
+          type: number
+        daily_limit:
+          type: number
+        transactions:
+          type: array
+          items:
+            $ref: "#/components/schemas/Transaction"
+      required:
+        - id
+        - name
+        - grade
+        - balance
+        - daily_limit
+        - transactions
+
+    ParentWalletResponse:
+      type: object
+      properties:
+        total_balance:
+          type: number
+        children:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChildWalletInfo"
+      required:
+        - total_balance
+        - children
+
+    AddFundsRequest:
+      type: object
+      properties:
+        child_id:
+          type: string
+        amount:
+          type: number
+        method:
+          type: string
+      required:
+        - child_id
+        - amount
+
+    AddFundsResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        new_balance:
+          type: number
+        message:
+          type: string
+        receipt_id:
+          type: string
+      required:
+        - success
+        - new_balance
+        - message
+        - receipt_id

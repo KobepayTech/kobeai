@@ -1,8 +1,22 @@
 import { Router, type IRouter } from "express";
 import healthRouter from "./health";
+import authRouter from "./auth";
+import teacherRouter from "./teacher";
+import bursarRouter from "./bursar";
+import quizzesRouter from "./quizzes";
+import walletRouter from "./wallet";
+import watchRouter from "./watch";
+import parentRouter from "./parent";
 
 const router: IRouter = Router();
 
 router.use(healthRouter);
+router.use(authRouter);
+router.use(teacherRouter);
+router.use(bursarRouter);
+router.use(quizzesRouter);
+router.use(walletRouter);
+router.use(watchRouter);
+router.use(parentRouter);
 
 export default router;
