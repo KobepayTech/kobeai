@@ -3,22 +3,58 @@ import { AddDepositBody } from "@workspace/api-zod";
 
 const router = Router();
 
-const BALANCES = [
-  { id: "1", student_id: "DSS001", name: "Amina Hassan", grade: "Form 1", balance: 52000, total_deposited: 80000, status: "healthy" },
-  { id: "2", student_id: "DSS002", name: "Brian Mwenda", grade: "Form 2", balance: 1800, total_deposited: 25000, status: "low" },
-  { id: "3", student_id: "DSS003", name: "Fatuma Ali", grade: "Form 1", balance: 38000, total_deposited: 60000, status: "healthy" },
-  { id: "4", student_id: "DSS004", name: "James Oloo", grade: "Form 3", balance: 4500, total_deposited: 15000, status: "medium" },
-  { id: "5", student_id: "DSS005", name: "Neema Kibwe", grade: "Form 2", balance: 67000, total_deposited: 95000, status: "healthy" },
-  { id: "6", student_id: "DSS006", name: "Omar Suleiman", grade: "Form 4", balance: 800, total_deposited: 10000, status: "low" },
-  { id: "7", student_id: "DSS007", name: "Pendo Makame", grade: "Form 1", balance: 29000, total_deposited: 45000, status: "medium" },
-  { id: "8", student_id: "DSS008", name: "Rashidi Juma", grade: "Form 3", balance: 12000, total_deposited: 30000, status: "medium" },
+const AI_QUESTION_COST = 50;
+const QUIZ_COST = 100;
+
+type StudentSpend = {
+  id: string;
+  student_id: string;
+  name: string;
+  grade: string;
+  total_deposited: number;
+  questions_count: number;
+  quizzes_count: number;
+  status: string;
+};
+
+const STUDENTS: StudentSpend[] = [
+  { id: "1", student_id: "DSS001", name: "Amina Hassan", grade: "Form 1", total_deposited: 80000, questions_count: 412, quizzes_count: 73, status: "healthy" },
+  { id: "2", student_id: "DSS002", name: "Brian Mwenda", grade: "Form 2", total_deposited: 25000, questions_count: 358, quizzes_count: 53, status: "low" },
+  { id: "3", student_id: "DSS003", name: "Fatuma Ali", grade: "Form 1", total_deposited: 60000, questions_count: 264, quizzes_count: 86, status: "healthy" },
+  { id: "4", student_id: "DSS004", name: "James Oloo", grade: "Form 3", total_deposited: 15000, questions_count: 161, quizzes_count: 24, status: "medium" },
+  { id: "5", student_id: "DSS005", name: "Neema Kibwe", grade: "Form 2", total_deposited: 95000, questions_count: 380, quizzes_count: 90, status: "healthy" },
+  { id: "6", student_id: "DSS006", name: "Omar Suleiman", grade: "Form 4", total_deposited: 10000, questions_count: 124, quizzes_count: 30, status: "low" },
+  { id: "7", student_id: "DSS007", name: "Pendo Makame", grade: "Form 1", total_deposited: 45000, questions_count: 248, quizzes_count: 35, status: "medium" },
+  { id: "8", student_id: "DSS008", name: "Rashidi Juma", grade: "Form 3", total_deposited: 30000, questions_count: 230, quizzes_count: 65, status: "medium" },
 ];
 
+function buildBalances() {
+  return STUDENTS.map((s) => {
+    const ai_questions_spend = s.questions_count * AI_QUESTION_COST;
+    const quiz_spend = s.quizzes_count * QUIZ_COST;
+    const total_spent = ai_questions_spend + quiz_spend;
+    const balance = s.total_deposited - total_spent;
+    return {
+      id: s.id,
+      student_id: s.student_id,
+      name: s.name,
+      grade: s.grade,
+      balance,
+      total_deposited: s.total_deposited,
+      total_spent,
+      ai_questions_spend,
+      quiz_spend,
+      questions_count: s.questions_count,
+      quizzes_count: s.quizzes_count,
+      status: s.status,
+    };
+  });
+}
+
 router.get("/v1/bursar/students/balances", (_req, res) => {
-  const totalBalance = BALANCES.reduce((sum, b) => sum + b.balance, 0);
-  const lowCount = BALANCES.filter((b) => b.status === "low").length;
+  const students = buildBalances();
   res.json({
-    students: BALANCES,
+    students,
     summary: {
       total_accounts: 1247,
       total_balance: 45892000,
@@ -34,7 +70,8 @@ router.post("/v1/bursar/deposit", (req, res) => {
     return;
   }
   const { student_id, amount } = parsed.data;
-  const student = BALANCES.find((b) => b.student_id === student_id);
+  const students = buildBalances();
+  const student = students.find((b) => b.student_id === student_id);
   const newBalance = (student?.balance ?? 0) + amount;
   res.json({
     success: true,

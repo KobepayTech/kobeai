@@ -119,6 +119,11 @@ export interface StudentBalance {
   grade: string;
   balance: number;
   total_deposited: number;
+  total_spent: number;
+  ai_questions_spend: number;
+  quiz_spend: number;
+  questions_count: number;
+  quizzes_count: number;
   status: string;
 }
 

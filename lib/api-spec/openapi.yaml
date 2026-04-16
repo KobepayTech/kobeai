@@ -663,6 +663,16 @@ components:
           type: number
         total_deposited:
           type: number
+        total_spent:
+          type: number
+        ai_questions_spend:
+          type: number
+        quiz_spend:
+          type: number
+        questions_count:
+          type: number
+        quizzes_count:
+          type: number
         status:
           type: string
       required:
@@ -672,6 +682,11 @@ components:
         - grade
         - balance
         - total_deposited
+        - total_spent
+        - ai_questions_spend
+        - quiz_spend
+        - questions_count
+        - quizzes_count
         - status
 
     BalanceSummary:

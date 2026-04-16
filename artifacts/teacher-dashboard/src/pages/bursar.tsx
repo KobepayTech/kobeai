@@ -9,7 +9,8 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
-import { Wallet, ArrowUpRight, FileText } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Wallet, ArrowUpRight, FileText, Info } from "lucide-react";
 
 export default function Bursar() {
   const { data: balancesData, isLoading: balancesLoading } = useGetStudentBalances();
@@ -118,60 +119,92 @@ export default function Bursar() {
       <Card>
         <CardHeader>
           <CardTitle>Student Balances</CardTitle>
-          <CardDescription>Manage individual student wallet funds.</CardDescription>
+          <CardDescription>Manage individual student wallet funds and KobeAI usage.</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="rounded-md border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Student</TableHead>
-                  <TableHead>Grade</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Total Deposited</TableHead>
-                  <TableHead className="text-right">Current Balance</TableHead>
-                  <TableHead className="text-right">Action</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {balancesLoading ? (
+            <TooltipProvider delayDuration={150}>
+              <Table>
+                <TableHeader>
                   <TableRow>
-                    <TableCell colSpan={6} className="h-24 text-center">Loading balances...</TableCell>
+                    <TableHead>Student</TableHead>
+                    <TableHead>Grade</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead className="text-right">Total Deposited</TableHead>
+                    <TableHead className="text-right">KobeAI Spend</TableHead>
+                    <TableHead className="text-right">Current Balance</TableHead>
+                    <TableHead className="text-right">Action</TableHead>
                   </TableRow>
-                ) : balancesData?.students?.length ? (
-                  balancesData.students.map((student) => (
-                    <TableRow key={student.id}>
-                      <TableCell>
-                        <div className="font-medium">{student.name}</div>
-                        <div className="text-xs text-muted-foreground">{student.student_id}</div>
-                      </TableCell>
-                      <TableCell>Grade {student.grade}</TableCell>
-                      <TableCell>
-                        <Badge variant={student.balance < 1000 ? "destructive" : "secondary"}>
-                          {student.balance < 1000 ? "Low Balance" : student.status}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-right text-muted-foreground">
-                        TZS {student.total_deposited.toLocaleString()}
-                      </TableCell>
-                      <TableCell className="text-right font-bold text-primary">
-                        TZS {student.balance.toLocaleString()}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Button size="sm" variant="outline" onClick={() => openDepositDialog(student)}>
-                          <ArrowUpRight className="h-4 w-4 mr-1" />
-                          Deposit
-                        </Button>
-                      </TableCell>
+                </TableHeader>
+                <TableBody>
+                  {balancesLoading ? (
+                    <TableRow>
+                      <TableCell colSpan={7} className="h-24 text-center">Loading balances...</TableCell>
                     </TableRow>
-                  ))
-                ) : (
-                  <TableRow>
-                    <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">No student accounts found.</TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
+                  ) : balancesData?.students?.length ? (
+                    balancesData.students.map((student) => (
+                      <TableRow key={student.id}>
+                        <TableCell>
+                          <div className="font-medium">{student.name}</div>
+                          <div className="text-xs text-muted-foreground">{student.student_id}</div>
+                        </TableCell>
+                        <TableCell>Grade {student.grade}</TableCell>
+                        <TableCell>
+                          <Badge variant={student.balance < 1000 ? "destructive" : "secondary"}>
+                            {student.balance < 1000 ? "Low Balance" : student.status}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-right text-muted-foreground">
+                          TZS {student.total_deposited.toLocaleString()}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <button
+                                type="button"
+                                className="inline-flex items-center gap-1 font-medium text-foreground hover:text-primary cursor-help"
+                              >
+                                TZS {student.total_spent.toLocaleString()}
+                                <Info className="h-3 w-3 text-muted-foreground" />
+                              </button>
+                            </TooltipTrigger>
+                            <TooltipContent side="left" className="text-xs">
+                              <div className="space-y-1">
+                                <div className="flex justify-between gap-4">
+                                  <span className="text-muted-foreground">AI questions ({student.questions_count})</span>
+                                  <span className="font-medium">TZS {student.ai_questions_spend.toLocaleString()}</span>
+                                </div>
+                                <div className="flex justify-between gap-4">
+                                  <span className="text-muted-foreground">Quizzes ({student.quizzes_count})</span>
+                                  <span className="font-medium">TZS {student.quiz_spend.toLocaleString()}</span>
+                                </div>
+                                <div className="flex justify-between gap-4 border-t pt-1">
+                                  <span>Total</span>
+                                  <span className="font-semibold">TZS {student.total_spent.toLocaleString()}</span>
+                                </div>
+                              </div>
+                            </TooltipContent>
+                          </Tooltip>
+                        </TableCell>
+                        <TableCell className="text-right font-bold text-primary">
+                          TZS {student.balance.toLocaleString()}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Button size="sm" variant="outline" onClick={() => openDepositDialog(student)}>
+                            <ArrowUpRight className="h-4 w-4 mr-1" />
+                            Deposit
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  ) : (
+                    <TableRow>
+                      <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">No student accounts found.</TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </TooltipProvider>
           </div>
         </CardContent>
       </Card>
