@@ -1,8 +1,11 @@
 import { Router } from "express";
 import { AskQuestionBody } from "@workspace/api-zod";
 import { askAI } from "../lib/ai-provider";
+import { requireAuth } from "../lib/auth";
 
 const router = Router();
+
+router.use("/v1/watch", requireAuth(["student"]));
 
 router.post("/v1/watch/ask", async (req, res) => {
   const parsed = AskQuestionBody.safeParse(req.body);

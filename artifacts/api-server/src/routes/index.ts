@@ -19,8 +19,10 @@ router.use(teacherRouter);
 router.use(bursarRouter);
 router.use(quizzesRouter);
 router.use(walletRouter);
-router.use(watchRouter);
+// watch-compat must be first so /v1/watch/login (public) is matched before
+// watchRouter's path-prefix `requireAuth` middleware would block it.
 router.use(watchCompatRouter);
+router.use(watchRouter);
 router.use(parentRouter);
 router.use(adminRouter);
 router.use(printRouter);

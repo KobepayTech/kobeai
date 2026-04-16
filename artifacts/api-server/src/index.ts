@@ -1,5 +1,6 @@
 import app from "./app";
 import { logger } from "./lib/logger";
+import { seedDemoData } from "./lib/seed";
 
 const rawPort = process.env["PORT"];
 
@@ -22,4 +23,9 @@ app.listen(port, (err) => {
   }
 
   logger.info({ port }, "Server listening");
+
+  // Best-effort demo seed. Failures here shouldn't crash the server — they
+  // just mean the print picker will show an empty file list until a teacher
+  // uploads a real document.
+  seedDemoData().catch((err) => logger.error({ err }, "demo seed failed"));
 });

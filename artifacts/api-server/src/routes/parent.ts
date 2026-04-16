@@ -1,7 +1,10 @@
 import { Router } from "express";
 import { AddFundsBody } from "@workspace/api-zod";
+import { requireAuth } from "../lib/auth";
 
 const router = Router();
+
+router.use("/v1/parent", requireAuth(["parent"]));
 
 const CHILDREN = [
   {

@@ -1,4 +1,9 @@
 import { Router } from "express";
+import { requireAuth, signToken } from "../lib/auth";
+import { db, usersTable } from "@workspace/db";
+import { eq } from "drizzle-orm";
+
+const auth = requireAuth(["student"]);
 
 /**
  * Compatibility router for the KobeAI Wear OS watch app.
@@ -17,20 +22,36 @@ const STUDENT_FIXTURES: Record<string, { name: string; grade: string; balance: n
   TEST001: { name: "John Doe", grade: "Form 1", balance: 5000, pendingQuizzes: 3 },
 };
 
-router.post("/v1/watch/login", (req, res) => {
+router.post("/v1/watch/login", async (req, res) => {
   const { student_id, pin } = req.body ?? {};
   if (typeof student_id !== "string" || typeof pin !== "string") {
     res.status(400).json({ success: false, error: "student_id and pin are required" });
     return;
   }
+  // Demo PIN gate is intentionally narrow: only the seeded TEST001 fixture
+  // can use the hardcoded `1234`; other accounts must go through the proper
+  // /v1/auth/login endpoint that validates against the stored hash.
   const fixture = STUDENT_FIXTURES[student_id];
-  if (!fixture || pin !== "1234") {
+  if (!fixture || student_id !== "TEST001" || pin !== "1234") {
     res.status(401).json({ success: false, error: "Invalid credentials" });
     return;
   }
+  // Look up the seeded student row so the JWT carries a real user_id and
+  // student_code that downstream `requireAuth(["student"])` middleware accepts.
+  const row = (await db.select().from(usersTable).where(eq(usersTable.student_code, student_id)))[0];
+  if (!row || row.role !== "student") {
+    res.status(401).json({ success: false, error: "Invalid credentials" });
+    return;
+  }
+  const token = signToken({
+    role: "student",
+    user_id: row.id,
+    student_id: row.student_code ?? student_id,
+    name: row.name,
+  });
   res.json({
     success: true,
-    token: `watch-${student_id}-${Date.now()}`,
+    token,
     student_name: fixture.name,
     grade: fixture.grade,
     wallet_balance: fixture.balance,
@@ -38,12 +59,12 @@ router.post("/v1/watch/login", (req, res) => {
   });
 });
 
-router.post("/v1/watch/ask", (req, res, next) => {
+router.post("/v1/watch/ask", auth, (req, res, next) => {
   req.url = "/v1/watch/ask";
   next();
 });
 
-router.get("/v1/watch/quizzes", (_req, res) => {
+router.get("/v1/watch/quizzes", auth, (_req, res) => {
   res.json({
     quizzes: [
       { id: "1", title: "Mathematics Basics", subject: "Mathematics", questions_count: 5, points_possible: 50, duration_minutes: 15 },
@@ -70,9 +91,10 @@ const QUIZ_QUESTIONS: Record<string, { id: string; text: string; options: string
   ],
 };
 
-router.get("/v1/watch/quiz/:quizId/start", (req, res) => {
-  const quizId = req.params.quizId;
-  const questions = QUIZ_QUESTIONS[quizId] ?? QUIZ_QUESTIONS["1"];
+router.get("/v1/watch/quiz/:quizId/start", auth, (req, res) => {
+  const quizId = String(req.params.quizId);
+  const questions: { id: string; text: string; options: string[]; correct: string; points: number }[] =
+    QUIZ_QUESTIONS[quizId] ?? QUIZ_QUESTIONS["1"]!;
   const quizMeta: Record<string, { title: string; subject: string; duration: number }> = {
     "1": { title: "Mathematics Basics", subject: "Mathematics", duration: 15 },
     "2": { title: "Science - Biology", subject: "Science", duration: 10 },
@@ -80,7 +102,7 @@ router.get("/v1/watch/quiz/:quizId/start", (req, res) => {
     "4": { title: "English Grammar", subject: "English", duration: 20 },
     "5": { title: "Kiswahili Vocabulary", subject: "Kiswahili", duration: 15 },
   };
-  const meta = quizMeta[quizId] ?? quizMeta["1"];
+  const meta = quizMeta[quizId] ?? quizMeta["1"]!;
   res.json({
     attempt_id: `attempt_${Date.now()}`,
     quiz_id: quizId,
@@ -91,9 +113,9 @@ router.get("/v1/watch/quiz/:quizId/start", (req, res) => {
   });
 });
 
-router.post("/v1/watch/quiz/:quizId/submit", (req, res) => {
-  const quizId = req.params.quizId;
-  const questions = QUIZ_QUESTIONS[quizId] ?? QUIZ_QUESTIONS["1"];
+router.post("/v1/watch/quiz/:quizId/submit", auth, (req, res) => {
+  const quizId = String(req.params.quizId);
+  const questions = QUIZ_QUESTIONS[quizId] ?? QUIZ_QUESTIONS["1"]!;
   const answers = (req.body?.answers ?? {}) as Record<string, string>;
   let correct = 0;
   let pointsEarned = 0;
@@ -113,7 +135,7 @@ router.post("/v1/watch/quiz/:quizId/submit", (req, res) => {
   });
 });
 
-router.get("/v1/watch/wallet", (_req, res) => {
+router.get("/v1/watch/wallet", auth, (_req, res) => {
   res.json({
     balance: 5000,
     total_earned: 15000,
@@ -126,11 +148,11 @@ router.get("/v1/watch/wallet", (_req, res) => {
   });
 });
 
-router.post("/v1/watch/sync", (_req, res) => {
+router.post("/v1/watch/sync", auth, (_req, res) => {
   res.json({ new_quizzes: [], wallet_balance: 5000 });
 });
 
-router.post("/v1/watch/heartbeat", (_req, res) => {
+router.post("/v1/watch/heartbeat", auth, (_req, res) => {
   res.json({ success: true });
 });
 
