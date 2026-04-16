@@ -21,6 +21,14 @@ android {
         val apiBase = (project.findProperty("KOBEAI_API_BASE") as String?)
             ?: "https://kobeai.replit.app/"
         buildConfigField("String", "DEFAULT_API_BASE", "\"$apiBase\"")
+
+        // Shared HMAC secret used to sign the HCE payload sent to the school
+        // tap-box. Must match WATCH_HCE_SECRET on the API server. Override at
+        // build time:
+        //   ./gradlew assembleRelease -PWATCH_HCE_SECRET=<random-32-bytes-hex>
+        val hceSecret = (project.findProperty("WATCH_HCE_SECRET") as String?)
+            ?: "dev-watch-hce-secret"
+        buildConfigField("String", "WATCH_HCE_SECRET", "\"$hceSecret\"")
     }
 
     signingConfigs {

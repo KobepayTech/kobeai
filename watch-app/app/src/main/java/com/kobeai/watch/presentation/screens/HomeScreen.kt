@@ -73,6 +73,7 @@ fun HomeScreen(
             MenuCard("Quizzes", "Practice and earn points") { navController.navigate("quizzes") }
             MenuCard("Check In", "Mark daily attendance") { navController.navigate("attendance") }
             MenuCard("Wallet", "$walletBalance points") { navController.navigate("wallet") }
+            MenuCard("Print", "Tap watch on printer") { navController.navigate("print") }
         }
     }
 }

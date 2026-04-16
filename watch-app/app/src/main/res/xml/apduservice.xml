@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<host-apdu-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/hce_print_service_desc"
+    android:requireDeviceUnlock="false">
+    <!--
+      AID for KobeAI tap-to-print. The leading F0 marks this as a proprietary
+      (non-ISO-registered) AID, which is correct for school-internal use.
+      Must match KOBEAI_AID in the Pi tap-box daemon.
+    -->
+    <aid-group android:description="@string/hce_print_aid_group_desc"
+               android:category="other">
+        <aid-filter android:name="F00B0EA1F0" />
+    </aid-group>
+</host-apdu-service>

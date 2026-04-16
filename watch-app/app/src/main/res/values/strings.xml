@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">KobeAI</string>
+    <string name="hce_print_service_desc">KobeAI tap-to-print</string>
+    <string name="hce_print_aid_group_desc">KobeAI Print AID</string>
 </resources>

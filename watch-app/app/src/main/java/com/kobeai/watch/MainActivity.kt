@@ -21,6 +21,7 @@ import com.kobeai.watch.presentation.screens.AttendanceScreen
 import com.kobeai.watch.presentation.screens.ChatScreen
 import com.kobeai.watch.presentation.screens.HomeScreen
 import com.kobeai.watch.presentation.screens.LoginScreen
+import com.kobeai.watch.presentation.screens.PrintScreen
 import com.kobeai.watch.presentation.screens.QuizListScreen
 import com.kobeai.watch.presentation.screens.QuizScreen
 import com.kobeai.watch.presentation.screens.WalletScreen
@@ -75,6 +76,7 @@ class MainActivity : ComponentActivity() {
                     }
                     composable("wallet") { WalletScreen(navController = navController) }
                     composable("attendance") { AttendanceScreen(navController = navController) }
+                    composable("print") { PrintScreen(navController = navController) }
                 }
             }
         }
