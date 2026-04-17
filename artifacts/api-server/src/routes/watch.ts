@@ -2,12 +2,18 @@ import { Router } from "express";
 import { AskQuestionBody } from "@workspace/api-zod";
 import { askAI } from "../lib/ai-provider";
 import { requireAuth } from "../lib/auth";
+import { requireActiveSubscription } from "../lib/central-sync";
 
 const router = Router();
 
 router.use("/v1/watch", requireAuth(["student"]));
 
-router.post("/v1/watch/ask", async (req, res) => {
+// Premium endpoints — gated by per-student subscription. The middleware always
+// sets `x-subscription-status` so the watch app can show a banner; it only
+// hard-blocks (HTTP 402) when ENFORCE_SUBSCRIPTIONS=true.
+const subGate = requireActiveSubscription();
+
+router.post("/v1/watch/ask", subGate, async (req, res) => {
   const parsed = AskQuestionBody.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Invalid request" });
@@ -31,7 +37,7 @@ router.post("/v1/watch/ask", async (req, res) => {
   });
 });
 
-router.post("/v1/watch/attendance/checkin", (_req, res) => {
+router.post("/v1/watch/attendance/checkin", subGate, (_req, res) => {
   res.json({
     success: true,
     message: "Checked in successfully! +20 points added.",

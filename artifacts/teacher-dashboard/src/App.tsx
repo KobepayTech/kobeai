@@ -15,6 +15,8 @@ import Quizzes from "@/pages/quizzes";
 import Bursar from "@/pages/bursar";
 import Documents from "@/pages/documents";
 import SchoolAi from "@/pages/school-ai";
+import CentralTenants from "@/pages/central-tenants";
+import CentralTenantDetail from "@/pages/central-tenant-detail";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -52,7 +54,13 @@ function Router() {
       <Route path="/school-ai">
         <Shell><SchoolAi /></Shell>
       </Route>
-      
+      <Route path="/central">
+        <Shell><CentralTenants /></Shell>
+      </Route>
+      <Route path="/central/:id">
+        <Shell><CentralTenantDetail /></Shell>
+      </Route>
+
       <Route path="/">
         <Redirect to="/dashboard" />
       </Route>

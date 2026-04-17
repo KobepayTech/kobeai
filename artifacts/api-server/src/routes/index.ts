@@ -10,6 +10,7 @@ import watchCompatRouter from "./watch-compat";
 import parentRouter from "./parent";
 import adminRouter from "./admin";
 import printRouter from "./print";
+import centralRouter from "./central";
 
 const router: IRouter = Router();
 
@@ -26,5 +27,6 @@ router.use(watchRouter);
 router.use(parentRouter);
 router.use(adminRouter);
 router.use(printRouter);
+router.use(centralRouter);
 
 export default router;

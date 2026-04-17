@@ -1,4 +1,4 @@
-import { pgTable, text, serial, timestamp, integer, uniqueIndex, primaryKey } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, integer, uniqueIndex, primaryKey, boolean } from "drizzle-orm/pg-core";
 
 /**
  * Core identity table. Covers students, teachers, and admins by `role`.
@@ -84,3 +84,107 @@ export const documentAssignmentsTable = pgTable(
   },
   (t) => ({ pk: primaryKey({ columns: [t.document_id, t.class_id] }) }),
 );
+
+// ---------------------------------------------------------------------------
+// Multi-tenant control plane: managed by the central server.
+//
+// In production the central server is a separate deployment that owns
+// `tenants`, `student_subscriptions`, and `tenant_usage_snapshots`. Each
+// school's local api-server holds a read-only `subscription_cache` populated
+// by a periodic sync. For the demo, both live in the same database so the
+// sync API can be exercised end-to-end.
+// ---------------------------------------------------------------------------
+
+/**
+ * One row per school. The `license_key` is the bearer token a school's local
+ * api-server uses to authenticate with the central sync API.
+ */
+export const tenantsTable = pgTable(
+  "tenants",
+  {
+    id: serial("id").primaryKey(),
+    slug: text("slug").notNull(), // e.g. "karatu-secondary"
+    name: text("name").notNull(),
+    region: text("region").notNull().default("Tanzania"),
+    plan: text("plan").notNull().default("standard"), // standard | pro | trial
+    license_key: text("license_key").notNull(),
+    contact_email: text("contact_email"),
+    contact_phone: text("contact_phone"),
+    active: boolean("active").notNull().default(true),
+    students_cap: integer("students_cap").notNull().default(500),
+    last_sync_at: timestamp("last_sync_at"),
+    last_sync_ip: text("last_sync_ip"),
+    created_at: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    slug_idx: uniqueIndex("tenants_slug_idx").on(t.slug),
+    license_idx: uniqueIndex("tenants_license_idx").on(t.license_key),
+  }),
+);
+export type Tenant = typeof tenantsTable.$inferSelect;
+
+/**
+ * Source-of-truth subscription for a single student at a single tenant.
+ * Status drives gating of premium features (AI tutor, attendance points).
+ *
+ *  - `active`  : paid and current
+ *  - `grace`   : recently lapsed but still allowed (configurable window)
+ *  - `expired` : blocked
+ *  - `trial`   : free trial, blocked when `expires_at` passes
+ */
+export const studentSubscriptionsTable = pgTable(
+  "student_subscriptions",
+  {
+    id: serial("id").primaryKey(),
+    tenant_id: integer("tenant_id")
+      .notNull()
+      .references(() => tenantsTable.id, { onDelete: "cascade" }),
+    student_code: text("student_code").notNull(),
+    student_name: text("student_name").notNull(),
+    plan: text("plan").notNull().default("basic"), // basic | premium | trial
+    status: text("status").notNull().default("trial"),
+    monthly_price_tsh: integer("monthly_price_tsh").notNull().default(0),
+    parent_phone: text("parent_phone"),
+    last_payment_at: timestamp("last_payment_at"),
+    expires_at: timestamp("expires_at"),
+    created_at: timestamp("created_at").defaultNow().notNull(),
+    updated_at: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    tenant_student_idx: uniqueIndex("subs_tenant_student_idx").on(t.tenant_id, t.student_code),
+  }),
+);
+export type StudentSubscription = typeof studentSubscriptionsTable.$inferSelect;
+
+/**
+ * Local read-only cache populated from the central sync API. Lets the school
+ * server keep enforcing subscriptions even when central is unreachable.
+ */
+export const subscriptionCacheTable = pgTable(
+  "subscription_cache",
+  {
+    student_code: text("student_code").primaryKey(),
+    status: text("status").notNull(),
+    plan: text("plan").notNull(),
+    expires_at: timestamp("expires_at"),
+    synced_at: timestamp("synced_at").defaultNow().notNull(),
+  },
+);
+export type CachedSubscription = typeof subscriptionCacheTable.$inferSelect;
+
+/**
+ * Aggregated usage stats pushed by each school's local server. The central
+ * dashboard renders these to show MRR, active student counts, AI calls, etc.
+ */
+export const tenantUsageSnapshotsTable = pgTable("tenant_usage_snapshots", {
+  id: serial("id").primaryKey(),
+  tenant_id: integer("tenant_id")
+    .notNull()
+    .references(() => tenantsTable.id, { onDelete: "cascade" }),
+  snapshot_at: timestamp("snapshot_at").defaultNow().notNull(),
+  students_total: integer("students_total").notNull().default(0),
+  students_active_24h: integer("students_active_24h").notNull().default(0),
+  ai_questions_24h: integer("ai_questions_24h").notNull().default(0),
+  print_jobs_24h: integer("print_jobs_24h").notNull().default(0),
+});
+export type TenantUsageSnapshot = typeof tenantUsageSnapshotsTable.$inferSelect;

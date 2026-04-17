@@ -11,7 +11,7 @@ const JWT_TTL = "12h";
 
 export type Principal = {
   sub: string; // string user id
-  role: "student" | "teacher" | "admin" | "parent";
+  role: "student" | "teacher" | "admin" | "parent" | "super_admin";
   user_id: number;
   student_id?: string; // student_code, when role === student
   email?: string;

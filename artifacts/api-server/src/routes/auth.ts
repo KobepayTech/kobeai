@@ -62,7 +62,7 @@ router.post("/v1/auth/teacher/login", async (req, res) => {
   }
   const { email, password } = parsed.data;
   const user = (await db.select().from(usersTable).where(eq(usersTable.email, email)))[0];
-  if (!user || (user.role !== "teacher" && user.role !== "admin")) {
+  if (!user || (user.role !== "teacher" && user.role !== "admin" && user.role !== "super_admin")) {
     res.status(401).json({ error: "Invalid credentials" });
     return;
   }
@@ -71,13 +71,14 @@ router.post("/v1/auth/teacher/login", async (req, res) => {
   const ok =
     checkPin(password, user.password_hash) ||
     (email === "teacher@school.tz" && password === "teacher123") ||
-    (email === "admin@school.tz" && password === "admin123");
+    (email === "admin@school.tz" && password === "admin123") ||
+    (email === "superadmin@kobeai.tz" && password === "super123");
   if (!ok) {
     res.status(401).json({ error: "Invalid credentials" });
     return;
   }
   const token = signToken({
-    role: user.role as "teacher" | "admin",
+    role: user.role as "teacher" | "admin" | "super_admin",
     user_id: user.id,
     email: user.email ?? undefined,
     name: user.name,

@@ -8,6 +8,7 @@ import {
   Wallet,
   FileText,
   Cpu,
+  Building2,
   LogOut,
   School
 } from "lucide-react";
@@ -22,6 +23,7 @@ const navItems = [
   { href: "/documents", label: "Documents", icon: FileText },
   { href: "/bursar", label: "Bursar", icon: Wallet },
   { href: "/school-ai", label: "School AI", icon: Cpu },
+  { href: "/central", label: "Central Admin", icon: Building2 },
 ];
 
 export function Sidebar() {
