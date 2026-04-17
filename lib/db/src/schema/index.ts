@@ -164,13 +164,45 @@ export const subscriptionCacheTable = pgTable(
   "subscription_cache",
   {
     student_code: text("student_code").primaryKey(),
+    student_name: text("student_name"),
     status: text("status").notNull(),
     plan: text("plan").notNull(),
+    monthly_price_tsh: integer("monthly_price_tsh").notNull().default(0),
+    parent_phone: text("parent_phone"),
     expires_at: timestamp("expires_at"),
     synced_at: timestamp("synced_at").defaultNow().notNull(),
   },
 );
 export type CachedSubscription = typeof subscriptionCacheTable.$inferSelect;
+
+/**
+ * Subscription payments collected via M-Pesa STK push from the parent app.
+ * Lives on the central server (the bursar of each school sees the rows for
+ * their own tenant_id; central also drives subscription renewal upon success).
+ *
+ * Lifecycle:
+ *   pending  -> STK push has been initiated, waiting on parent PIN
+ *   success  -> M-Pesa callback confirmed; subscription extended
+ *   failed   -> STK timeout / parent declined / insufficient funds
+ */
+export const subscriptionPaymentsTable = pgTable("subscription_payments", {
+  id: serial("id").primaryKey(),
+  tenant_id: integer("tenant_id")
+    .notNull()
+    .references(() => tenantsTable.id, { onDelete: "cascade" }),
+  student_code: text("student_code").notNull(),
+  student_name: text("student_name").notNull(),
+  plan: text("plan").notNull().default("basic"),
+  amount_tsh: integer("amount_tsh").notNull(),
+  phone: text("phone").notNull(),
+  status: text("status").notNull().default("pending"),
+  checkout_request_id: text("checkout_request_id").notNull(),
+  mpesa_receipt: text("mpesa_receipt"),
+  failure_reason: text("failure_reason"),
+  initiated_at: timestamp("initiated_at").defaultNow().notNull(),
+  completed_at: timestamp("completed_at"),
+});
+export type SubscriptionPayment = typeof subscriptionPaymentsTable.$inferSelect;
 
 /**
  * Aggregated usage stats pushed by each school's local server. The central

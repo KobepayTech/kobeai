@@ -56,7 +56,15 @@ export async function syncOnce(): Promise<void> {
       return;
     }
     const body = (await res.json()) as {
-      subscriptions: Array<{ student_code: string; status: string; plan: string; expires_at: string | null }>;
+      subscriptions: Array<{
+        student_code: string;
+        student_name?: string | null;
+        status: string;
+        plan: string;
+        monthly_price_tsh?: number | null;
+        parent_phone?: string | null;
+        expires_at: string | null;
+      }>;
     };
     // Atomic replace: upsert every incoming row, then delete rows that
     // weren't in the snapshot. Wrapped in a transaction so a concurrent
@@ -69,16 +77,22 @@ export async function syncOnce(): Promise<void> {
           .insert(subscriptionCacheTable)
           .values({
             student_code: s.student_code,
+            student_name: s.student_name ?? null,
             status: s.status,
             plan: s.plan,
+            monthly_price_tsh: s.monthly_price_tsh ?? 0,
+            parent_phone: s.parent_phone ?? null,
             expires_at: s.expires_at ? new Date(s.expires_at) : null,
             synced_at: new Date(),
           })
           .onConflictDoUpdate({
             target: subscriptionCacheTable.student_code,
             set: {
+              student_name: s.student_name ?? null,
               status: s.status,
               plan: s.plan,
+              monthly_price_tsh: s.monthly_price_tsh ?? 0,
+              parent_phone: s.parent_phone ?? null,
               expires_at: s.expires_at ? new Date(s.expires_at) : null,
               synced_at: new Date(),
             },

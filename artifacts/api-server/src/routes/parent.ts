@@ -1,11 +1,28 @@
 import { Router } from "express";
 import { AddFundsBody } from "@workspace/api-zod";
+import { db, subscriptionCacheTable } from "@workspace/db";
+import { eq } from "drizzle-orm";
 import { requireAuth } from "../lib/auth";
 import { listDocumentsForStudent } from "../lib/student-documents";
 
 const router = Router();
 
 router.use("/v1/parent", requireAuth(["parent"]));
+
+// Helper for parent-initiated payments: forward to central using THIS school's
+// license key. Reads env lazily (same reason as central-sync.ts).
+async function centralFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const base = process.env["CENTRAL_BASE_URL"] ?? "";
+  const key = process.env["TENANT_LICENSE_KEY"] ?? "";
+  return fetch(`${base}${path}`, {
+    ...init,
+    headers: {
+      "content-type": "application/json",
+      "x-tenant-license-key": key,
+      ...(init.headers ?? {}),
+    },
+  });
+}
 
 // Demo bridge: parent demo child id -> real student_code in the DB.
 //
@@ -18,6 +35,7 @@ router.use("/v1/parent", requireAuth(["parent"]));
 // and reject `:childId` values that aren't owned by `req.auth.sub`.
 const CHILD_TO_STUDENT_CODE: Record<string, string> = {
   "1": "TEST001",
+  "2": "TEST002",
 };
 
 const CHILDREN = [
@@ -125,6 +143,102 @@ router.get("/v1/parent/wallet", (_req, res) => {
       id, name, grade, balance, daily_limit, transactions,
     })),
   });
+});
+
+/**
+ * GET /v1/parent/subscriptions
+ * Lists this parent's children with their current subscription status pulled
+ * from the local subscription_cache (which was populated by the central sync
+ * agent). Always reads from the local cache so the parent app keeps working
+ * during a central outage.
+ */
+router.get("/v1/parent/subscriptions", async (_req, res) => {
+  const out = await Promise.all(
+    CHILDREN.map(async (c) => {
+      const code = CHILD_TO_STUDENT_CODE[c.id];
+      if (!code) return null;
+      const [sub] = await db
+        .select()
+        .from(subscriptionCacheTable)
+        .where(eq(subscriptionCacheTable.student_code, code));
+      return {
+        child_id: c.id,
+        child_name: c.name,
+        grade: c.grade,
+        student_code: code,
+        plan: sub?.plan ?? "basic",
+        status: sub?.status ?? "uncached",
+        monthly_price_tsh: sub?.monthly_price_tsh ?? 5000,
+        expires_at: sub?.expires_at?.toISOString() ?? null,
+        parent_phone: sub?.parent_phone ?? null,
+      };
+    }),
+  );
+  res.json({ subscriptions: out.filter(Boolean) });
+});
+
+/**
+ * POST /v1/parent/subscriptions/pay
+ * { child_id, phone? } — initiates an M-Pesa STK push for this child's
+ * monthly subscription. The actual STK is simulated in the central server
+ * (see routes/central.ts: /central/v1/payments/initiate). Returns the
+ * payment_id which the client can poll until status flips to success/failed.
+ */
+router.post("/v1/parent/subscriptions/pay", async (req, res) => {
+  const { child_id, phone } = req.body ?? {};
+  const child = CHILDREN.find((c) => c.id === child_id);
+  const code = child_id ? CHILD_TO_STUDENT_CODE[child_id] : undefined;
+  if (!child || !code) {
+    res.status(404).json({ error: "Child not found" });
+    return;
+  }
+  const [sub] = await db
+    .select()
+    .from(subscriptionCacheTable)
+    .where(eq(subscriptionCacheTable.student_code, code));
+  if (!sub) {
+    res.status(409).json({ error: "Subscription not synced yet — please retry in a moment." });
+    return;
+  }
+  const useAmount = sub.monthly_price_tsh > 0 ? sub.monthly_price_tsh : 5000;
+  const usePhone = (phone ?? sub.parent_phone ?? "").toString().trim();
+  if (!usePhone) {
+    res.status(400).json({ error: "Phone number required" });
+    return;
+  }
+  const upstream = await centralFetch("/api/central/v1/payments/initiate", {
+    method: "POST",
+    body: JSON.stringify({ student_code: code, phone: usePhone, amount_tsh: useAmount }),
+  });
+  const body = await upstream.json();
+  res.status(upstream.status).json(body);
+});
+
+router.get("/v1/parent/subscriptions/payment/:id", async (req, res) => {
+  // Read from the central source of truth via license-key proxy. In the demo
+  // central + school share one DB, but we go through the central API anyway
+  // so that (a) this code keeps working when central moves to its own host
+  // and (b) we get the central tenant_id scoping for free.
+  //
+  // Then enforce that the payment belongs to a student this parent owns —
+  // prevents enumerating other parents' payment IDs (IDOR).
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) {
+    res.status(400).json({ error: "Invalid payment id" });
+    return;
+  }
+  const upstream = await centralFetch(`/api/central/v1/payments/${id}`);
+  if (!upstream.ok) {
+    res.status(upstream.status).json(await upstream.json().catch(() => ({ error: "Upstream error" })));
+    return;
+  }
+  const body = await upstream.json();
+  const ownedCodes = new Set(Object.values(CHILD_TO_STUDENT_CODE));
+  if (!body.payment || !ownedCodes.has(body.payment.student_code)) {
+    res.status(404).json({ error: "Payment not found" });
+    return;
+  }
+  res.json({ payment: body.payment });
 });
 
 router.post("/v1/parent/wallet/add-funds", (req, res) => {

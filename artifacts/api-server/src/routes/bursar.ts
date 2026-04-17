@@ -1,7 +1,46 @@
 import { Router } from "express";
 import { AddDepositBody } from "@workspace/api-zod";
+import { requireAuth } from "../lib/auth";
+import { logger } from "../lib/logger";
 
 const router = Router();
+
+/**
+ * GET /v1/bursar/subscription-payments
+ * Lists subscription M-Pesa collections for THIS school. Reads from the
+ * central server using the school's tenant license key.
+ *
+ * The bursar uses this to reconcile incoming parent payments and to see
+ * which subscriptions just renewed.
+ *
+ * AUTH: locked down to teacher/admin staff only — payment rows contain
+ * parent phone numbers and M-Pesa receipts (PII). The other bursar demo
+ * endpoints below are intentionally left unauthed for the demo, but the
+ * payments feed is real PII so it gets explicit auth.
+ */
+router.get("/v1/bursar/subscription-payments", requireAuth(["admin", "teacher", "super_admin"]), async (_req, res) => {
+  const base = process.env["CENTRAL_BASE_URL"] ?? "";
+  const key = process.env["TENANT_LICENSE_KEY"] ?? "";
+  if (!base || !key) {
+    res.json({ payments: [], summary: { total_count: 0, success_count: 0, pending_count: 0, failed_count: 0, collected_tsh: 0 } });
+    return;
+  }
+  try {
+    const upstream = await fetch(`${base}/api/central/v1/payments?limit=50`, {
+      headers: { "x-tenant-license-key": key },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!upstream.ok) {
+      res.status(502).json({ error: `Central returned ${upstream.status}` });
+      return;
+    }
+    const body = await upstream.json();
+    res.json(body);
+  } catch (err) {
+    logger.warn({ err }, "bursar subscription-payments fetch failed");
+    res.status(502).json({ error: "Central unreachable" });
+  }
+});
 
 const AI_QUESTION_COST = 50;
 const QUIZ_COST = 100;

@@ -1,20 +1,61 @@
 import { useState } from "react";
 import { useGetStudentBalances, useGetBillingSummary, useAddDeposit } from "@workspace/api-client-react";
+import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { Wallet, ArrowUpRight, FileText, Info } from "lucide-react";
+import { Wallet, ArrowUpRight, FileText, Info, Smartphone, CheckCircle2, Clock, XCircle } from "lucide-react";
+
+type Payment = {
+  id: number;
+  student_code: string;
+  student_name: string;
+  plan: string;
+  amount_tsh: number;
+  phone: string;
+  status: "pending" | "success" | "failed";
+  mpesa_receipt: string | null;
+  failure_reason: string | null;
+  initiated_at: string;
+  completed_at: string | null;
+};
+
+type PaymentsResponse = {
+  payments: Payment[];
+  summary: {
+    total_count: number;
+    success_count: number;
+    pending_count: number;
+    failed_count: number;
+    collected_tsh: number;
+  };
+};
+
+function StatusPill({ status }: { status: Payment["status"] }) {
+  if (status === "success") return <Badge className="bg-emerald-500 hover:bg-emerald-500"><CheckCircle2 className="h-3 w-3 mr-1" />Success</Badge>;
+  if (status === "pending") return <Badge className="bg-amber-500 hover:bg-amber-500"><Clock className="h-3 w-3 mr-1" />Pending</Badge>;
+  return <Badge variant="destructive"><XCircle className="h-3 w-3 mr-1" />Failed</Badge>;
+}
 
 export default function Bursar() {
   const { data: balancesData, isLoading: balancesLoading } = useGetStudentBalances();
   const { data: billingData, isLoading: billingLoading } = useGetBillingSummary();
+  const { data: paymentsData, isLoading: paymentsLoading } = useQuery<PaymentsResponse>({
+    queryKey: ["bursar-subscription-payments"],
+    queryFn: async () => {
+      const res = await fetch("/api/v1/bursar/subscription-payments");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    refetchInterval: 5000, // bursar wants to see incoming STK payments live
+  });
   const depositMutation = useAddDeposit();
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -115,6 +156,81 @@ export default function Bursar() {
           </CardContent>
         </Card>
       </div>
+
+      <Card className="border-primary/30 bg-primary/[0.02]">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Smartphone className="h-5 w-5 text-primary" />
+            M-Pesa Subscription Collections
+          </CardTitle>
+          <CardDescription>
+            Live feed of parent STK push payments for student subscriptions. Each successful payment renews the child's plan for 30 days.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="rounded-lg border bg-card p-4">
+              <p className="text-xs text-muted-foreground">Collected</p>
+              <p className="text-2xl font-bold text-primary">
+                TZS {(paymentsData?.summary?.collected_tsh ?? 0).toLocaleString()}
+              </p>
+            </div>
+            <div className="rounded-lg border bg-card p-4">
+              <p className="text-xs text-muted-foreground">Successful</p>
+              <p className="text-2xl font-bold text-emerald-600">{paymentsData?.summary?.success_count ?? 0}</p>
+            </div>
+            <div className="rounded-lg border bg-card p-4">
+              <p className="text-xs text-muted-foreground">Pending</p>
+              <p className="text-2xl font-bold text-amber-600">{paymentsData?.summary?.pending_count ?? 0}</p>
+            </div>
+            <div className="rounded-lg border bg-card p-4">
+              <p className="text-xs text-muted-foreground">Failed</p>
+              <p className="text-2xl font-bold text-rose-600">{paymentsData?.summary?.failed_count ?? 0}</p>
+            </div>
+          </div>
+          <div className="rounded-md border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Student</TableHead>
+                  <TableHead>Phone</TableHead>
+                  <TableHead>Plan</TableHead>
+                  <TableHead className="text-right">Amount</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Receipt</TableHead>
+                  <TableHead>When</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {paymentsLoading ? (
+                  <TableRow><TableCell colSpan={7} className="h-16 text-center text-muted-foreground">Loading...</TableCell></TableRow>
+                ) : !paymentsData?.payments?.length ? (
+                  <TableRow><TableCell colSpan={7} className="h-16 text-center text-muted-foreground">No subscription payments yet — ask parents to pay from the Parent App.</TableCell></TableRow>
+                ) : (
+                  paymentsData.payments.map((p) => (
+                    <TableRow key={p.id}>
+                      <TableCell>
+                        <div className="font-medium">{p.student_name}</div>
+                        <div className="text-xs text-muted-foreground">{p.student_code}</div>
+                      </TableCell>
+                      <TableCell className="text-sm">{p.phone}</TableCell>
+                      <TableCell className="capitalize text-sm">{p.plan}</TableCell>
+                      <TableCell className="text-right font-semibold">TZS {p.amount_tsh.toLocaleString()}</TableCell>
+                      <TableCell><StatusPill status={p.status} /></TableCell>
+                      <TableCell className="font-mono text-xs">
+                        {p.mpesa_receipt ?? (p.failure_reason ? <span className="text-rose-600">{p.failure_reason}</span> : "—")}
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {new Date(p.initiated_at).toLocaleString()}
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

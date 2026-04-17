@@ -10,6 +10,7 @@ import Wallet from "@/pages/wallet";
 import Activity from "@/pages/activity";
 import Profile from "@/pages/profile";
 import PrintPage from "@/pages/print";
+import SubscriptionPage from "@/pages/subscription";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -29,6 +30,7 @@ function Router() {
       <Route path="/wallet" component={Wallet} />
       <Route path="/activity" component={Activity} />
       <Route path="/print" component={PrintPage} />
+      <Route path="/subscription" component={SubscriptionPage} />
       <Route path="/profile" component={Profile} />
       <Route component={NotFound} />
     </Switch>
