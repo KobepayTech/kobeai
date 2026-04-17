@@ -10,7 +10,8 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, KeyRound, Plus, Eye, EyeOff } from "lucide-react";
+import { ArrowLeft, KeyRound, Plus, Eye, EyeOff, Activity, MessageSquare, Printer } from "lucide-react";
+import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip as RTooltip, CartesianGrid } from "recharts";
 
 type Subscription = {
   id: number;
@@ -37,7 +38,8 @@ type Tenant = {
   students_cap: number;
 };
 
-type Detail = { tenant: Tenant; subscriptions: Subscription[]; usage: Array<{ snapshot_at: string; students_active_24h: number; ai_questions_24h: number; print_jobs_24h: number }> };
+type UsageSnapshot = { snapshot_at: string; students_total?: number; students_active_24h: number; ai_questions_24h: number; print_jobs_24h: number };
+type Detail = { tenant: Tenant; subscriptions: Subscription[]; usage: UsageSnapshot[] };
 
 const STATUS_COLOR: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
   active: "default",
@@ -181,26 +183,62 @@ export default function CentralTenantDetail() {
         </CardContent>
       </Card>
 
-      {data.usage.length > 0 && (
-        <Card>
-          <CardHeader><CardTitle>Recent usage snapshots</CardTitle></CardHeader>
-          <CardContent>
-            <Table>
-              <TableHeader><TableRow><TableHead>When</TableHead><TableHead>Active 24h</TableHead><TableHead>AI questions</TableHead><TableHead>Print jobs</TableHead></TableRow></TableHeader>
-              <TableBody>
-                {data.usage.map((u, i) => (
-                  <TableRow key={i}>
-                    <TableCell className="text-sm">{new Date(u.snapshot_at).toLocaleString()}</TableCell>
-                    <TableCell>{u.students_active_24h}</TableCell>
-                    <TableCell>{u.ai_questions_24h}</TableCell>
-                    <TableCell>{u.print_jobs_24h}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
-      )}
+      {data.usage.length > 0 && (() => {
+        // Server returns newest first — reverse for left-to-right time axis.
+        const series = [...data.usage].reverse().map((u) => ({
+          t: new Date(u.snapshot_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+          ai: u.ai_questions_24h,
+          prints: u.print_jobs_24h,
+          active: u.students_active_24h,
+        }));
+        const latest = data.usage[0];
+        return (
+          <Card>
+            <CardHeader>
+              <CardTitle>Live usage from this school</CardTitle>
+              <p className="text-xs text-muted-foreground">School pushes a fresh snapshot every minute. Last snapshot: {new Date(latest.snapshot_at).toLocaleString()}</p>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="grid grid-cols-3 gap-4">
+                <div className="rounded-lg border p-4">
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground"><Activity className="h-3.5 w-3.5" />Active students (24h)</div>
+                  <div className="text-2xl font-bold mt-1">{latest.students_active_24h.toLocaleString()}</div>
+                </div>
+                <div className="rounded-lg border p-4">
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground"><MessageSquare className="h-3.5 w-3.5" />AI questions (24h)</div>
+                  <div className="text-2xl font-bold mt-1 text-primary">{latest.ai_questions_24h.toLocaleString()}</div>
+                </div>
+                <div className="rounded-lg border p-4">
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground"><Printer className="h-3.5 w-3.5" />Print jobs (24h)</div>
+                  <div className="text-2xl font-bold mt-1">{latest.print_jobs_24h.toLocaleString()}</div>
+                </div>
+              </div>
+              <div className="h-56 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={series} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
+                    <defs>
+                      <linearGradient id="aiFill" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="#00A86B" stopOpacity={0.5} />
+                        <stop offset="100%" stopColor="#00A86B" stopOpacity={0} />
+                      </linearGradient>
+                      <linearGradient id="prFill" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="#1A1A2E" stopOpacity={0.35} />
+                        <stop offset="100%" stopColor="#1A1A2E" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#eef" />
+                    <XAxis dataKey="t" tick={{ fontSize: 11 }} />
+                    <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
+                    <RTooltip />
+                    <Area type="monotone" dataKey="ai" name="AI questions" stroke="#00A86B" strokeWidth={2} fill="url(#aiFill)" />
+                    <Area type="monotone" dataKey="prints" name="Print jobs" stroke="#1A1A2E" strokeWidth={2} fill="url(#prFill)" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })()}
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>

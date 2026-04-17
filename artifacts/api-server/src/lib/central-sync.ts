@@ -1,7 +1,8 @@
-import { db, subscriptionCacheTable } from "@workspace/db";
-import { eq, sql } from "drizzle-orm";
+import { db, subscriptionCacheTable, usersTable } from "@workspace/db";
+import { eq, sql, count, inArray } from "drizzle-orm";
 import type { Request, Response, NextFunction } from "express";
 import { logger } from "./logger";
+import { snapshotUsage } from "./usage-counter";
 
 // ---------------------------------------------------------------------------
 // Local sync agent — runs INSIDE each school's api-server. Periodically pulls
@@ -119,7 +120,52 @@ export async function syncOnce(): Promise<void> {
   }
 }
 
+/**
+ * Push a usage snapshot UP to central. Counts:
+ *  - students_total = users with role=student in this school's local DB
+ *  - students_active_24h = subscription_cache rows in active/trial/grace
+ *  - ai_questions_24h, print_jobs_24h = in-process rolling counters
+ *
+ * Failures are swallowed (best-effort telemetry; never block the school).
+ */
+export async function pushUsageOnce(): Promise<void> {
+  const { CENTRAL_BASE_URL, TENANT_LICENSE_KEY } = cfg();
+  if (!CENTRAL_BASE_URL || !TENANT_LICENSE_KEY) return;
+  try {
+    const [{ n: totalStudents } = { n: 0 }] = await db
+      .select({ n: count() })
+      .from(usersTable)
+      .where(eq(usersTable.role, "student"));
+    const [{ n: activeStudents } = { n: 0 }] = await db
+      .select({ n: count() })
+      .from(subscriptionCacheTable)
+      .where(inArray(subscriptionCacheTable.status, ["active", "trial", "grace"]));
+    const { ai_questions_24h, print_jobs_24h } = snapshotUsage();
+    const res = await fetch(`${CENTRAL_BASE_URL}/api/central/v1/usage`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-tenant-license-key": TENANT_LICENSE_KEY },
+      body: JSON.stringify({
+        students_total: totalStudents,
+        students_active_24h: activeStudents,
+        ai_questions_24h,
+        print_jobs_24h,
+      }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) {
+      logger.warn({ status: res.status }, "usage push failed");
+      return;
+    }
+    logger.info({ totalStudents, activeStudents, ai_questions_24h, print_jobs_24h }, "usage pushed");
+  } catch (err) {
+    logger.warn({ err }, "usage push threw");
+  }
+}
+
+const USAGE_PUSH_INTERVAL_MS = Number(process.env["CENTRAL_USAGE_PUSH_INTERVAL_MS"] ?? 60_000);
+
 let timer: NodeJS.Timeout | null = null;
+let usageTimer: NodeJS.Timeout | null = null;
 export function startCentralSync(): void {
   const { CENTRAL_BASE_URL, TENANT_LICENSE_KEY, SYNC_INTERVAL_MS } = cfg();
   if (!CENTRAL_BASE_URL || !TENANT_LICENSE_KEY) {
@@ -130,7 +176,11 @@ export function startCentralSync(): void {
   // Fire-and-forget the first pull immediately so the cache populates on boot.
   void syncOnce();
   timer = setInterval(() => void syncOnce(), SYNC_INTERVAL_MS);
-  logger.info({ interval_ms: SYNC_INTERVAL_MS }, "central sync started");
+  // Push initial snapshot after a short delay (let subscription cache populate
+  // first so students_active_24h isn't zero on the first push).
+  setTimeout(() => void pushUsageOnce(), 5_000);
+  usageTimer = setInterval(() => void pushUsageOnce(), USAGE_PUSH_INTERVAL_MS);
+  logger.info({ interval_ms: SYNC_INTERVAL_MS, usage_push_ms: USAGE_PUSH_INTERVAL_MS }, "central sync started");
 }
 
 /**

@@ -11,7 +11,27 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { Wallet, ArrowUpRight, FileText, Info, Smartphone, CheckCircle2, Clock, XCircle } from "lucide-react";
+import { Wallet, ArrowUpRight, FileText, Info, Smartphone, CheckCircle2, Clock, XCircle, Download } from "lucide-react";
+
+async function downloadReceipt(paymentId: number, receipt: string | null) {
+  const token = localStorage.getItem("teacher_token") ?? "";
+  const res = await fetch(`/api/v1/bursar/subscription-payments/${paymentId}/receipt.pdf`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    alert(`Could not download receipt (HTTP ${res.status})`);
+    return;
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `receipt-${receipt ?? paymentId}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
 
 type Payment = {
   id: number;
@@ -199,13 +219,14 @@ export default function Bursar() {
                   <TableHead>Status</TableHead>
                   <TableHead>Receipt</TableHead>
                   <TableHead>When</TableHead>
+                  <TableHead className="text-right">PDF</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {paymentsLoading ? (
-                  <TableRow><TableCell colSpan={7} className="h-16 text-center text-muted-foreground">Loading...</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={8} className="h-16 text-center text-muted-foreground">Loading...</TableCell></TableRow>
                 ) : !paymentsData?.payments?.length ? (
-                  <TableRow><TableCell colSpan={7} className="h-16 text-center text-muted-foreground">No subscription payments yet — ask parents to pay from the Parent App.</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={8} className="h-16 text-center text-muted-foreground">No subscription payments yet — ask parents to pay from the Parent App.</TableCell></TableRow>
                 ) : (
                   paymentsData.payments.map((p) => (
                     <TableRow key={p.id}>
@@ -222,6 +243,21 @@ export default function Bursar() {
                       </TableCell>
                       <TableCell className="text-xs text-muted-foreground">
                         {new Date(p.initiated_at).toLocaleString()}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {p.status === "success" ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => void downloadReceipt(p.id, p.mpesa_receipt)}
+                            data-testid={`button-receipt-${p.id}`}
+                          >
+                            <Download className="h-3 w-3 mr-1" />
+                            Receipt
+                          </Button>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        )}
                       </TableCell>
                     </TableRow>
                   ))

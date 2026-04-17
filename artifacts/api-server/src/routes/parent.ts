@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { AddFundsBody } from "@workspace/api-zod";
 import { db, subscriptionCacheTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { requireAuth } from "../lib/auth";
 import { listDocumentsForStudent } from "../lib/student-documents";
 
@@ -212,6 +212,71 @@ router.post("/v1/parent/subscriptions/pay", async (req, res) => {
   });
   const body = await upstream.json();
   res.status(upstream.status).json(body);
+});
+
+/**
+ * GET /v1/parent/notifications
+ * Returns nudges for the parent — currently subscriptions expiring within
+ * `RENEWAL_REMINDER_DAYS` (default 3 days) so the parent app can show a
+ * banner. Reads from the locally-cached subscription rows so it works
+ * offline; computes locally to avoid extra central calls.
+ */
+const RENEWAL_REMINDER_DAYS = 3;
+router.get("/v1/parent/notifications", async (_req, res) => {
+  const ownedCodes = Object.values(CHILD_TO_STUDENT_CODE);
+  if (ownedCodes.length === 0) {
+    res.json({ notifications: [] });
+    return;
+  }
+  const rows = await db
+    .select()
+    .from(subscriptionCacheTable)
+    .where(inArray(subscriptionCacheTable.student_code, ownedCodes));
+
+  const now = Date.now();
+  const cutoff = now + RENEWAL_REMINDER_DAYS * 24 * 60 * 60 * 1000;
+  const childByCode = new Map(
+    Object.entries(CHILD_TO_STUDENT_CODE).map(([childId, code]) => [code, CHILDREN.find((c) => c.id === childId)]),
+  );
+
+  const notifications = rows
+    .filter((r) => {
+      if (!r.expires_at) return false;
+      const t = new Date(r.expires_at).getTime();
+      // Show reminder when expired OR expiring within window. Suppress for
+      // long-dated subs so the banner only appears when it matters.
+      return t < cutoff;
+    })
+    .map((r) => {
+      const child = childByCode.get(r.student_code);
+      const t = r.expires_at!.getTime();
+      const days = Math.ceil((t - now) / (24 * 60 * 60 * 1000));
+      const expired = t < now;
+      const childId = Object.entries(CHILD_TO_STUDENT_CODE).find(([, code]) => code === r.student_code)?.[0];
+      return {
+        id: `renew-${r.student_code}`,
+        kind: "renewal_due" as const,
+        severity: expired ? ("urgent" as const) : days <= 1 ? ("warning" as const) : ("info" as const),
+        child_id: childId ?? null,
+        child_name: child?.name ?? r.student_name ?? r.student_code,
+        student_code: r.student_code,
+        plan: r.plan,
+        amount_tsh: r.monthly_price_tsh ?? 0,
+        days_remaining: days,
+        expires_at: r.expires_at!.toISOString(),
+        title: expired
+          ? `${child?.name ?? r.student_code}'s plan has expired`
+          : days <= 0
+          ? `${child?.name ?? r.student_code}'s plan expires today`
+          : `${child?.name ?? r.student_code}'s plan expires in ${days} day${days === 1 ? "" : "s"}`,
+        body: expired
+          ? "The watch's premium features are paused. Pay now to reactivate."
+          : "Tap Pay now to renew for another 30 days and keep the watch active.",
+      };
+    })
+    .sort((a, b) => a.days_remaining - b.days_remaining);
+
+  res.json({ notifications });
 });
 
 router.get("/v1/parent/subscriptions/payment/:id", async (req, res) => {

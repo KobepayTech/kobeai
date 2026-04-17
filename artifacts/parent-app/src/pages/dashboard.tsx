@@ -4,6 +4,7 @@ import { useAuth } from "@/lib/auth";
 import { useGetParentDashboard } from "@workspace/api-client-react";
 import { Layout } from "@/components/layout";
 import { Card } from "@/components/ui/card";
+import { RenewalBanner } from "@/components/renewal-banner";
 import { Star, TrendingUp, ArrowRight, Skeleton } from "lucide-react";
 
 export default function Dashboard() {
@@ -31,6 +32,7 @@ export default function Dashboard() {
       </div>
 
       <div className="px-6 -mt-8 relative z-20 space-y-6">
+        <RenewalBanner />
         {isLoading ? (
           <div className="space-y-4">
             <Card className="p-6 rounded-3xl shadow-sm border-none"><div className="h-24 bg-gray-100 animate-pulse rounded-xl"></div></Card>

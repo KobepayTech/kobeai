@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
 import { apiGet } from "@/lib/api";
 import { Layout } from "@/components/layout";
+import { RenewalBanner } from "@/components/renewal-banner";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -180,6 +181,7 @@ export default function SubscriptionPage() {
       </div>
 
       <div className="px-6 -mt-6 relative z-20 space-y-4">
+        <RenewalBanner />
         {isLoading ? (
           <Card className="p-6 rounded-3xl bg-gray-100 h-32 animate-pulse" />
         ) : (

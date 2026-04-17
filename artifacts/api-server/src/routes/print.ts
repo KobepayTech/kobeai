@@ -6,6 +6,7 @@ import { getPrintStore, type Pairing, type PrintJob } from "../lib/print-store";
 import { ObjectStorageService, ObjectNotFoundError } from "../lib/objectStorage";
 import { requireAuth } from "../lib/auth";
 import { listDocumentsForStudent } from "../lib/student-documents";
+import { recordPrintJob } from "../lib/usage-counter";
 import { Readable } from "node:stream";
 
 const router: IRouter = Router();
@@ -203,6 +204,7 @@ router.post("/v1/print/submit", requireStudent, async (req, res) => {
     res.status(404).json({ error: "document not found for this student" });
     return;
   }
+  recordPrintJob();
   const now = Date.now();
   const job: PrintJob = {
     id: randId("job"),

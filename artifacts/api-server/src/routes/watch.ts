@@ -3,6 +3,7 @@ import { AskQuestionBody } from "@workspace/api-zod";
 import { askAI } from "../lib/ai-provider";
 import { requireAuth } from "../lib/auth";
 import { requireActiveSubscription } from "../lib/central-sync";
+import { recordAiQuery } from "../lib/usage-counter";
 
 const router = Router();
 
@@ -21,6 +22,7 @@ router.post("/v1/watch/ask", subGate, async (req, res) => {
   }
   const { question } = parsed.data;
 
+  recordAiQuery();
   const { answer, model } = await askAI(question);
 
   res.json({

@@ -1,9 +1,12 @@
 import { Router } from "express";
 import { AddDepositBody } from "@workspace/api-zod";
+import PDFDocument from "pdfkit";
 import { requireAuth } from "../lib/auth";
 import { logger } from "../lib/logger";
 
 const router = Router();
+
+const SCHOOL_NAME = process.env["SCHOOL_NAME"] ?? "Demo Secondary School";
 
 /**
  * GET /v1/bursar/subscription-payments
@@ -40,6 +43,118 @@ router.get("/v1/bursar/subscription-payments", requireAuth(["admin", "teacher", 
     logger.warn({ err }, "bursar subscription-payments fetch failed");
     res.status(502).json({ error: "Central unreachable" });
   }
+});
+
+/**
+ * GET /v1/bursar/subscription-payments/:id/receipt.pdf
+ * Streams a printable PDF receipt for a successful M-Pesa payment so the
+ * bursar can give a copy to the parent or file it for accounting. Pulls
+ * the canonical row from central (license-key authed) and renders with
+ * pdfkit. Only `success` payments get a receipt — pending/failed return 404
+ * with a clear message so the bursar UI can handle that gracefully.
+ */
+router.get("/v1/bursar/subscription-payments/:id/receipt.pdf", requireAuth(["admin", "teacher", "super_admin"]), async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) {
+    res.status(400).json({ error: "Invalid payment id" });
+    return;
+  }
+  const base = process.env["CENTRAL_BASE_URL"] ?? "";
+  const key = process.env["TENANT_LICENSE_KEY"] ?? "";
+  if (!base || !key) {
+    res.status(503).json({ error: "Central server not configured" });
+    return;
+  }
+  let payment: {
+    id: number;
+    student_code: string;
+    student_name: string;
+    plan: string;
+    amount_tsh: number;
+    phone: string;
+    status: string;
+    mpesa_receipt: string | null;
+    initiated_at: string;
+    completed_at: string | null;
+  };
+  try {
+    const upstream = await fetch(`${base}/api/central/v1/payments/${id}`, {
+      headers: { "x-tenant-license-key": key },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!upstream.ok) {
+      res.status(upstream.status).json({ error: `Central returned ${upstream.status}` });
+      return;
+    }
+    const body = await upstream.json();
+    payment = body.payment;
+  } catch (err) {
+    logger.warn({ err, id }, "receipt: central unreachable");
+    res.status(502).json({ error: "Central unreachable" });
+    return;
+  }
+  if (payment.status !== "success") {
+    res.status(404).json({ error: `No receipt: payment is ${payment.status}` });
+    return;
+  }
+
+  res.setHeader("content-type", "application/pdf");
+  res.setHeader("content-disposition", `attachment; filename="receipt-${payment.mpesa_receipt ?? payment.id}.pdf"`);
+
+  const doc = new PDFDocument({ size: "A5", margin: 36 });
+  doc.pipe(res);
+
+  // Header strip — green brand bar
+  doc.rect(0, 0, doc.page.width, 60).fill("#00A86B");
+  doc.fillColor("#FFFFFF").fontSize(18).font("Helvetica-Bold").text(SCHOOL_NAME, 36, 18);
+  doc.fontSize(10).font("Helvetica").text("Subscription payment receipt", 36, 40);
+  doc.fillColor("#1A1A2E");
+
+  doc.moveDown(3);
+  doc.fontSize(11).font("Helvetica").fillColor("#666666").text("Receipt no.");
+  doc.fontSize(14).font("Helvetica-Bold").fillColor("#1A1A2E").text(payment.mpesa_receipt ?? "—");
+  doc.moveDown(0.8);
+
+  const completed = payment.completed_at ? new Date(payment.completed_at) : new Date(payment.initiated_at);
+  const rows: Array<[string, string]> = [
+    ["Date", completed.toLocaleString("en-GB", { dateStyle: "long", timeStyle: "short" })],
+    ["Student", `${payment.student_name} (${payment.student_code})`],
+    ["Plan", payment.plan.charAt(0).toUpperCase() + payment.plan.slice(1)],
+    ["Paid by", payment.phone],
+    ["Method", "M-Pesa STK push"],
+  ];
+  doc.fontSize(10);
+  for (const [label, value] of rows) {
+    const y = doc.y;
+    doc.fillColor("#666666").font("Helvetica").text(label, 36, y, { width: 100 });
+    doc.fillColor("#1A1A2E").font("Helvetica-Bold").text(value, 140, y, { width: doc.page.width - 176 });
+    doc.moveDown(0.5);
+  }
+
+  doc.moveDown(0.5);
+  doc.moveTo(36, doc.y).lineTo(doc.page.width - 36, doc.y).strokeColor("#E5E7EB").stroke();
+  doc.moveDown(0.5);
+  const totalY = doc.y;
+  doc.fontSize(12).fillColor("#666666").font("Helvetica").text("Amount paid", 36, totalY);
+  doc
+    .fontSize(20)
+    .fillColor("#00A86B")
+    .font("Helvetica-Bold")
+    .text(`TSh ${payment.amount_tsh.toLocaleString()}`, 36, totalY, { align: "right" });
+
+  doc.moveDown(2);
+  doc
+    .fontSize(9)
+    .fillColor("#666666")
+    .font("Helvetica-Oblique")
+    .text(
+      "This payment renews the student's subscription for 30 days from the payment date. Keep this receipt for your records.",
+      { align: "left" },
+    );
+  doc.moveDown(2);
+  doc.fontSize(8).fillColor("#999999").text("Powered by KobeAI", { align: "center" });
+
+  doc.end();
 });
 
 const AI_QUESTION_COST = 50;
