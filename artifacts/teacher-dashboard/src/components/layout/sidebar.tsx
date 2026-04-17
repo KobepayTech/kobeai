@@ -6,6 +6,7 @@ import {
   CalendarCheck, 
   BookOpenCheck, 
   Wallet,
+  FileText,
   LogOut,
   School
 } from "lucide-react";
@@ -17,6 +18,7 @@ const navItems = [
   { href: "/students", label: "Students", icon: Users },
   { href: "/attendance", label: "Attendance", icon: CalendarCheck },
   { href: "/quizzes", label: "Quizzes", icon: BookOpenCheck },
+  { href: "/documents", label: "Documents", icon: FileText },
   { href: "/bursar", label: "Bursar", icon: Wallet },
 ];
 

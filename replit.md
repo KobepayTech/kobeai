@@ -34,3 +34,13 @@ See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and pa
 - **PrintStore** (`lib/print-store.ts`): pluggable store for pairings, jobs, and nonces. `RedisStore` (when `REDIS_URL` set) uses `SET EX/NX` for atomic nonce reservation and `LIST` per-printer queues. `MemoryStore` is the in-process fallback for dev. Restart persistence verified end-to-end with redis on port 6399.
 - **Demo creds preserved**: student `TEST001/1234`, teacher `teacher@school.tz/teacher123`, admin `admin@school.tz/admin123`, parent pin `1234`. Watch APK does not need to be rebuilt — existing demo login flow now returns JWTs transparently.
 - **Object storage env**: `DEFAULT_OBJECT_STORAGE_BUCKET_ID`, `PUBLIC_OBJECT_SEARCH_PATHS`, `PRIVATE_OBJECT_DIR` are required.
+
+## Teacher Dashboard
+
+- **Documents page** (`src/pages/documents.tsx`): lists the teacher's uploaded PDFs and lets them upload new ones (via presigned URL → register → optional class assign) and assign existing docs to classes. Wired into `/documents` route + sidebar nav with the `FileText` icon.
+- **API helper** (`src/lib/api.ts`): minimal `apiGet`/`apiPost`/`uploadToPresigned` that attaches the bearer token from `localStorage["teacher_token"]`. Used by pages whose endpoints aren't yet codegenned via `@workspace/api-client-react`.
+
+## CI / GitHub
+
+- Repo: `KobepayTech/kobeai` (private). `origin` is configured token-less; pushes use the GitHub connector.
+- `.github/workflows/ci.yml` runs `pnpm typecheck` + `pnpm build` on every push to `main` and every PR (Node 24, pnpm 9, frozen lockfile).

@@ -13,6 +13,7 @@ import Students from "@/pages/students";
 import Attendance from "@/pages/attendance";
 import Quizzes from "@/pages/quizzes";
 import Bursar from "@/pages/bursar";
+import Documents from "@/pages/documents";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -43,6 +44,9 @@ function Router() {
       </Route>
       <Route path="/bursar">
         <Shell><Bursar /></Shell>
+      </Route>
+      <Route path="/documents">
+        <Shell><Documents /></Shell>
       </Route>
       
       <Route path="/">
