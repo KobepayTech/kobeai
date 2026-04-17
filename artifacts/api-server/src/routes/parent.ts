@@ -1,10 +1,24 @@
 import { Router } from "express";
 import { AddFundsBody } from "@workspace/api-zod";
 import { requireAuth } from "../lib/auth";
+import { listDocumentsForStudent } from "../lib/student-documents";
 
 const router = Router();
 
 router.use("/v1/parent", requireAuth(["parent"]));
+
+// Demo bridge: parent demo child id -> real student_code in the DB.
+//
+// SECURITY NOTE: the parent demo currently uses a single hardcoded CHILDREN
+// list shared across all parent tokens (the auth payload has user_id 0 with
+// no parent->student FK in the schema yet). Every endpoint in this file
+// trusts the path-parameter child id against this static list. That's
+// intentional for the demo but is NOT production-safe — when the parents
+// schema lands, replace this map with a `parent_id -> student_id[]` query
+// and reject `:childId` values that aren't owned by `req.auth.sub`.
+const CHILD_TO_STUDENT_CODE: Record<string, string> = {
+  "1": "TEST001",
+};
 
 const CHILDREN = [
   {
@@ -72,6 +86,34 @@ router.get("/v1/parent/child/:childId/activity", (req, res) => {
   res.json({
     child_name: child.name,
     activities: ACTIVITY[childId] ?? [],
+  });
+});
+
+/**
+ * GET /v1/parent/child/:childId/documents
+ * Documents assigned to the classes this child belongs to.
+ * Same join the student watch sees in the print picker, so parents always
+ * know exactly what is available for tap-to-print.
+ */
+router.get("/v1/parent/child/:childId/documents", async (req, res) => {
+  const { childId } = req.params;
+  const child = CHILDREN.find((c) => c.id === childId);
+  if (!child) {
+    res.status(404).json({ error: "Child not found" });
+    return;
+  }
+  const studentCode = CHILD_TO_STUDENT_CODE[childId];
+  const documents = studentCode ? await listDocumentsForStudent(studentCode) : [];
+  res.json({
+    child_name: child.name,
+    documents: documents.map((d) => ({
+      id: d.id,
+      name: d.name,
+      subject: d.subject,
+      pages: d.pages,
+      size_kb: Math.max(1, Math.round(d.size_bytes / 1024)),
+      assigned_at: d.created_at,
+    })),
   });
 });
 

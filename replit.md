@@ -40,6 +40,20 @@ See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and pa
 - **Documents page** (`src/pages/documents.tsx`): lists the teacher's uploaded PDFs and lets them upload new ones (via presigned URL → register → optional class assign) and assign existing docs to classes. Wired into `/documents` route + sidebar nav with the `FileText` icon.
 - **API helper** (`src/lib/api.ts`): minimal `apiGet`/`apiPost`/`uploadToPresigned` that attaches the bearer token from `localStorage["teacher_token"]`. Used by pages whose endpoints aren't yet codegenned via `@workspace/api-client-react`.
 
+## Parent App
+
+- **Print page** (`src/pages/print.tsx`): new bottom-nav tab "Print". Calls `GET /api/v1/parent/child/:childId/documents` and renders the documents assigned to each child's class(es) — same join the watch print picker uses, so parents always see exactly what's available for tap-to-print. Per-child tab switcher when more than one child is on the account; honest empty state when nothing is assigned yet.
+- **API helper** (`src/lib/api.ts`): minimal `apiGet` that bypasses BASE_URL and hits absolute `/api/...` (the Replit proxy routes `/api/*` to the api-server artifact regardless of origin, matching what the codegen client does). Bearer token from `localStorage["parent_token"]`.
+- **Backend**: `routes/parent.ts` exposes `/v1/parent/child/:childId/documents`. Demo bridge `CHILD_TO_STUDENT_CODE` maps child id "1" -> `TEST001` until a parents schema with a real FK lands.
+- **Shared**: `lib/student-documents.ts` extracts the class_memberships → document_assignments → documents query; both `routes/print.ts` and `routes/parent.ts` import it so watch and parent app can never disagree.
+
+## Offline AI (Ollama)
+
+- **Provider** (`lib/ai-provider.ts`): `askAI(question, systemOverride?)` tries Ollama when `AI_PROVIDER=ollama`, silently falls back to canned answers on any failure (offline-first by design). New `getAiHealth()` probes `/api/tags` to report reachability + installed models + latency. `OLLAMA_BASE_URL` (default `http://localhost:11434`), `OLLAMA_MODEL` (default `mistral:7b`), `OLLAMA_TIMEOUT_MS` (default 30000).
+- **Admin endpoints** (`routes/admin.ts`): `GET /v1/admin/ai/health`, `POST /v1/admin/ai/test {question, system?}` — both require teacher OR admin token. Legacy `/v1/admin/stats` stays open to preserve the school-server admin CLI.
+- **Teacher Dashboard "School AI" page** (`src/pages/school-ai.tsx`): sidebar entry with `Cpu` icon at `/school-ai`. Shows status pill (Online / Ollama unreachable / Model not pulled / Canned), health grid with provider, configured model, base URL, latency, installed models, last error. Includes a one-shot prompt tester that hits `/v1/admin/ai/test`. Inline remediation hints (`ollama pull <model>`, `scripts/setup-ollama.sh`) when something is wrong.
+- **Setup script** (`scripts/setup-ollama.sh`): one-shot installer for the on-prem LLM on Ubuntu 22.04+. Installs Ollama, configures the systemd service to listen on `0.0.0.0:11434`, pulls the model, smoke-tests with a single prompt. Run as root: `sudo MODEL=mistral:7b ./scripts/setup-ollama.sh`.
+
 ## CI / GitHub
 
 - Repo: `KobepayTech/kobeai` (private). `origin` is configured token-less; pushes use the GitHub connector.

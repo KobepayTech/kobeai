@@ -7,6 +7,7 @@ import {
   BookOpenCheck, 
   Wallet,
   FileText,
+  Cpu,
   LogOut,
   School
 } from "lucide-react";
@@ -20,6 +21,7 @@ const navItems = [
   { href: "/quizzes", label: "Quizzes", icon: BookOpenCheck },
   { href: "/documents", label: "Documents", icon: FileText },
   { href: "/bursar", label: "Bursar", icon: Wallet },
+  { href: "/school-ai", label: "School AI", icon: Cpu },
 ];
 
 export function Sidebar() {

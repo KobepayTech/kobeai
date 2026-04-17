@@ -15,7 +15,7 @@ tap-to-print experience from a smartwatch.
 | **API Server** | Node.js + Express 5 + Drizzle ORM (PostgreSQL) | Active |
 | **Tap-Box** | Raspberry Pi Zero 2 W + ACR122U NFC reader + CUPS | Active |
 | **Shared schema / API client** | Drizzle + Zod + Orval | Active |
-| **On-prem AI** | Offline Ollama for grading & quiz feedback | In progress |
+| **On-prem AI** | Offline Ollama (Mistral 7B by default) | Active |
 
 Brand: green `#00A86B` primary, `#1A1A2E` secondary. Currency: Tanzanian
 Shilling (TSh).
@@ -46,6 +46,35 @@ all watch-facing print endpoints.
 **State:** in-flight pairings, jobs, and the seen-nonce set live in
 Redis when `REDIS_URL` is set (atomic `SET NX EX` for nonces, `LIST`
 queues per printer). Falls back to in-process `Map`s for local dev.
+
+## Offline AI (Ollama)
+
+The watch tutor (`POST /api/v1/watch/ask`) runs against an on-prem Ollama
+instance — no questions ever leave the school LAN. When `AI_PROVIDER=ollama`
+the api-server calls `OLLAMA_BASE_URL/api/generate` with a Tanzania-specific
+system prompt; if Ollama is unreachable the watch silently falls back to a
+small canned answer set so the classroom keeps moving.
+
+To install on a school server (Ubuntu 22.04+):
+
+```bash
+sudo MODEL=mistral:7b ./scripts/setup-ollama.sh
+```
+
+Then set on the api-server:
+
+```
+AI_PROVIDER=ollama
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_MODEL=mistral:7b
+```
+
+Health and a one-shot prompt tester are exposed for admins:
+
+- `GET  /api/v1/admin/ai/health` (teacher/admin token)
+- `POST /api/v1/admin/ai/test`   (teacher/admin token, body: `{question, system?}`)
+
+The Teacher Dashboard surfaces both at **School AI** in the sidebar.
 
 ## Repository layout
 

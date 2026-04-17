@@ -1,6 +1,6 @@
 import React from "react";
 import { Link, useLocation } from "wouter";
-import { Home, Wallet, Activity, User } from "lucide-react";
+import { Home, Wallet, Activity, Printer, User } from "lucide-react";
 
 export function Layout({ children }: { children: React.ReactNode }) {
   return (
@@ -19,6 +19,7 @@ function BottomNav() {
   const navItems = [
     { name: "Home", href: "/dashboard", icon: Home },
     { name: "Wallet", href: "/wallet", icon: Wallet },
+    { name: "Print", href: "/print", icon: Printer },
     { name: "Activity", href: "/activity", icon: Activity },
     { name: "Profile", href: "/profile", icon: User },
   ];

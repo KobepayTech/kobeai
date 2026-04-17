@@ -5,6 +5,7 @@ import { eq, and, inArray } from "drizzle-orm";
 import { getPrintStore, type Pairing, type PrintJob } from "../lib/print-store";
 import { ObjectStorageService, ObjectNotFoundError } from "../lib/objectStorage";
 import { requireAuth } from "../lib/auth";
+import { listDocumentsForStudent } from "../lib/student-documents";
 import { Readable } from "node:stream";
 
 const router: IRouter = Router();
@@ -57,19 +58,7 @@ function verifyWatchPayload(payload: {
  * for whichever classes the student is in.
  */
 async function listFilesForStudent(studentCode: string) {
-  const student = (await db.select().from(usersTable).where(eq(usersTable.student_code, studentCode)))[0];
-  if (!student) return [] as Array<{ id: string; name: string; subject: string; size_kb: number; pages: number }>;
-
-  const memberships = await db.select().from(classMembershipsTable).where(eq(classMembershipsTable.student_id, student.id));
-  if (memberships.length === 0) return [];
-
-  const classIds = memberships.map((m) => m.class_id);
-  const assignments = await db.select().from(documentAssignmentsTable).where(inArray(documentAssignmentsTable.class_id, classIds));
-  if (assignments.length === 0) return [];
-
-  const docIds = Array.from(new Set(assignments.map((a) => a.document_id)));
-  const docs = await db.select().from(documentsTable).where(inArray(documentsTable.id, docIds));
-
+  const docs = await listDocumentsForStudent(studentCode);
   return docs.map((d) => ({
     id: `doc-${d.id}`,
     name: d.name,

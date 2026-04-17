@@ -41,10 +41,16 @@ function cannedAnswer(question: string): string {
   return FALLBACK;
 }
 
-async function askOllama(question: string): Promise<AskResult> {
-  const baseUrl = process.env["OLLAMA_BASE_URL"] ?? "http://localhost:11434";
-  const model = process.env["OLLAMA_MODEL"] ?? "mistral:7b";
-  const timeoutMs = Number(process.env["OLLAMA_TIMEOUT_MS"] ?? 30000);
+function ollamaConfig(): { baseUrl: string; model: string; timeoutMs: number } {
+  return {
+    baseUrl: process.env["OLLAMA_BASE_URL"] ?? "http://localhost:11434",
+    model: process.env["OLLAMA_MODEL"] ?? "mistral:7b",
+    timeoutMs: Number(process.env["OLLAMA_TIMEOUT_MS"] ?? 30_000),
+  };
+}
+
+async function askOllama(question: string, systemOverride?: string): Promise<AskResult> {
+  const { baseUrl, model, timeoutMs } = ollamaConfig();
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -57,7 +63,7 @@ async function askOllama(question: string): Promise<AskResult> {
       body: JSON.stringify({
         model,
         prompt: question,
-        system: SYSTEM_PROMPT,
+        system: systemOverride ?? SYSTEM_PROMPT,
         stream: false,
         options: { temperature: 0.4, num_predict: 200 },
       }),
@@ -75,12 +81,18 @@ async function askOllama(question: string): Promise<AskResult> {
   }
 }
 
-export async function askAI(question: string): Promise<AskResult> {
+/**
+ * Answer a student question. Tries Ollama when AI_PROVIDER=ollama,
+ * silently falls back to canned answers when the on-prem LLM is unreachable
+ * (matches the offline-first design: a school with no power for the LLM box
+ * still gets a useful response on the watch).
+ */
+export async function askAI(question: string, systemOverride?: string): Promise<AskResult> {
   const provider = (process.env["AI_PROVIDER"] ?? "canned").toLowerCase();
 
   if (provider === "ollama") {
     try {
-      return await askOllama(question);
+      return await askOllama(question, systemOverride);
     } catch (err) {
       logger.warn(
         { err: err instanceof Error ? err.message : String(err) },
@@ -99,4 +111,72 @@ export async function askAI(question: string): Promise<AskResult> {
     model: "canned",
     provider: "canned",
   };
+}
+
+// ---------------------------------------------------------------------------
+// Admin diagnostics
+// ---------------------------------------------------------------------------
+
+export type AiHealth = {
+  configured_provider: string;
+  configured_model: string;
+  base_url: string;
+  ollama_reachable: boolean;
+  model_installed: boolean;
+  installed_models: string[];
+  latency_ms: number | null;
+  error: string | null;
+};
+
+/**
+ * Probe the on-prem Ollama service and report what we find. Used by the
+ * school-server admin "AI" page so an on-site admin can tell at a glance
+ * whether the offline LLM is up and whether the configured model has been
+ * pulled down.
+ */
+export async function getAiHealth(): Promise<AiHealth> {
+  const provider = (process.env["AI_PROVIDER"] ?? "canned").toLowerCase();
+  const { baseUrl, model } = ollamaConfig();
+
+  const out: AiHealth = {
+    configured_provider: provider,
+    configured_model: model,
+    base_url: baseUrl,
+    ollama_reachable: false,
+    model_installed: false,
+    installed_models: [],
+    latency_ms: null,
+    error: null,
+  };
+
+  if (provider !== "ollama") {
+    return out;
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 4_000);
+  const start = Date.now();
+  try {
+    const resp = await fetch(`${baseUrl}/api/tags`, { signal: controller.signal });
+    out.latency_ms = Date.now() - start;
+    if (!resp.ok) {
+      out.error = `tags HTTP ${resp.status}`;
+      return out;
+    }
+    const data = (await resp.json()) as { models?: Array<{ name?: string }> };
+    out.ollama_reachable = true;
+    out.installed_models = (data.models ?? [])
+      .map((m) => m.name)
+      .filter((n): n is string => typeof n === "string");
+    out.model_installed = out.installed_models.some(
+      (n) => n === model || n.startsWith(`${model.split(":")[0]}:`),
+    );
+  } catch (err) {
+    out.latency_ms = Date.now() - start;
+    out.error = err instanceof Error ? err.message : String(err);
+  } finally {
+    clearTimeout(timer);
+  }
+
+  return out;
 }

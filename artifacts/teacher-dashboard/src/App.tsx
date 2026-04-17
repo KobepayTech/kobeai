@@ -14,6 +14,7 @@ import Attendance from "@/pages/attendance";
 import Quizzes from "@/pages/quizzes";
 import Bursar from "@/pages/bursar";
 import Documents from "@/pages/documents";
+import SchoolAi from "@/pages/school-ai";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -47,6 +48,9 @@ function Router() {
       </Route>
       <Route path="/documents">
         <Shell><Documents /></Shell>
+      </Route>
+      <Route path="/school-ai">
+        <Shell><SchoolAi /></Shell>
       </Route>
       
       <Route path="/">
