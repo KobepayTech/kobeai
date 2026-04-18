@@ -1,0 +1,136 @@
+name: Build KobeAI Installer ISO
+
+on:
+  workflow_dispatch:
+    inputs:
+      ubuntu_version:
+        description: "Ubuntu version to base the installer on"
+        required: false
+        default: "24.04.1"
+  push:
+    paths:
+      - "deploy/iso-installer/**"
+      - ".github/workflows/build-iso.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build + publish ISO
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Free up disk space (the runner only has ~14 GB)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /imagegeneration
+          df -h
+
+      - name: Install ISO build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            xorriso p7zip-full curl rsync ca-certificates
+
+      - name: Make scripts executable
+        run: |
+          chmod +x deploy/iso-installer/build-iso.sh
+          chmod +x deploy/iso-installer/payload/firstboot.sh
+          chmod +x deploy/iso-installer/payload/master/install-master.sh
+          chmod +x deploy/iso-installer/payload/master/kobeai-update
+          chmod +x deploy/iso-installer/payload/master/kobeai-backup
+          chmod +x deploy/iso-installer/payload/worker/install-worker.sh
+
+      - name: Build the ISO (downloads Ubuntu base + bakes in KobeAI source)
+        env:
+          KOBEAI_ALLOW_NONROOT: "1"
+          UBUNTU_VERSION: ${{ inputs.ubuntu_version || '24.04.1' }}
+        run: bash deploy/iso-installer/build-iso.sh
+
+      - name: Inspect output
+        run: |
+          ls -lh deploy/iso-installer/out/
+          du -h deploy/iso-installer/out/kobeai-installer.iso
+
+      - name: Hash + split for release upload (GitHub caps single asset at 2 GB)
+        working-directory: deploy/iso-installer/out
+        run: |
+          sha256sum kobeai-installer.iso > kobeai-installer.iso.sha256
+          # Split into 1.9 GB chunks → kobeai-installer.iso.part00.bin, …
+          split -b 1900M -d -a 2 --additional-suffix=.bin \
+            kobeai-installer.iso kobeai-installer.iso.part
+          ls -lh
+
+      - name: Write JOIN-FIRST-README.txt
+        working-directory: deploy/iso-installer/out
+        run: |
+          cat > JOIN-FIRST-README.txt <<'EOF'
+          ===================================================================
+          KobeAI installer ISO — joining + flashing instructions
+          ===================================================================
+
+          GitHub Releases caps single files at 2 GB, so the ISO was split
+          into pieces named  kobeai-installer.iso.partXX.bin
+          Download all of them PLUS the .sha256 file PLUS this README into
+          one folder, then run the matching command for your operating
+          system below to glue them back together.
+
+          --------------------- On Mac or Linux -----------------------------
+            cat kobeai-installer.iso.part*.bin > kobeai-installer.iso
+            shasum -a 256 -c kobeai-installer.iso.sha256
+
+          --------------------- On Windows (cmd.exe) ------------------------
+            copy /b kobeai-installer.iso.part00.bin + kobeai-installer.iso.part01.bin kobeai-installer.iso
+            certutil -hashfile kobeai-installer.iso SHA256
+
+          (Compare the printed hash against the value in
+           kobeai-installer.iso.sha256 — they MUST match.)
+
+          --------------------- Then flash the USB --------------------------
+          1. Install Balena Etcher (free):  https://etcher.balena.io
+          2. Plug in a 16 GB+ USB stick (it will be wiped — back it up!)
+          3. Open Etcher → "Flash from file" → pick kobeai-installer.iso
+             → "Select target" → pick your USB → "Flash!"
+          4. When it finishes, eject and plug into the school PC.
+          5. Boot to the USB (usually F12 at power-on), pick:
+               "Install KobeAI MASTER"  on the Lenovo laptop
+               "Install KobeAI WORKER"  on the desktop
+          6. Walk away ~25 minutes. After the first reboot, log in and
+             read /root/kobeai-credentials.txt for the super-admin password.
+
+          ===================================================================
+          EOF
+          ls -lh
+
+      - name: Publish as a GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: iso-build-${{ github.run_number }}
+          name: "KobeAI Installer ISO — build #${{ github.run_number }}"
+          body: |
+            **Bootable Ubuntu 24.04 installer for the KobeAI school stack.**
+
+            * Built from commit `${{ github.sha }}`
+            * Ubuntu base: ${{ inputs.ubuntu_version || '24.04.1' }}
+            * Run #${{ github.run_number }}
+
+            ### How to use
+
+            1. **Download every file below** that starts with `kobeai-installer.iso.part…` plus `kobeai-installer.iso.sha256` and `JOIN-FIRST-README.txt`.
+            2. Open `JOIN-FIRST-README.txt` and follow the one command for your OS to reassemble the ISO.
+            3. Flash the resulting `kobeai-installer.iso` to a USB stick with [Balena Etcher](https://etcher.balena.io).
+            4. Boot the school PC from the USB and pick **MASTER** (laptop) or **WORKER** (desktop) from the menu.
+
+            See `deploy/iso-installer/README.md` in the repo for the full operations guide (`kobeai-update`, `kobeai-backup`, troubleshooting).
+          files: |
+            deploy/iso-installer/out/kobeai-installer.iso.part*.bin
+            deploy/iso-installer/out/kobeai-installer.iso.sha256
+            deploy/iso-installer/out/JOIN-FIRST-README.txt
+          draft: false
+          prerelease: false
+          generate_release_notes: false
