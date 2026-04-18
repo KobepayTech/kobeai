@@ -34,10 +34,16 @@ import { logger } from "../lib/logger";
 
 const router = Router();
 
-const HMAC_SECRET =
-  process.env["AD_TOKEN_SECRET"] ??
-  process.env["SESSION_SECRET"] ??
-  "dev-ad-token-secret";
+const HMAC_SECRET = (() => {
+  const s = process.env["AD_TOKEN_SECRET"] ?? process.env["SESSION_SECRET"];
+  if (s) return s;
+  if (process.env["NODE_ENV"] === "production") {
+    throw new Error(
+      "AD_TOKEN_SECRET or SESSION_SECRET must be set in production — refusing to use a default secret for HMAC token signing.",
+    );
+  }
+  return "dev-ad-token-secret";
+})();
 
 const FREQ_CAP_PER_USER_PER_DAY = 5;
 const TOP_K = 3;
@@ -290,89 +296,134 @@ router.post("/v1/ads/event", async (req, res) => {
   const payload = verifyImpressionToken(String(token));
   if (!payload) return res.status(400).json({ error: "invalid or expired token" });
 
-  // Re-load campaign + advertiser inside a transaction so billing is atomic.
+  // Atomic billing transaction. We avoid read-modify-write lost-update bugs
+  // by using SQL increments and conditional updates so concurrent events
+  // for the same impression / advertiser are serialized at the row level.
   await db.transaction(async (tx) => {
-    const [campaign] = await tx
-      .select()
-      .from(adCampaignsTable)
-      .where(eq(adCampaignsTable.id, payload.cmp));
+    // Lock the campaign row so reads of bid_amount/pricing_model are stable
+    // and the campaign+advertiser pair is serialized for this charge.
+    const lockedCampaign = await tx.execute(sql`
+      SELECT id, advertiser_id, pricing_model, bid_amount_tsh,
+             total_budget_tsh
+        FROM ad_campaigns
+       WHERE id = ${payload.cmp}
+       FOR UPDATE
+    `);
+    const campaign = (lockedCampaign as unknown as {
+      rows: Array<{
+        id: number;
+        advertiser_id: number;
+        pricing_model: "cpm" | "cpc" | "flat";
+        bid_amount_tsh: number;
+        total_budget_tsh: number;
+      }>;
+    }).rows[0];
     if (!campaign) return;
 
     let chargeTsh = 0;
-    if (type === "impression") {
-      // Mark the impression confirmed (idempotent — only charge once).
-      const [imp] = await tx
-        .select()
-        .from(adImpressionsTable)
-        .where(eq(adImpressionsTable.id, payload.imp));
-      if (!imp || imp.confirmed) return;
+    let ledgerRefId: number | null = null;
 
-      // CPM: charge bid/1000. Flat: charge 0 here (period charging happens
-      // on a daily cron — out of scope; mark confirmed regardless). CPC:
-      // no impression charge.
-      if (campaign.pricing_model === "cpm") {
-        chargeTsh = Math.max(1, Math.round(campaign.bid_amount_tsh / 1000));
-      }
-      await tx
+    if (type === "impression") {
+      // Compute charge first (CPM only; CPC/flat impressions are free).
+      const imprCharge =
+        campaign.pricing_model === "cpm"
+          ? Math.max(1, Math.round(campaign.bid_amount_tsh / 1000))
+          : 0;
+      // Atomic claim: only one POST can flip confirmed=false → true.
+      const claim = await tx
         .update(adImpressionsTable)
-        .set({ confirmed: true, charged_tsh: chargeTsh })
-        .where(eq(adImpressionsTable.id, payload.imp));
+        .set({ confirmed: true, charged_tsh: imprCharge })
+        .where(
+          and(
+            eq(adImpressionsTable.id, payload.imp),
+            eq(adImpressionsTable.confirmed, false),
+          ),
+        )
+        .returning({ id: adImpressionsTable.id });
+      if (claim.length === 0) return; // already confirmed — replay
+      chargeTsh = imprCharge;
+      ledgerRefId = payload.imp;
     } else {
-      // click — only CPC bills here; CPM/flat clicks are free.
-      if (campaign.pricing_model === "cpc") {
-        chargeTsh = campaign.bid_amount_tsh;
-      }
+      // click — only CPC bills, and only the FIRST click per impression
+      // counts so a malicious client can't repost the token to drain budget.
+      const existingClick = await tx
+        .select({ id: adClicksTable.id })
+        .from(adClicksTable)
+        .where(eq(adClicksTable.impression_id, payload.imp))
+        .limit(1);
+      const isFirstClick = existingClick.length === 0;
+      const clickCharge =
+        isFirstClick && campaign.pricing_model === "cpc"
+          ? campaign.bid_amount_tsh
+          : 0;
       const [click] = await tx
         .insert(adClicksTable)
         .values({
           impression_id: payload.imp,
           campaign_id: payload.cmp,
-          charged_tsh: chargeTsh,
+          charged_tsh: clickCharge,
         })
         .returning({ id: adClicksTable.id });
-      logger.info({ click_id: click!.id, campaign_id: payload.cmp }, "ad click");
+      logger.info(
+        { click_id: click!.id, campaign_id: payload.cmp, billed: clickCharge },
+        "ad click",
+      );
+      chargeTsh = clickCharge;
+      ledgerRefId = click!.id;
     }
 
     if (chargeTsh > 0) {
-      const [advertiser] = await tx
-        .select()
-        .from(advertisersTable)
-        .where(eq(advertisersTable.id, campaign.advertiser_id));
-      if (!advertiser) return;
-      const newBal = Math.max(0, advertiser.balance_tsh - chargeTsh);
-      await tx
+      // Atomic balance decrement (clamped at 0).
+      const [advertiserRow] = await tx
         .update(advertisersTable)
-        .set({ balance_tsh: newBal })
-        .where(eq(advertisersTable.id, advertiser.id));
+        .set({
+          balance_tsh: sql`GREATEST(0, ${advertisersTable.balance_tsh} - ${chargeTsh})`,
+        })
+        .where(eq(advertisersTable.id, campaign.advertiser_id))
+        .returning({ balance_tsh: advertisersTable.balance_tsh });
+      if (!advertiserRow) return;
+      const newBal = advertiserRow.balance_tsh;
+
+      // Atomic campaign counters: roll daily bucket if date changed.
       const todayStr = todayISO();
-      const newSpentToday =
-        campaign.spent_today_date === todayStr
-          ? campaign.spent_today_tsh + chargeTsh
-          : chargeTsh;
-      const newSpentTotal = campaign.spent_total_tsh + chargeTsh;
-      const newStatus =
-        (campaign.total_budget_tsh > 0 &&
-          newSpentTotal >= campaign.total_budget_tsh) ||
-        newBal === 0
-          ? "exhausted"
-          : campaign.status;
-      await tx
+      const [campRow] = await tx
         .update(adCampaignsTable)
         .set({
-          spent_today_tsh: newSpentToday,
+          spent_today_tsh: sql`CASE WHEN ${adCampaignsTable.spent_today_date} = ${todayStr}
+            THEN ${adCampaignsTable.spent_today_tsh} + ${chargeTsh}
+            ELSE ${chargeTsh} END`,
           spent_today_date: todayStr,
-          spent_total_tsh: newSpentTotal,
-          status: newStatus,
+          spent_total_tsh: sql`${adCampaignsTable.spent_total_tsh} + ${chargeTsh}`,
           updated_at: new Date(),
         })
-        .where(eq(adCampaignsTable.id, campaign.id));
+        .where(eq(adCampaignsTable.id, campaign.id))
+        .returning({
+          spent_total_tsh: adCampaignsTable.spent_total_tsh,
+          status: adCampaignsTable.status,
+        });
+
+      // Auto-exhaust if we just blew through total budget or advertiser
+      // ran out of money. Only flip if currently active (don't override
+      // admin-set 'rejected' / 'paused').
+      if (campRow) {
+        const exhausted =
+          (campaign.total_budget_tsh > 0 &&
+            campRow.spent_total_tsh >= campaign.total_budget_tsh) ||
+          newBal === 0;
+        if (exhausted && campRow.status === "active") {
+          await tx
+            .update(adCampaignsTable)
+            .set({ status: "exhausted", updated_at: new Date() })
+            .where(eq(adCampaignsTable.id, campaign.id));
+        }
+      }
+
       await tx.insert(adLedgerTable).values({
-        advertiser_id: advertiser.id,
+        advertiser_id: campaign.advertiser_id,
         delta_tsh: -chargeTsh,
         balance_after: newBal,
-        reason:
-          type === "impression" ? "cpm_impression" : "cpc_click",
-        ref_id: type === "impression" ? payload.imp : null,
+        reason: type === "impression" ? "cpm_impression" : "cpc_click",
+        ref_id: ledgerRefId,
       });
     }
   });
