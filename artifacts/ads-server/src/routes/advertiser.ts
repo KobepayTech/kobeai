@@ -189,8 +189,32 @@ router.patch("/v1/advertiser/campaigns/:id", requireAdvertiser(), async (req, re
   ]) {
     if (k in req.body) allowed[k] = req.body[k];
   }
-  if (allowed["status"] && !["draft", "active", "paused", "ended"].includes(String(allowed["status"]))) {
-    return res.status(400).json({ error: "invalid status transition" });
+  if (allowed["status"]) {
+    const next = String(allowed["status"]);
+    if (!["draft", "active", "paused", "ended"].includes(next)) {
+      return res.status(400).json({ error: "invalid status transition" });
+    }
+    // Advertisers may not reactivate campaigns that admin moderation or the
+    // billing system has locked. Only admin routes can clear those states.
+    const locked = ["rejected", "exhausted", "ended"];
+    if (locked.includes(existing.status)) {
+      return res
+        .status(403)
+        .json({ error: `campaign status '${existing.status}' is locked; contact support` });
+    }
+    // Allowed transitions advertiser-side: draft↔active, active↔paused,
+    // paused→active, anything→ended (advertiser may end their own campaign).
+    const transitions: Record<string, string[]> = {
+      draft: ["draft", "active", "ended"],
+      active: ["active", "paused", "ended"],
+      paused: ["paused", "active", "ended"],
+    };
+    const allowedNexts = transitions[existing.status] ?? [];
+    if (!allowedNexts.includes(next)) {
+      return res.status(400).json({
+        error: `cannot transition from '${existing.status}' to '${next}'`,
+      });
+    }
   }
   if (allowed["ends_at"]) allowed["ends_at"] = new Date(String(allowed["ends_at"]));
   allowed["updated_at"] = new Date();
