@@ -1,0 +1,30 @@
+kind = "api"
+previewPath = "/ads-api"
+title = "KobeAI Ads Server"
+version = "1.0.0"
+
+[[services]]
+localPort = 8090
+name = "Ads Server"
+paths = ["/ads-api"]
+
+[services.development]
+run = "pnpm --filter @workspace/ads-server run dev"
+
+[services.production]
+
+[services.production.build]
+args = ["pnpm", "--filter", "@workspace/ads-server", "run", "build"]
+
+[services.production.build.env]
+NODE_ENV = "production"
+
+[services.production.run]
+args = ["node", "--enable-source-maps", "artifacts/ads-server/dist/index.mjs"]
+
+[services.production.run.env]
+PORT = "8090"
+NODE_ENV = "production"
+
+[services.production.health.startup]
+path = "/ads-api/healthz"

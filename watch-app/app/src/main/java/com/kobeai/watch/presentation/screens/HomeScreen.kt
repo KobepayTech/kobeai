@@ -71,11 +71,13 @@ fun HomeScreen(
 
     val items = listOf(
         MenuItem("chat",         "Ask KobeAI",     "Homework help",        "AI",  Primary),
+        MenuItem("store",        "AppStore",       "Browse mini-apps",     "✨",  Accent),
         MenuItem("quizzes",      "Quizzes",        "Practice & earn KP",   "Q",   PrimarySoft),
         MenuItem("leaderboard",  "Leaderboard",    "Class ranking",        "L",   Accent),
         MenuItem("timetable",    "Timetable",      "Today's schedule",     "T",   Primary),
         MenuItem("attendance",   "Check In",       "Daily attendance",     "C",   PrimarySoft),
         MenuItem("wallet",       "Wallet",         "$walletBalance KP",    "KP",  Accent),
+        MenuItem("stationery",   "Stationery",     "Order supplies",       "📒",  PrimarySoft),
         MenuItem("print",        "Tap to Print",   "NFC printer",          "P",   Primary),
         MenuItem("subscription", "Subscription",   "Plan & expiry",        "S",   PrimarySoft),
         MenuItem("bluetooth",    "Bluetooth",      "Pair earbuds",         "B",   Primary),
@@ -95,6 +97,7 @@ fun HomeScreen(
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             item { HeroHeader(firstName = firstName, walletBalance = walletBalance) }
+            item { AdHomeTile() }
             items(items) { item ->
                 MenuChip(item) { navController.navigate(item.route) }
             }

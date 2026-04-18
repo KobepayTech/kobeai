@@ -56,7 +56,10 @@ export async function enablePush(): Promise<void> {
 
   const sub = await reg.pushManager.subscribe({
     userVisibleOnly: true,
-    applicationServerKey: urlBase64ToUint8Array(public_key),
+    // Cast through `BufferSource` because newer DOM lib typings narrow this
+    // to `ArrayBuffer` (excluding `SharedArrayBuffer`), but `Uint8Array`'s
+    // backing buffer is typed as `ArrayBufferLike`.
+    applicationServerKey: urlBase64ToUint8Array(public_key) as BufferSource,
   });
 
   const subRes = await fetch("/api/v1/parent/push/subscribe", {

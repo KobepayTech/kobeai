@@ -1,0 +1,50 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "BpL42tye2necqI1ATclH5"
+uri = "file://attached_assets/downloads/kobeai-watch-app.tar.gz"
+type = "unspecified"
+title = "KobeAI Watch App (Wear OS, Kotlin) — open in Android Studio"
+
+[[outputs]]
+id = "5W7hCskUgHFpp8uwJOL6n"
+uri = "file://attached_assets/screenshots/watch-os-mockups.jpg"
+type = "image"
+title = "KobeAI Wear OS — Screen mockups"
+
+[[outputs]]
+id = "8DNsvUQEWhXePlzzh-15d"
+uri = "file://attached_assets/screenshots/watch-os-mockups-rect.jpg"
+type = "image"
+title = "KobeAI Wear OS — 2.01\" rectangular screen mockups"
+
+[[outputs]]
+id = "reAK2FwSDtIoyl5nvLMit"
+uri = "file://attached_assets/screenshots/watch-os-mockups-all.jpg"
+type = "image"
+title = "KobeAI Wear OS — All 13 watch screens"
+
+[[outputs]]
+id = "P8MsecWeFBx6gF33G466n"
+uri = "file://attached_assets/screenshots/dashboard-mockups-timetable-exams.jpg"
+type = "image"
+title = "KobeAI Teacher Dashboard — Timetable + Exam Mode mockups"
+
+[[outputs]]
+id = "qXblFYtHmxwo70DTxxex_"
+uri = "file://screenshots/super-admin.jpg"
+type = "image"
+title = "Super Admin — schools / market / bursar / global KP ledger"
+
+[[outputs]]
+id = "Jj6oZB7JjAy4UOJAyFEFi"
+uri = "file://screenshots/parent-payment-success.jpg"
+type = "image"
+title = "Parent App — payment success (+100 KP credited to child)"
+
+[[outputs]]
+id = "8vBK8bcIrPL81_4VkV_nz"
+uri = "file://screenshots/watch-with-kp.jpg"
+type = "image"
+title = "Watch — full set incl. KP balance, leaderboard, badge toast"

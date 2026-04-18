@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/advertiser-portal/"
+title = "KobeAI Advertiser Portal"
+version = "1.0.0"
+id = "artifacts/advertiser-portal"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/advertiser-portal/" ]
+localPort = 25821
+
+[services.development]
+run = "pnpm --filter @workspace/advertiser-portal run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/advertiser-portal", "run", "build" ]
+publicDir = "artifacts/advertiser-portal/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "25821"
+BASE_PATH = "/advertiser-portal/"

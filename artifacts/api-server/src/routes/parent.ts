@@ -400,9 +400,11 @@ router.get("/v1/parent/subscriptions/payment/:id", async (req, res) => {
     res.status(upstream.status).json(await upstream.json().catch(() => ({ error: "Upstream error" })));
     return;
   }
-  const body = await upstream.json();
+  const body = (await upstream.json()) as {
+    payment?: { student_code?: string } & Record<string, unknown>;
+  };
   const ownedCodes = new Set(Object.values(CHILD_TO_STUDENT_CODE));
-  if (!body.payment || !ownedCodes.has(body.payment.student_code)) {
+  if (!body.payment || !ownedCodes.has(body.payment.student_code ?? "")) {
     res.status(404).json({ error: "Payment not found" });
     return;
   }

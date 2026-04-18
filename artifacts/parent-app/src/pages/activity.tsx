@@ -29,9 +29,13 @@ export default function Activity() {
   const { data: activityData, isLoading: isLoadingActivity } = useGetChildActivity(
     selectedChildId || "",
     {
-      query: { enabled: !!selectedChildId && !!token },
-      request: { headers: { Authorization: `Bearer ${token}` } }
-    }
+      // The generated hook's `query` prop is typed as a full
+      // `UseQueryOptions` (including `queryKey`), but orval's React Query
+      // template injects the queryKey for us. Cast keeps the runtime
+      // contract — we only need `enabled` — without the boilerplate.
+      query: { enabled: !!selectedChildId && !!token } as never,
+      request: { headers: { Authorization: `Bearer ${token}` } },
+    },
   );
 
   if (!token) return null;

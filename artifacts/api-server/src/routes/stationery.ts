@@ -24,6 +24,8 @@ import {
   usersTable,
 } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
+import { sendApprovalPushToParents } from "./parent-push";
+import { logger } from "../lib/logger";
 
 const router = Router();
 
@@ -113,7 +115,7 @@ async function persistOrder(opts: {
   class_name: string | null;
   parent_user_id: number | null;
   placed_by: "teacher" | "student_watch" | "parent";
-  status: "draft" | "pending_parent_approval";
+  status: "draft" | "pending_parent_approval" | "approved";
   notes?: string | null;
   lines: LineInput[];
 }): Promise<{ order_id: number; total_tsh: number } | { error: string }> {
@@ -461,6 +463,12 @@ router.post(
         lines,
       });
       if ("error" in result) return res.status(400).json({ error: result.error });
+      // Fire-and-forget: notify linked parents that an order needs approval.
+      sendApprovalPushToParents(studentId, {
+        title: "Stationery order needs your approval",
+        body: `${student.name}'s teacher placed an order for TSh ${result.total_tsh.toLocaleString()}.`,
+        url: "/stationery",
+      }).catch((err) => logger.warn({ err }, "stationery push (teacher) failed"));
       res.json(result);
     } catch (e) {
       res.status(400).json({ error: (e as Error).message });
@@ -546,6 +554,11 @@ router.post(
         lines,
       });
       if ("error" in result) return res.status(400).json({ error: result.error });
+      sendApprovalPushToParents(studentId, {
+        title: "Stationery order needs your approval",
+        body: `${student.name} placed an order for TSh ${result.total_tsh.toLocaleString()} from their watch.`,
+        url: "/stationery",
+      }).catch((err) => logger.warn({ err }, "stationery push (watch) failed"));
       res.json(result);
     } catch (e) {
       res.status(400).json({ error: (e as Error).message });

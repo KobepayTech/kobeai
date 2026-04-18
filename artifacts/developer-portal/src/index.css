@@ -1,0 +1,89 @@
+@import "tailwindcss";
+
+:root {
+  --brand-green: #00A86B;
+  --brand-green-dark: #008f5a;
+  --brand-navy: #1A1A2E;
+  --brand-navy-light: #25253f;
+  --brand-bg: #f6f8f7;
+}
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  background: var(--brand-bg);
+  color: var(--brand-navy);
+  -webkit-font-smoothing: antialiased;
+}
+
+.btn-primary {
+  background: var(--brand-green);
+  color: white;
+  padding: 0.6rem 1.2rem;
+  border-radius: 0.5rem;
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.btn-primary:hover { background: var(--brand-green-dark); }
+.btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.btn-ghost {
+  background: transparent;
+  color: var(--brand-navy);
+  padding: 0.5rem 1rem;
+  border-radius: 0.5rem;
+  font-weight: 500;
+  border: 1px solid #d4d8d6;
+  cursor: pointer;
+}
+.btn-ghost:hover { background: #ececec; }
+
+.input {
+  width: 100%;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid #d4d8d6;
+  border-radius: 0.5rem;
+  font-size: 0.95rem;
+  background: white;
+}
+.input:focus {
+  outline: none;
+  border-color: var(--brand-green);
+  box-shadow: 0 0 0 3px rgba(0, 168, 107, 0.15);
+}
+
+.card {
+  background: white;
+  border-radius: 0.75rem;
+  padding: 1.25rem;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  border: 1px solid #ececec;
+}
+
+.label {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--brand-navy);
+  margin-bottom: 0.4rem;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.15rem 0.55rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.badge-green { background: #d6f4e6; color: var(--brand-green-dark); }
+.badge-amber { background: #fef0c7; color: #92400e; }
+.badge-red { background: #fee2e2; color: #991b1b; }
+.badge-gray { background: #ececec; color: #555; }

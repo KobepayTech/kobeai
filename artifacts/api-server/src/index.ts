@@ -3,6 +3,7 @@ import { logger } from "./lib/logger";
 import { seedDemoData } from "./lib/seed";
 import { seedCentralDemo } from "./lib/seed-central";
 import { seedStationeryDemo } from "./lib/seed-stationery";
+import { seedMiniApps } from "./lib/seed-miniapps";
 import { startCentralSync } from "./lib/central-sync";
 import { startDailyDigest } from "./routes/parent-push";
 
@@ -51,6 +52,10 @@ app.listen(port, async (err) => {
 
   await seedStationeryDemo().catch((err) =>
     logger.error({ err }, "stationery seed failed"),
+  );
+
+  await seedMiniApps().catch((err) =>
+    logger.error({ err }, "mini-apps seed failed"),
   );
 
   startCentralSync();

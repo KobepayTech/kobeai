@@ -309,13 +309,16 @@ router.post(
       .limit(1);
     if (!tenant) return res.status(500).json({ error: "No tenant configured" });
     if (req.auth?.role !== "super_admin") {
+      // On-prem servers are single-tenant, and the `classes` table has no
+      // `tenant_id` column — every class in this DB belongs to this school.
+      // So "student belongs to this school" reduces to "student is enrolled
+      // in at least one class on this server".
       const [membership] = await db
-        .select({ tenant_id: classesTable.tenant_id })
+        .select({ class_id: classMembershipsTable.class_id })
         .from(classMembershipsTable)
-        .innerJoin(classesTable, eq(classesTable.id, classMembershipsTable.class_id))
         .where(eq(classMembershipsTable.student_id, studentId))
         .limit(1);
-      if (!membership || membership.tenant_id !== tenant.id) {
+      if (!membership) {
         return res
           .status(403)
           .json({ error: "Student does not belong to your school" });

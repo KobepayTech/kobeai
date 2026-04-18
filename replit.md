@@ -91,6 +91,35 @@ The project is a pnpm workspace monorepo, with each package managing its own dep
     - **Bluetooth Setup**: Wizard for pairing earbuds and keyboards.
     - **Parent-Controlled Settings**: `student_settings` table allows parents to toggle `audio_enabled` and `keyboard_enabled` on the watch.
 
+## Ad Exchange (self-serve)
+
+Runs as its own Express service (`artifacts/ads-server`) — isolated from the
+school API for hot-path independence and independent scaling. Mounted by the
+platform proxy at `/ads-api/*`. Shares `SESSION_SECRET` (JWT + HMAC) with the
+main api-server so admin tokens issued by `/api/v1/auth/teacher/login` are
+accepted by the ads-server's admin endpoints.
+
+- **Tables** (in `lib/db`): `advertisers`, `advertiser_users`, `ad_campaigns`,
+  `ad_creatives`, `ad_placements` (seeded), `ad_impressions`, `ad_clicks`,
+  `ad_ledger`, `ad_frequency_caps`.
+- **Routes** (all under `/ads-api`):
+    - `ads.ts` — public `GET /v1/ads/serve?placement=…` returns
+      `{ ad: { impression_token, placement_id, campaign_id, pricing_model,
+      creative: { id, format, title, body, image_url, cta_url, cta_label,
+      width, height } } }`. Tokens are HMAC-SHA256 signed (imp+cmp+cre+pl+exp,
+      30 min); `POST /v1/ads/event { token, type }` charges advertiser ledger.
+    - `advertiser.ts` — signup/login/me/campaigns/creatives/stats/topup/ledger.
+    - `admin-ads.ts` — admin moderation (requires admin JWT from main api):
+      `GET /v1/admin/ads/{advertisers,campaigns,revenue,ledger}`,
+      `PATCH /v1/admin/ads/campaigns/:id { status: active|paused|rejected }`.
+- **Clients**:
+    - Advertiser Portal artifact (`artifacts/advertiser-portal`).
+    - Parent app `<AdBanner>` mounted on dashboard + stationery pages.
+    - Watch `AdHomeTile` on home menu + `AdInterstitialScreen` shown before
+      mini-app launch via `ads/interstitial/{appId}` route.
+    - Developer Portal `/ads-admin` page (admin login → moderate campaigns +
+      view exchange revenue).
+
 # External Dependencies
 
 - **pnpm**: Monorepo package manager.

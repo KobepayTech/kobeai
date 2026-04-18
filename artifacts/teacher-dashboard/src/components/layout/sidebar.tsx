@@ -19,6 +19,8 @@ import {
   Package,
   KeyRound,
   Boxes,
+  ShieldCheck,
+  Receipt,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -40,6 +42,8 @@ const navItems = [
   { href: "/central-stationery", label: "Central Stationery", icon: Boxes },
   { href: "/central-kp", label: "KP Ledger", icon: Coins },
   { href: "/parent-install", label: "Parent Install Link", icon: Share2 },
+  { href: "/moderation-apps", label: "App Moderation", icon: ShieldCheck },
+  { href: "/moderation-payments", label: "Dev Payments", icon: Receipt },
 ];
 
 export function Sidebar() {

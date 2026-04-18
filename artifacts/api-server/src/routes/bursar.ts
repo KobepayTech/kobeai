@@ -1,6 +1,8 @@
 import { Router } from "express";
 import { AddDepositBody } from "@workspace/api-zod";
 import PDFDocument from "pdfkit";
+import { eq, sql } from "drizzle-orm";
+import { db, usersTable, studentKpTable, kpLedgerTable } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 import { logger } from "../lib/logger";
 
@@ -86,7 +88,7 @@ router.get("/v1/bursar/subscription-payments/:id/receipt.pdf", requireAuth(["adm
       res.status(upstream.status).json({ error: `Central returned ${upstream.status}` });
       return;
     }
-    const body = await upstream.json();
+    const body = (await upstream.json()) as { payment: typeof payment };
     payment = body.payment;
   } catch (err) {
     logger.warn({ err, id }, "receipt: central unreachable");
@@ -217,16 +219,65 @@ router.get("/v1/bursar/students/balances", (_req, res) => {
   });
 });
 
-router.post("/v1/bursar/deposit", (req, res) => {
+/**
+ * POST /v1/bursar/deposit
+ * Bursar manually credits a student account (cash/M-Pesa STK confirmation that
+ * landed outside the standard flow). When the student exists in our DB we
+ * credit the real `student_kp` ledger so the watch wallet, leaderboard, and
+ * KP totals all reflect the deposit. Falls back to mock balance display only
+ * when the student_id can't be matched (legacy demo IDs).
+ *
+ * Conversion: TSh amount is credited as KP at 1:1 for now (matches what
+ * subscription-grants do). Real prod swaps in a school-specific FX rate.
+ */
+router.post("/v1/bursar/deposit", requireAuth(["admin", "teacher", "super_admin"]), async (req, res) => {
   const parsed = AddDepositBody.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Invalid request" });
     return;
   }
   const { student_id, amount } = parsed.data;
-  const students = buildBalances();
-  const student = students.find((b) => b.student_id === student_id);
-  const newBalance = (student?.balance ?? 0) + amount;
+  const reviewer = Number(req.auth?.user_id) || null;
+  const [student] = await db
+    .select()
+    .from(usersTable)
+    .where(eq(usersTable.student_code, student_id));
+  let newBalance: number;
+  if (student && student.role === "student") {
+    // Real credit — atomic SQL increment so concurrent deposits to the same
+    // student can never lost-update each other. The upsert handles the
+    // first-deposit case (no row yet) without a TOCTOU read. We derive
+    // balance_after from the COMMITTED row returned by the upsert and
+    // insert the ledger entry inside the same transaction so the audit
+    // row and the wallet snapshot always agree.
+    newBalance = await db.transaction(async (tx) => {
+      const [row] = await tx
+        .insert(studentKpTable)
+        .values({ user_id: student.id, balance: amount })
+        .onConflictDoUpdate({
+          target: studentKpTable.user_id,
+          set: {
+            balance: sql`${studentKpTable.balance} + ${amount}`,
+            updated_at: new Date(),
+          },
+        })
+        .returning({ balance: studentKpTable.balance });
+      const next = row!.balance;
+      await tx.insert(kpLedgerTable).values({
+        user_id: student.id,
+        delta: amount,
+        reason: "admin_adjust",
+        balance_after: next,
+      });
+      return next;
+    });
+    logger.info({ student_id, amount, by: reviewer }, "bursar deposit credited");
+  } else {
+    // Legacy / unknown student — display only.
+    const students = buildBalances();
+    const mock = students.find((b) => b.student_id === student_id);
+    newBalance = (mock?.balance ?? 0) + amount;
+  }
   res.json({
     success: true,
     deposit_id: `dep_${Date.now()}`,
@@ -234,6 +285,80 @@ router.post("/v1/bursar/deposit", (req, res) => {
     new_balance: newBalance,
     message: `Successfully deposited TSh ${amount.toLocaleString()}`,
   });
+});
+
+/**
+ * GET /v1/admin/cheat-sheet.pdf
+ * Single-page PDF that school IT can print and pin near the on-prem server
+ * rack. Covers daily ops: how to reset PINs, restart the AI box, where to
+ * find logs, and who to call. No PII, so unauthenticated by design — the
+ * cheat sheet is meant to be physically pinned, not gated behind a login.
+ */
+router.get("/v1/admin/cheat-sheet.pdf", (_req, res) => {
+  const doc = new PDFDocument({ size: "A4", margin: 50 });
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `inline; filename="kobeai-cheat-sheet.pdf"`);
+  doc.pipe(res);
+
+  doc.fillColor("#00A86B").fontSize(24).font("Helvetica-Bold")
+    .text("KobeAI", { continued: true })
+    .fillColor("#1A1A2E").text("  School IT Cheat Sheet");
+  doc.moveDown(0.3);
+  doc.fillColor("#555").fontSize(10).font("Helvetica")
+    .text(`School: ${SCHOOL_NAME}    •    Pin near the server rack    •    v1`);
+  doc.moveDown(1);
+
+  const section = (title: string) => {
+    doc.fillColor("#00A86B").fontSize(13).font("Helvetica-Bold").text(title);
+    doc.fillColor("#222").fontSize(10).font("Helvetica");
+    doc.moveDown(0.2);
+  };
+  const item = (label: string, body: string) => {
+    doc.font("Helvetica-Bold").text(label, { continued: true })
+      .font("Helvetica").text(`  ${body}`);
+    doc.moveDown(0.3);
+  };
+
+  section("If the server is down");
+  item("1.", "Check the green LED on the on-prem box. If off, press the power button once.");
+  item("2.", "Wait 90 seconds for the AI service (Ollama) to warm up.");
+  item("3.", "From any laptop on the school Wi-Fi, open http://kobeai.local — you should see the dashboard.");
+  item("4.", "If still down, run `sudo systemctl restart kobeai` from the server console.");
+
+  section("If a student forgets their PIN");
+  item("Teacher Dashboard →", "Students → search by name → Reset PIN.");
+  item("New PIN", "is shown once on screen. Write it down or have the student set their own.");
+
+  section("If a parent's M-Pesa payment didn't credit");
+  item("1.", "Open Bursar page → Subscription Payments. Search by phone or M-Pesa receipt.");
+  item("2.", "If status = 'pending' for >5 min, hit Verify (super-admin) or wait for callback.");
+  item("3.", "Manual deposit: Bursar → Add Deposit → enter Student ID + amount.");
+
+  section("If the watch won't connect");
+  item("1.", "Confirm watch is on the school Wi-Fi (Settings → Wi-Fi).");
+  item("2.", "On the watch: Sign out → Sign in. Use student ID + PIN.");
+  item("3.", "If still failing, check API server is up (step above).");
+
+  section("If a printer won't print (NFC tap)");
+  item("1.", "Hold watch flat against the NFC label on the printer for 2 seconds.");
+  item("2.", "Wait for printer beep. If no beep, check printer power + paper.");
+  item("3.", "Print job log: Teacher Dashboard → Documents → Print history.");
+
+  section("Daily checklist (5 minutes, every morning)");
+  item("✓", "Server LED green; dashboard loads at http://kobeai.local.");
+  item("✓", "Date/time on dashboard is correct (UTC drift breaks attendance).");
+  item("✓", "At least one printer paired and online.");
+  item("✓", "Backup ran overnight — Settings → Backups → last status = OK.");
+
+  section("Who to call");
+  item("Tier 1 (school IT)", "you. Try the steps above first.");
+  item("Tier 2 (KobeAI support)", "support@kobeai.tz · WhatsApp +255 700 000 000.");
+  item("After hours", "post in #kobeai-schools Slack channel — reply within 1 hour.");
+
+  doc.moveDown(1);
+  doc.fontSize(8).fillColor("#888").font("Helvetica-Oblique")
+    .text("This sheet is generated live from your KobeAI server. Re-print after every major upgrade.", { align: "center" });
+  doc.end();
 });
 
 /**

@@ -15,6 +15,24 @@ import retrofit2.http.Path
  */
 interface ApiService {
 
+    // -- Ad exchange ----------------------------------------------------------
+    // Public — no auth header. Server uses HMAC-signed impression tokens to
+    // tie the click event back to the served impression.
+    // The ads exchange runs as its own service mounted at `/ads-api/*`.
+    // Retrofit's @Url annotation lets us call an absolute path different
+    // from the default base, so we keep one Retrofit client.
+    @GET
+    suspend fun getAd(
+        @retrofit2.http.Url url: String = "ads-api/v1/ads/serve",
+        @retrofit2.http.Query("placement") placement: String,
+    ): AdServeResponse
+
+    @POST
+    suspend fun postAdEvent(
+        @Body body: AdEventRequest,
+        @retrofit2.http.Url url: String = "ads-api/v1/ads/event",
+    ): AdEventResponse
+
     @POST("api/v1/watch/login")
     suspend fun login(@Body request: LoginRequest): LoginResponse
 
@@ -55,6 +73,18 @@ interface ApiService {
         @Body request: SyncRequest
     ): SyncResponse
 
+    // -------- Stationery (parent-approved supply orders from the watch) ----
+    @GET("api/v1/watch/stationery/drive")
+    suspend fun getStationeryDrive(
+        @Header("Authorization") token: String
+    ): StationeryDriveResponse
+
+    @POST("api/v1/watch/stationery/order")
+    suspend fun submitStationeryOrder(
+        @Header("Authorization") token: String,
+        @Body request: StationeryOrderRequest
+    ): StationeryOrderResponse
+
     @POST("api/v1/watch/heartbeat")
     suspend fun heartbeat(
         @Header("Authorization") token: String,
@@ -85,7 +115,103 @@ interface ApiService {
     suspend fun getActiveExam(
         @Header("Authorization") token: String
     ): ActiveExamResponse
+
+    // ---------- Mini-app store ----------
+    @GET("api/v1/store/feed")
+    suspend fun getStoreFeed(
+        @Header("Authorization") token: String
+    ): StoreFeedResponse
+
+    @GET("api/v1/store/apps")
+    suspend fun getStoreApps(
+        @Header("Authorization") token: String,
+        @retrofit2.http.Query("category") category: String? = null
+    ): StoreAppsResponse
+
+    @GET("api/v1/store/apps/{id}")
+    suspend fun getStoreApp(
+        @Header("Authorization") token: String,
+        @Path("id") id: Int
+    ): StoreAppDetailResponse
+
+    @GET("api/v1/store/installed")
+    suspend fun getStoreInstalled(
+        @Header("Authorization") token: String
+    ): StoreInstalledResponse
+
+    @POST("api/v1/store/apps/{id}/install")
+    suspend fun installStoreApp(
+        @Header("Authorization") token: String,
+        @Path("id") id: Int
+    ): StoreOkResponse
+
+    @POST("api/v1/store/apps/{id}/purchase")
+    suspend fun purchaseStoreApp(
+        @Header("Authorization") token: String,
+        @Path("id") id: Int,
+        @Body req: PurchaseRequest
+    ): StoreOkResponse
+
+    @POST("api/v1/store/apps/{id}/complete")
+    suspend fun completeStoreApp(
+        @Header("Authorization") token: String,
+        @Path("id") id: Int
+    ): StoreCompleteResponse
 }
+
+data class StoreApp(
+    val id: Int,
+    val slug: String,
+    val name: String,
+    val description: String?,
+    val icon: String?,
+    val category: String,
+    val type: String,
+    val price_kp: Int,
+    val price_tsh: Int,
+    val total_installs: Int,
+    val rating: Double?,
+    val rating_count: Int,
+)
+
+data class StoreCategory(val category: String, val apps: List<StoreApp>)
+
+data class StoreFeedResponse(val featured: List<StoreApp>, val categories: List<StoreCategory>)
+
+data class StoreAppsResponse(val apps: List<StoreApp>)
+
+data class StoreAppDetailResponse(
+    val app: StoreApp,
+    val developer: StoreDeveloper?,
+    val manifest: Map<String, Any?>?,
+    val installed: Boolean,
+    val reviews: List<StoreReview>,
+)
+
+data class StoreDeveloper(val id: Int, val name: String, val website: String?)
+
+data class StoreReview(
+    val id: Int,
+    val rating: Int,
+    val comment: String?,
+    val created_at: String,
+)
+
+data class StoreInstall(
+    val install_id: Int,
+    val installed_at: String,
+    val paid: Boolean,
+    val app: StoreApp?,
+    val manifest: Map<String, Any?>?,
+)
+
+data class StoreInstalledResponse(val installs: List<StoreInstall>)
+
+data class PurchaseRequest(val currency: String) // "kp" or "tsh"
+
+data class StoreOkResponse(val ok: Boolean)
+
+data class StoreCompleteResponse(val ok: Boolean, val awarded_kp: Int)
 
 data class TimetableTodayResponse(
     val day_of_week: Int,
@@ -286,3 +412,64 @@ data class SubscriptionResponse(
     val severity: String,
     val message: String
 )
+
+// ---------------------------------------------------------------------------
+// Stationery — drive list + cart submission. The server returns the catalog
+// already priced for THIS school's tenant, so the watch never has to do FX
+// or rule-based math; it just shows the price and submits selected lines.
+// ---------------------------------------------------------------------------
+data class StationeryDriveResponse(
+    val drive: StationeryDrive?,
+    val items: List<StationeryItem>
+)
+
+data class StationeryDrive(
+    val id: Int,
+    val title: String,
+    val opens_at: String?,
+    val closes_at: String?
+)
+
+data class StationeryItem(
+    val id: Int,
+    val name: String,
+    val unit: String?,
+    val price_tsh: Int,
+    val category: String?
+)
+
+data class StationeryOrderRequest(
+    val lines: List<StationeryOrderLine>
+)
+
+data class StationeryOrderLine(
+    val item_id: Int,
+    val qty: Int
+)
+
+data class StationeryOrderResponse(
+    val order_id: Int,
+    val total_tsh: Int
+)
+
+// -- Ad exchange models ------------------------------------------------------
+data class AdServeResponse(val ad: AdPayload?)
+data class AdPayload(
+    val impression_token: String,
+    val placement_id: String,
+    val campaign_id: Int,
+    val creative: AdCreative,
+)
+data class AdCreative(
+    val id: Int,
+    val format: String,
+    val title: String,
+    val body: String?,
+    val image_url: String?,
+    val cta_url: String,
+    val cta_label: String?,
+    val width: Int?,
+    val height: Int?,
+)
+data class AdEventRequest(val token: String, val type: String) // type: "impression" | "click"
+data class AdEventResponse(val ok: Boolean)

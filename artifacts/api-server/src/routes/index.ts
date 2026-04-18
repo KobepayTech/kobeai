@@ -18,6 +18,9 @@ import marketRouter from "./market";
 import parentLinkRouter from "./parent-link";
 import stationeryRouter from "./stationery";
 import centralStationeryRouter from "./central-stationery";
+import developerRouter from "./developer";
+import storeRouter from "./store";
+import moderationRouter from "./moderation";
 
 const router: IRouter = Router();
 
@@ -42,5 +45,8 @@ router.use(marketRouter);
 router.use(parentLinkRouter);
 router.use(stationeryRouter);
 router.use(centralStationeryRouter);
+router.use(developerRouter);
+router.use(storeRouter);
+router.use(moderationRouter);
 
 export default router;

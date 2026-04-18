@@ -25,6 +25,8 @@ import ParentInstall from "@/pages/parent-install";
 import StationeryDrivePage from "@/pages/stationery-drive";
 import ClaimCodesPage from "@/pages/claim-codes";
 import CentralStationeryPage from "@/pages/central-stationery";
+import ModerationApps from "@/pages/moderation-apps";
+import ModerationPayments from "@/pages/moderation-payments";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -91,6 +93,12 @@ function Router() {
       </Route>
       <Route path="/central/:id">
         <Shell><CentralTenantDetail /></Shell>
+      </Route>
+      <Route path="/moderation-apps">
+        <Shell><ModerationApps /></Shell>
+      </Route>
+      <Route path="/moderation-payments">
+        <Shell><ModerationPayments /></Shell>
       </Route>
 
       <Route path="/">

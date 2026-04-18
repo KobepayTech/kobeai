@@ -5,21 +5,26 @@ import path from "path";
 import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
 import { mockupPreviewPlugin } from "./mockupPreviewPlugin";
 
+// PORT and BASE_PATH are required at runtime (dev/preview servers) but not
+// for `vite build` itself (CI builds the static bundle without an HTTP
+// server). Fall back to harmless defaults during build so CI doesn't fail.
+const isBuild = process.argv.includes("build");
+
 const rawPort = process.env.PORT;
 
-if (!rawPort) {
+if (!rawPort && !isBuild) {
   throw new Error(
     "PORT environment variable is required but was not provided.",
   );
 }
 
-const port = Number(rawPort);
+const port = Number(rawPort ?? "5173");
 
 if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
-const basePath = process.env.BASE_PATH;
+const basePath = process.env.BASE_PATH ?? (isBuild ? "/" : undefined);
 
 if (!basePath) {
   throw new Error(

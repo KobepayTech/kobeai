@@ -1,7 +1,7 @@
 import { Router } from "express";
 import webpush from "web-push";
-import { and, eq, gte, sql } from "drizzle-orm";
-import { db, pushSubscriptionsTable } from "@workspace/db";
+import { and, eq, gte, inArray, sql } from "drizzle-orm";
+import { db, pushSubscriptionsTable, parentChildrenTable, usersTable } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 import { logger } from "../lib/logger";
 
@@ -161,6 +161,66 @@ export async function sendDigestForParent(parentPhone: string): Promise<{
     }),
   );
   return { sent, failed, removed };
+}
+
+/**
+ * Send a one-off push notification to every parent linked to `studentUserId`.
+ * Used by the stationery and (future) wallet flows so the parent app gets a
+ * native notification the moment something needs their approval, instead of
+ * waiting for the daily digest. Returns counts so the caller can log + alert.
+ *
+ * Failures are swallowed per-subscription (logged) so a single dead endpoint
+ * never blocks the originating teacher/watch request. Dead endpoints (404/410)
+ * are auto-pruned, identical to the digest path.
+ */
+export async function sendApprovalPushToParents(
+  studentUserId: number,
+  payload: { title: string; body: string; url: string; tag?: string },
+): Promise<{ sent: number; failed: number; removed: number; targets: number }> {
+  // Resolve parent users for this student via parent_children link.
+  const parentRows = await db
+    .select({ parent_user_id: parentChildrenTable.parent_user_id })
+    .from(parentChildrenTable)
+    .where(eq(parentChildrenTable.student_user_id, studentUserId));
+  if (parentRows.length === 0) return { sent: 0, failed: 0, removed: 0, targets: 0 };
+  const parentUserIds = parentRows.map((r) => r.parent_user_id);
+  // Look up the phone (= push subscription key) for each parent user.
+  const parents = await db
+    .select({ id: usersTable.id, email: usersTable.email })
+    .from(usersTable)
+    .where(inArray(usersTable.id, parentUserIds));
+  const phones = parents.map((p) => p.email).filter((e): e is string => !!e);
+  if (phones.length === 0) return { sent: 0, failed: 0, removed: 0, targets: 0 };
+  const subs = await db
+    .select()
+    .from(pushSubscriptionsTable)
+    .where(inArray(pushSubscriptionsTable.parent_phone, phones));
+  if (subs.length === 0) return { sent: 0, failed: 0, removed: 0, targets: phones.length };
+  const body = JSON.stringify({ tag: "kobeai-approval", ...payload });
+  let sent = 0;
+  let failed = 0;
+  let removed = 0;
+  await Promise.all(
+    subs.map(async (sub) => {
+      try {
+        await webpush.sendNotification(
+          { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+          body,
+        );
+        sent++;
+      } catch (err: unknown) {
+        const status = (err as { statusCode?: number })?.statusCode;
+        if (status === 404 || status === 410) {
+          await db.delete(pushSubscriptionsTable).where(eq(pushSubscriptionsTable.id, sub.id));
+          removed++;
+        } else {
+          failed++;
+          logger.warn({ err, endpoint: sub.endpoint }, "approval push failed");
+        }
+      }
+    }),
+  );
+  return { sent, failed, removed, targets: subs.length };
 }
 
 /**

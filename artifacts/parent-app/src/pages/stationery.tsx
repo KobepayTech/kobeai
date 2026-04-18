@@ -3,6 +3,7 @@ import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { apiGet, apiPost } from "@/lib/api";
 import { Layout } from "@/components/layout";
+import { AdBanner } from "@/components/ad-banner";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
@@ -176,6 +177,7 @@ export default function StationeryPage() {
       </div>
 
       <div className="px-6 -mt-4 relative z-20 space-y-4">
+        <AdBanner placement="parent_app_stationery" />
         {!drive && !loading && (
           <Card className="p-6 rounded-3xl border-gray-100 text-center text-sm text-gray-600">
             No stationery drive open right now. We'll notify you when the next

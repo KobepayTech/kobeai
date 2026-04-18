@@ -838,3 +838,398 @@ export const stationeryOrderItemsTable = pgTable(
   }),
 );
 export type StationeryOrderItem = typeof stationeryOrderItemsTable.$inferSelect;
+
+// ===========================================================================
+// MINI-APP STORE — developer accounts, mini-apps, installs, purchases.
+// Apps are tiny JSON-defined experiences (flashcards, quizzes, readings,
+// counters, timers) rendered by a built-in runtime on the watch. Devs pay
+// for an account and get revenue share when students pay for their apps.
+// ===========================================================================
+
+export const developersTable = pgTable(
+  "developers",
+  {
+    id: serial("id").primaryKey(),
+    email: text("email").notNull(),
+    display_name: text("display_name").notNull(),
+    password_hash: text("password_hash").notNull(),
+    bio: text("bio"),
+    website: text("website"),
+    // "none" | "indie" | "studio"
+    plan: text("plan").notNull().default("none"),
+    // "inactive" | "pending_payment" | "active" | "expired"
+    plan_status: text("plan_status").notNull().default("inactive"),
+    plan_expires_at: timestamp("plan_expires_at"),
+    payout_method: text("payout_method"), // "mpesa" | "bank"
+    payout_account: text("payout_account"),
+    // Lifetime stats (denormalized for speed)
+    total_published_apps: integer("total_published_apps").notNull().default(0),
+    total_installs: integer("total_installs").notNull().default(0),
+    total_earnings_tsh: integer("total_earnings_tsh").notNull().default(0),
+    total_earnings_kp: integer("total_earnings_kp").notNull().default(0),
+    unpaid_balance_tsh: integer("unpaid_balance_tsh").notNull().default(0),
+    unpaid_balance_kp: integer("unpaid_balance_kp").notNull().default(0),
+    banned: boolean("banned").notNull().default(false),
+    created_at: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    email_idx: uniqueIndex("developers_email_idx").on(t.email),
+  }),
+);
+export type Developer = typeof developersTable.$inferSelect;
+
+/** Subscription + payout history for developers. */
+export const developerPaymentsTable = pgTable("developer_payments", {
+  id: serial("id").primaryKey(),
+  developer_id: integer("developer_id")
+    .notNull()
+    .references(() => developersTable.id, { onDelete: "cascade" }),
+  // "subscription" (dev pays us) | "payout" (we pay dev)
+  kind: text("kind").notNull(),
+  plan: text("plan"), // for subscriptions: "indie" | "studio"
+  amount_tsh: integer("amount_tsh").notNull(),
+  reference: text("reference"), // M-Pesa reference or transaction id
+  // "pending" | "verified" | "rejected"
+  status: text("status").notNull().default("pending"),
+  notes: text("notes"),
+  verified_by: integer("verified_by").references(() => usersTable.id),
+  verified_at: timestamp("verified_at"),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const miniAppsTable = pgTable(
+  "mini_apps",
+  {
+    id: serial("id").primaryKey(),
+    developer_id: integer("developer_id")
+      .notNull()
+      .references(() => developersTable.id, { onDelete: "cascade" }),
+    slug: text("slug").notNull(),
+    name: text("name").notNull(),
+    description: text("description"),
+    icon: text("icon"), // single emoji or short string
+    // "languages" | "math" | "science" | "history" | "wellness" | "fun" | "podcasts" | "other"
+    category: text("category").notNull().default("other"),
+    // "flashcards" | "quiz" | "reading" | "counter" | "timer"
+    type: text("type").notNull(),
+    // 0 = free
+    price_kp: integer("price_kp").notNull().default(0),
+    price_tsh: integer("price_tsh").notNull().default(0),
+    // "draft" | "submitted" | "approved" | "rejected" | "removed"
+    status: text("status").notNull().default("draft"),
+    current_version_id: integer("current_version_id"),
+    total_installs: integer("total_installs").notNull().default(0),
+    total_completions: integer("total_completions").notNull().default(0),
+    rating_sum: integer("rating_sum").notNull().default(0),
+    rating_count: integer("rating_count").notNull().default(0),
+    rejection_reason: text("rejection_reason"),
+    created_at: timestamp("created_at").defaultNow().notNull(),
+    updated_at: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    dev_slug_idx: uniqueIndex("mini_apps_dev_slug_idx").on(t.developer_id, t.slug),
+    cat_status_idx: index("mini_apps_cat_status_idx").on(t.category, t.status),
+  }),
+);
+export type MiniApp = typeof miniAppsTable.$inferSelect;
+
+export const miniAppVersionsTable = pgTable(
+  "mini_app_versions",
+  {
+    id: serial("id").primaryKey(),
+    app_id: integer("app_id")
+      .notNull()
+      .references(() => miniAppsTable.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    manifest: jsonb("manifest").notNull(),
+    // "submitted" | "approved" | "rejected"
+    status: text("status").notNull().default("submitted"),
+    reviewed_by: integer("reviewed_by").references(() => usersTable.id),
+    reviewed_at: timestamp("reviewed_at"),
+    review_notes: text("review_notes"),
+    created_at: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    app_version_idx: uniqueIndex("mini_app_versions_unique_idx").on(t.app_id, t.version),
+  }),
+);
+export type MiniAppVersion = typeof miniAppVersionsTable.$inferSelect;
+
+export const miniAppInstallsTable = pgTable(
+  "mini_app_installs",
+  {
+    id: serial("id").primaryKey(),
+    student_user_id: integer("student_user_id")
+      .notNull()
+      .references(() => usersTable.id, { onDelete: "cascade" }),
+    app_id: integer("app_id")
+      .notNull()
+      .references(() => miniAppsTable.id, { onDelete: "cascade" }),
+    version_id: integer("version_id")
+      .notNull()
+      .references(() => miniAppVersionsTable.id),
+    paid: boolean("paid").notNull().default(false),
+    installed_at: timestamp("installed_at").defaultNow().notNull(),
+    uninstalled_at: timestamp("uninstalled_at"),
+  },
+  (t) => ({
+    unique_idx: uniqueIndex("mini_app_installs_unique_idx").on(
+      t.student_user_id,
+      t.app_id,
+    ),
+  }),
+);
+export type MiniAppInstall = typeof miniAppInstallsTable.$inferSelect;
+
+export const miniAppPurchasesTable = pgTable("mini_app_purchases", {
+  id: serial("id").primaryKey(),
+  student_user_id: integer("student_user_id")
+    .notNull()
+    .references(() => usersTable.id, { onDelete: "cascade" }),
+  app_id: integer("app_id")
+    .notNull()
+    .references(() => miniAppsTable.id, { onDelete: "cascade" }),
+  developer_id: integer("developer_id")
+    .notNull()
+    .references(() => developersTable.id),
+  price_kp: integer("price_kp").notNull().default(0),
+  price_tsh: integer("price_tsh").notNull().default(0),
+  dev_share_kp: integer("dev_share_kp").notNull().default(0),
+  dev_share_tsh: integer("dev_share_tsh").notNull().default(0),
+  platform_share_kp: integer("platform_share_kp").notNull().default(0),
+  platform_share_tsh: integer("platform_share_tsh").notNull().default(0),
+  paid_at: timestamp("paid_at").defaultNow().notNull(),
+});
+export type MiniAppPurchase = typeof miniAppPurchasesTable.$inferSelect;
+
+export const miniAppReviewsTable = pgTable(
+  "mini_app_reviews",
+  {
+    id: serial("id").primaryKey(),
+    app_id: integer("app_id")
+      .notNull()
+      .references(() => miniAppsTable.id, { onDelete: "cascade" }),
+    student_user_id: integer("student_user_id")
+      .notNull()
+      .references(() => usersTable.id, { onDelete: "cascade" }),
+    rating: integer("rating").notNull(), // 1-5
+    comment: text("comment"),
+    created_at: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    one_per_student_idx: uniqueIndex("mini_app_reviews_unique_idx").on(
+      t.app_id,
+      t.student_user_id,
+    ),
+  }),
+);
+export type MiniAppReview = typeof miniAppReviewsTable.$inferSelect;
+
+// =====================================================================
+// Ad Exchange — self-serve advertiser portal + cross-surface ad serving
+// (parent PWA banners, watch home tile, watch mini-app interstitials).
+// =====================================================================
+
+/**
+ * One row per advertiser company. The `balance_tsh` is decremented on every
+ * billed event (impression for CPM, click for CPC, period start for flat).
+ * `status` lets super-admin freeze a misbehaving advertiser without deleting
+ * their history.
+ */
+export const advertisersTable = pgTable(
+  "advertisers",
+  {
+    id: serial("id").primaryKey(),
+    company_name: text("company_name").notNull(),
+    contact_email: text("contact_email").notNull(),
+    password_hash: text("password_hash").notNull(),
+    balance_tsh: integer("balance_tsh").default(0).notNull(),
+    status: text("status").default("active").notNull(), // active|suspended
+    created_at: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    email_unique: uniqueIndex("advertisers_email_idx").on(t.contact_email),
+  }),
+);
+export type Advertiser = typeof advertisersTable.$inferSelect;
+
+/**
+ * One row per campaign. `pricing_model` decides what `bid_amount_tsh` means:
+ *   cpm  — TSh per 1000 impressions (auction floor)
+ *   cpc  — TSh per click (auction floor)
+ *   flat — TSh per `flat_period_days`, guaranteed placement during window
+ *
+ * `targeting` is free-form jsonb so we can evolve targeting (region, grade,
+ * device, language) without schema churn.
+ */
+export const adCampaignsTable = pgTable(
+  "ad_campaigns",
+  {
+    id: serial("id").primaryKey(),
+    advertiser_id: integer("advertiser_id")
+      .notNull()
+      .references(() => advertisersTable.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    pricing_model: text("pricing_model").notNull(), // cpm | cpc | flat
+    bid_amount_tsh: integer("bid_amount_tsh").notNull(),
+    daily_budget_tsh: integer("daily_budget_tsh").default(0).notNull(),
+    total_budget_tsh: integer("total_budget_tsh").default(0).notNull(),
+    spent_total_tsh: integer("spent_total_tsh").default(0).notNull(),
+    spent_today_tsh: integer("spent_today_tsh").default(0).notNull(),
+    spent_today_date: text("spent_today_date"), // ISO date for daily reset
+    flat_period_days: integer("flat_period_days").default(7),
+    placements: jsonb("placements").notNull(), // string[]
+    targeting: jsonb("targeting"), // { age_min, age_max, region, grade, ... }
+    starts_at: timestamp("starts_at").defaultNow().notNull(),
+    ends_at: timestamp("ends_at"),
+    status: text("status").default("draft").notNull(),
+    // draft|active|paused|exhausted|ended|rejected
+    created_at: timestamp("created_at").defaultNow().notNull(),
+    updated_at: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    by_status_idx: index("ad_campaigns_status_idx").on(t.status),
+    by_advertiser_idx: index("ad_campaigns_advertiser_idx").on(t.advertiser_id),
+  }),
+);
+export type AdCampaign = typeof adCampaignsTable.$inferSelect;
+
+/**
+ * Creatives (the actual rendered units). One campaign can have multiple,
+ * one per format (banner image, native title+body, watch tile, etc.).
+ * `format` matches placement.allowed_formats so the engine picks the right
+ * creative per slot.
+ */
+export const adCreativesTable = pgTable(
+  "ad_creatives",
+  {
+    id: serial("id").primaryKey(),
+    campaign_id: integer("campaign_id")
+      .notNull()
+      .references(() => adCampaignsTable.id, { onDelete: "cascade" }),
+    format: text("format").notNull(),
+    // banner|native|watch_tile|interstitial
+    title: text("title").notNull(),
+    body: text("body"),
+    image_url: text("image_url"),
+    cta_url: text("cta_url").notNull(),
+    cta_label: text("cta_label").default("Learn more").notNull(),
+    width: integer("width"),
+    height: integer("height"),
+    created_at: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    by_campaign_idx: index("ad_creatives_campaign_idx").on(t.campaign_id),
+  }),
+);
+export type AdCreative = typeof adCreativesTable.$inferSelect;
+
+/**
+ * Static catalog of ad slots the engine knows how to fill. Seeded at boot.
+ * `floor_bid_tsh` is the minimum eCPM a campaign must beat to win the slot.
+ */
+export const adPlacementsTable = pgTable("ad_placements", {
+  id: text("id").primaryKey(), // e.g. parent_app_home
+  surface: text("surface").notNull(), // parent_app | watch | watch_miniapp
+  description: text("description").notNull(),
+  allowed_formats: jsonb("allowed_formats").notNull(), // string[]
+  floor_bid_tsh: integer("floor_bid_tsh").default(0).notNull(),
+  active: boolean("active").default(true).notNull(),
+});
+export type AdPlacement = typeof adPlacementsTable.$inferSelect;
+
+/**
+ * Every served ad creates an impression row. `charged_tsh` is non-zero only
+ * for CPM and flat campaigns (clicks for CPC charge on the click event).
+ * `user_id` is nullable since some surfaces (e.g. watch home) may serve
+ * pre-login.
+ */
+export const adImpressionsTable = pgTable(
+  "ad_impressions",
+  {
+    id: serial("id").primaryKey(),
+    campaign_id: integer("campaign_id")
+      .notNull()
+      .references(() => adCampaignsTable.id, { onDelete: "cascade" }),
+    creative_id: integer("creative_id")
+      .notNull()
+      .references(() => adCreativesTable.id, { onDelete: "cascade" }),
+    placement_id: text("placement_id").notNull(),
+    user_id: integer("user_id").references(() => usersTable.id, {
+      onDelete: "set null",
+    }),
+    served_at: timestamp("served_at").defaultNow().notNull(),
+    confirmed: boolean("confirmed").default(false).notNull(),
+    charged_tsh: integer("charged_tsh").default(0).notNull(),
+  },
+  (t) => ({
+    by_campaign_idx: index("ad_impressions_campaign_idx").on(t.campaign_id),
+    by_served_idx: index("ad_impressions_served_idx").on(t.served_at),
+  }),
+);
+export type AdImpression = typeof adImpressionsTable.$inferSelect;
+
+export const adClicksTable = pgTable(
+  "ad_clicks",
+  {
+    id: serial("id").primaryKey(),
+    impression_id: integer("impression_id")
+      .notNull()
+      .references(() => adImpressionsTable.id, { onDelete: "cascade" }),
+    campaign_id: integer("campaign_id")
+      .notNull()
+      .references(() => adCampaignsTable.id, { onDelete: "cascade" }),
+    clicked_at: timestamp("clicked_at").defaultNow().notNull(),
+    charged_tsh: integer("charged_tsh").default(0).notNull(),
+  },
+  (t) => ({
+    by_campaign_idx: index("ad_clicks_campaign_idx").on(t.campaign_id),
+  }),
+);
+export type AdClick = typeof adClicksTable.$inferSelect;
+
+/**
+ * Append-only ledger for advertiser money movements. `delta_tsh` positive =
+ * topup, negative = ad spend or refund.
+ */
+export const adLedgerTable = pgTable(
+  "ad_ledger",
+  {
+    id: serial("id").primaryKey(),
+    advertiser_id: integer("advertiser_id")
+      .notNull()
+      .references(() => advertisersTable.id, { onDelete: "cascade" }),
+    delta_tsh: integer("delta_tsh").notNull(),
+    balance_after: integer("balance_after").notNull(),
+    reason: text("reason").notNull(),
+    // topup|cpm_impression|cpc_click|flat_period|admin_adjust|refund
+    ref_id: integer("ref_id"), // impression_id / click_id / payment id
+    created_at: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    by_advertiser_idx: index("ad_ledger_advertiser_idx").on(t.advertiser_id),
+  }),
+);
+export type AdLedger = typeof adLedgerTable.$inferSelect;
+
+/**
+ * Per-user-per-campaign frequency cap counter. Resets daily via the
+ * `bucket_date` partition key. Cheap upsert + read on serve.
+ */
+export const adFrequencyCapsTable = pgTable(
+  "ad_frequency_caps",
+  {
+    user_id: integer("user_id").notNull(),
+    campaign_id: integer("campaign_id")
+      .notNull()
+      .references(() => adCampaignsTable.id, { onDelete: "cascade" }),
+    bucket_date: text("bucket_date").notNull(), // ISO date YYYY-MM-DD
+    count: integer("count").default(0).notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({
+      columns: [t.user_id, t.campaign_id, t.bucket_date],
+    }),
+  }),
+);
+export type AdFrequencyCap = typeof adFrequencyCapsTable.$inferSelect;

@@ -5,7 +5,8 @@ import { useGetParentDashboard } from "@workspace/api-client-react";
 import { Layout } from "@/components/layout";
 import { Card } from "@/components/ui/card";
 import { RenewalBanner } from "@/components/renewal-banner";
-import { Star, TrendingUp, ArrowRight, Skeleton, UserPlus, Package } from "lucide-react";
+import { AdBanner } from "@/components/ad-banner";
+import { Star, TrendingUp, ArrowRight, UserPlus, Package } from "lucide-react";
 
 export default function Dashboard() {
   const [, setLocation] = useLocation();
@@ -33,6 +34,7 @@ export default function Dashboard() {
 
       <div className="px-6 -mt-8 relative z-20 space-y-6">
         <RenewalBanner />
+        <AdBanner placement="parent_app_home" />
         <div className="grid grid-cols-2 gap-3">
           <button
             onClick={() => setLocation("/stationery")}
