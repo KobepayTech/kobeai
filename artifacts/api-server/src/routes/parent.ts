@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { AddFundsBody } from "@workspace/api-zod";
-import { db, subscriptionCacheTable } from "@workspace/db";
-import { eq, inArray } from "drizzle-orm";
+import { db, subscriptionCacheTable, printJobsTable, studentSettingsTable } from "@workspace/db";
+import { eq, inArray, desc } from "drizzle-orm";
 import { requireAuth } from "../lib/auth";
 import { listDocumentsForStudent } from "../lib/student-documents";
 
@@ -132,6 +132,109 @@ router.get("/v1/parent/child/:childId/documents", async (req, res) => {
       size_kb: Math.max(1, Math.round(d.size_bytes / 1024)),
       assigned_at: d.created_at,
     })),
+  });
+});
+
+/**
+ * GET /v1/parent/child/:childId/print-history
+ * Long-term audit log of every print job a child submitted: document name,
+ * page count, printer, status, timestamps. Builds parent trust ("did Aisha
+ * actually use her print quota?") and surfaces abuse.
+ */
+router.get("/v1/parent/child/:childId/print-history", async (req, res) => {
+  const { childId } = req.params;
+  const child = CHILDREN.find((c) => c.id === childId);
+  if (!child) {
+    res.status(404).json({ error: "Child not found" });
+    return;
+  }
+  const studentCode = CHILD_TO_STUDENT_CODE[childId];
+  const limit = Math.min(100, Math.max(1, Number(req.query["limit"] ?? 50)));
+  const rows = studentCode
+    ? await db
+        .select()
+        .from(printJobsTable)
+        .where(eq(printJobsTable.student_code, studentCode))
+        .orderBy(desc(printJobsTable.created_at))
+        .limit(limit)
+    : [];
+  res.json({
+    child_name: child.name,
+    jobs: rows.map((r) => ({
+      id: r.id,
+      job_ref: r.job_ref,
+      document_name: r.document_name,
+      pages: r.pages,
+      printer_id: r.printer_id,
+      printer_name: r.printer_name,
+      status: r.status,
+      status_message: r.status_message,
+      created_at: (r.created_at as Date).toISOString(),
+      completed_at: r.completed_at ? (r.completed_at as Date).toISOString() : null,
+    })),
+  });
+});
+
+// Watch device settings (audio responses + keyboard input). Parents can flip
+// these per child from the app; the watch reads them at login + on demand.
+// Defaults are applied here so brand-new students don't 404 — we never insert
+// a row until the parent actually changes something.
+router.get("/v1/parent/child/:childId/settings", async (req, res) => {
+  const childId = String(req.params["childId"]);
+  const studentCode = CHILD_TO_STUDENT_CODE[childId];
+  if (!studentCode) return res.status(404).json({ error: "child_not_found" });
+  const rows = await db
+    .select()
+    .from(studentSettingsTable)
+    .where(eq(studentSettingsTable.student_code, studentCode))
+    .limit(1);
+  const row = rows[0];
+  res.json({
+    student_code: studentCode,
+    audio_enabled: row?.audio_enabled ?? true,
+    keyboard_enabled: row?.keyboard_enabled ?? true,
+  });
+});
+
+router.patch("/v1/parent/child/:childId/settings", async (req, res) => {
+  const childId = String(req.params["childId"]);
+  const studentCode = CHILD_TO_STUDENT_CODE[childId];
+  if (!studentCode) return res.status(404).json({ error: "child_not_found" });
+  const body = req.body ?? {};
+  const audio = typeof body.audio_enabled === "boolean" ? body.audio_enabled : undefined;
+  const keyboard =
+    typeof body.keyboard_enabled === "boolean" ? body.keyboard_enabled : undefined;
+  if (audio === undefined && keyboard === undefined) {
+    return res.status(400).json({ error: "no_changes" });
+  }
+  // Upsert: insert with the provided values (defaulting the missing one to
+  // true since that's also the schema default), or update only the supplied
+  // fields on conflict so a partial PATCH doesn't clobber the other toggle.
+  await db
+    .insert(studentSettingsTable)
+    .values({
+      student_code: studentCode,
+      audio_enabled: audio ?? true,
+      keyboard_enabled: keyboard ?? true,
+    })
+    .onConflictDoUpdate({
+      target: studentSettingsTable.student_code,
+      set: {
+        ...(audio !== undefined ? { audio_enabled: audio } : {}),
+        ...(keyboard !== undefined ? { keyboard_enabled: keyboard } : {}),
+        updated_at: new Date(),
+      },
+    });
+  const rows = await db
+    .select()
+    .from(studentSettingsTable)
+    .where(eq(studentSettingsTable.student_code, studentCode))
+    .limit(1);
+  const row = rows[0]!;
+  res.json({
+    student_code: studentCode,
+    audio_enabled: row.audio_enabled,
+    keyboard_enabled: row.keyboard_enabled,
   });
 });
 

@@ -34,11 +34,24 @@ class PreferencesManager @Inject constructor(
         private val WALLET_BALANCE = intPreferencesKey("wallet_balance")
         private val SERVER_URL = stringPreferencesKey("server_url")
         private val DEVICE_ID = stringPreferencesKey("device_id")
+        // Audio response (TTS) on/off — gated by parent app preference but
+        // also locally toggled from ChatScreen so kids can mute mid-class.
+        private val AUDIO_ENABLED = booleanPreferencesKey("audio_enabled")
+        // Hardware keyboard input on/off — when off, ChatScreen falls back to
+        // the on-screen RemoteInput picker so a watch with no paired keyboard
+        // is still usable.
+        private val KEYBOARD_ENABLED = booleanPreferencesKey("keyboard_enabled")
+        // True once the per-student first-time setup wizard has run
+        // (Bluetooth pairing + earbuds + keyboard test).
+        private val SETUP_COMPLETED = booleanPreferencesKey("setup_completed")
     }
 
     val isLoggedIn: Flow<Boolean> = dataStore.data.map { it[IS_LOGGED_IN] ?: false }
     val studentName: Flow<String> = dataStore.data.map { it[STUDENT_NAME] ?: "" }
     val walletBalance: Flow<Int> = dataStore.data.map { it[WALLET_BALANCE] ?: 0 }
+    val audioEnabled: Flow<Boolean> = dataStore.data.map { it[AUDIO_ENABLED] ?: true }
+    val keyboardEnabled: Flow<Boolean> = dataStore.data.map { it[KEYBOARD_ENABLED] ?: true }
+    val setupCompleted: Flow<Boolean> = dataStore.data.map { it[SETUP_COMPLETED] ?: false }
 
     fun getAuthToken(): String? = runBlocking {
         dataStore.data.map { it[AUTH_TOKEN] }.first()
@@ -81,6 +94,18 @@ class PreferencesManager @Inject constructor(
 
     suspend fun setServerUrl(url: String) {
         dataStore.edit { it[SERVER_URL] = url }
+    }
+
+    suspend fun setAudioEnabled(value: Boolean) {
+        dataStore.edit { it[AUDIO_ENABLED] = value }
+    }
+
+    suspend fun setKeyboardEnabled(value: Boolean) {
+        dataStore.edit { it[KEYBOARD_ENABLED] = value }
+    }
+
+    suspend fun setSetupCompleted(value: Boolean) {
+        dataStore.edit { it[SETUP_COMPLETED] = value }
     }
 
     private fun setDeviceId(id: String) = runBlocking {

@@ -1,0 +1,33 @@
+# =============================================================================
+# KobeAI WORKER node — Ollama only.
+# Listens on 0.0.0.0:11434 inside the container; the host-level ufw rule (set
+# during autoinstall) allows ONLY 192.168.1.10 (the master) to connect.
+# =============================================================================
+name: kobeai-worker
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: kobeai-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+      OLLAMA_KEEP_ALIVE: "24h"
+      OLLAMA_NUM_PARALLEL: "2"
+    volumes:
+      - ./data/ollama:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    # Uncomment if the worker has an NVIDIA GPU
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]

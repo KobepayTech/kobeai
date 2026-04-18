@@ -1,0 +1,32 @@
+# =============================================================================
+# Overlay compose file: adds Caddy with self-signed TLS and replaces the
+# previous nginx container. Combine with the main compose file:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d
+# =============================================================================
+name: kobeai
+
+services:
+  # Disable the bundled nginx — Caddy takes over 80/443.
+  nginx:
+    profiles: ["disabled"]
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: kobeai-caddy
+    restart: unless-stopped
+    depends_on: [backend, teacher, parent]
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy/data:/data
+      - ./caddy/config:/config
+      - ./caddy/log:/var/log/caddy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks: [kobeai]

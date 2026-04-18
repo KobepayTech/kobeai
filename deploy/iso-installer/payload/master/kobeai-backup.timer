@@ -1,0 +1,12 @@
+[Unit]
+Description=Run KobeAI backup nightly at 02:00 local time
+Requires=kobeai-backup.service
+
+[Timer]
+OnCalendar=*-*-* 02:00:00
+Persistent=true
+RandomizedDelaySec=15min
+Unit=kobeai-backup.service
+
+[Install]
+WantedBy=timers.target

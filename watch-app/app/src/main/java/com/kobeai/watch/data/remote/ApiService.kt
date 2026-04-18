@@ -46,6 +46,9 @@ interface ApiService {
     @GET("api/v1/watch/wallet")
     suspend fun getWallet(@Header("Authorization") token: String): WalletResponse
 
+    @GET("api/v1/watch/subscription")
+    suspend fun getSubscription(@Header("Authorization") token: String): SubscriptionResponse
+
     @POST("api/v1/watch/sync")
     suspend fun sync(
         @Header("Authorization") token: String,
@@ -57,7 +60,108 @@ interface ApiService {
         @Header("Authorization") token: String,
         @Body request: HeartbeatRequest
     ): HeartbeatResponse
+
+    @GET("api/v1/watch/settings")
+    suspend fun getWatchSettings(
+        @Header("Authorization") token: String
+    ): WatchSettingsResponse
+
+    @GET("api/v1/watch/leaderboard")
+    suspend fun getLeaderboard(
+        @Header("Authorization") token: String
+    ): LeaderboardResponse
+
+    @GET("api/v1/watch/timetable/today")
+    suspend fun getTimetableToday(
+        @Header("Authorization") token: String
+    ): TimetableTodayResponse
+
+    @GET("api/v1/watch/timetable/current")
+    suspend fun getTimetableCurrent(
+        @Header("Authorization") token: String
+    ): TimetableCurrentResponse
+
+    @GET("api/v1/watch/exam/active")
+    suspend fun getActiveExam(
+        @Header("Authorization") token: String
+    ): ActiveExamResponse
 }
+
+data class TimetableTodayResponse(
+    val day_of_week: Int,
+    val periods: List<TimetablePeriod>,
+)
+
+data class TimetablePeriod(
+    val id: Int,
+    val day_of_week: Int,
+    val start_minute: Int,
+    val end_minute: Int,
+    val subject: String,
+    val room: String?,
+    val teacher_name: String?,
+)
+
+data class TimetableCurrentResponse(
+    val current: CurrentPeriod?,
+    val next: NextPeriod?,
+    val server_minute: Int,
+)
+
+data class CurrentPeriod(
+    val id: Int,
+    val subject: String,
+    val room: String?,
+    val teacher_name: String?,
+    val start_minute: Int,
+    val end_minute: Int,
+    val minutes_remaining: Int,
+)
+
+data class NextPeriod(
+    val id: Int,
+    val subject: String,
+    val room: String?,
+    val start_minute: Int,
+    val end_minute: Int,
+    val minutes_until: Int,
+)
+
+data class ActiveExamResponse(
+    val active: Boolean,
+    val exam: ActiveExam? = null,
+)
+
+data class ActiveExam(
+    val id: Int,
+    val class_id: Int,
+    val title: String,
+    val status: String,
+    val initial_seconds: Int,
+    val seconds_added: Int,
+    val remaining_seconds: Int,
+    val ends_at: String?,
+)
+
+data class LeaderboardResponse(
+    val leaderboard: List<LeaderboardEntry>,
+    val scope: String
+)
+
+data class LeaderboardEntry(
+    val rank: Int,
+    val student_code: String,
+    val student_name: String,
+    val total_points: Int,
+    val avg_score: Int,
+    val quizzes_taken: Int,
+    val is_me: Boolean,
+)
+
+data class WatchSettingsResponse(
+    val audio_enabled: Boolean,
+    val keyboard_enabled: Boolean,
+)
 
 // --- Request / response models -------------------------------------------------
 
@@ -170,3 +274,15 @@ data class HeartbeatRequest(
 )
 
 data class HeartbeatResponse(val success: Boolean)
+
+data class SubscriptionResponse(
+    val has_subscription: Boolean,
+    val status: String,
+    val plan: String?,
+    val expires_at: String?,
+    val days_until_expiry: Int?,
+    val monthly_price_tsh: Int,
+    val parent_phone: String?,
+    val severity: String,
+    val message: String
+)

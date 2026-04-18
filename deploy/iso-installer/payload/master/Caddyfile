@@ -1,0 +1,46 @@
+# =============================================================================
+# KobeAI Caddy — LAN-only mode
+# Caddy will mint its own self-signed cert for kobeai.school and 192.168.1.10
+# via the `tls internal` directive (no Let's Encrypt, no email, no internet).
+# =============================================================================
+
+{
+    # No automatic Let's Encrypt — we're on a private LAN.
+    auto_https disable_redirects
+    # Trust Caddy's local CA so newer browsers can be made to trust it once
+    # you import /data/caddy/pki/authorities/local/root.crt onto staff devices.
+    local_certs
+}
+
+# Both names route the same; school staff can use either.
+kobeai.school, 192.168.1.10 {
+    tls internal
+
+    # Teacher dashboard
+    handle_path /teacher/* {
+        reverse_proxy teacher:80
+    }
+
+    # API (used by the watches and the parent PWA)
+    handle /api/* {
+        reverse_proxy backend:8000
+    }
+
+    # Health endpoint for monitoring
+    handle /health {
+        respond "ok" 200
+    }
+
+    # Everything else → parent app (the default landing surface)
+    handle {
+        reverse_proxy parent:80
+    }
+
+    encode gzip
+    log {
+        output file /var/log/caddy/access.log {
+            roll_size 50mb
+            roll_keep 7
+        }
+    }
+}

@@ -1,0 +1,70 @@
+#cloud-config
+# =============================================================================
+# KobeAI WORKER node — Ubuntu 24.04 autoinstall profile
+# Locked-in choices:
+#   * Hostname:   kobeai-worker
+#   * LAN IP:     192.168.1.11/24  gateway 192.168.1.1
+#   * Role:       worker (runs ONLY Ollama, exposed on the LAN to the master)
+#
+# After install completes, the system reboots once and `kobeai-firstboot.service`
+# runs install-worker.sh which sets up Docker + Ollama + pulls the AI models.
+# =============================================================================
+autoinstall:
+  version: 1
+
+  locale: en_US.UTF-8
+  keyboard:
+    layout: us
+
+  identity:
+    hostname: kobeai-worker
+    username: kobeai
+    password: "$6$rounds=4096$kobeai$ePKqg.5PVN8c7d3GZxWqfKxw9f1RvT.jJ8Z6r7vX9YyZc5sNc3qS7nQbF1wKJ8mN2pL0xY3oH4iR5tU6vW8sB9"
+
+  ssh:
+    install-server: true
+    allow-pw: true
+
+  network:
+    version: 2
+    ethernets:
+      en:
+        match:
+          name: "en*"
+        dhcp4: false
+        addresses: [192.168.1.11/24]
+        routes:
+          - to: default
+            via: 192.168.1.1
+        nameservers:
+          addresses: [1.1.1.1, 8.8.8.8]
+
+  storage:
+    layout:
+      name: direct
+
+  packages:
+    - curl
+    - ca-certificates
+    - gnupg
+    - jq
+    - git
+    - htop
+    - ufw
+
+  late-commands:
+    - mkdir -p /target/opt/kobeai-payload
+    - cp -r /cdrom/payload/. /target/opt/kobeai-payload/
+    - cp /cdrom/payload/firstboot.sh /target/usr/local/sbin/kobeai-firstboot
+    - chmod +x /target/usr/local/sbin/kobeai-firstboot
+    - cp /cdrom/payload/kobeai-firstboot.service /target/etc/systemd/system/kobeai-firstboot.service
+    - echo "worker" > /target/etc/kobeai-role
+    - curtin in-target -- systemctl enable kobeai-firstboot.service
+    # Worker only opens SSH + the Ollama port to the master.
+    - curtin in-target -- ufw allow 22/tcp
+    - curtin in-target -- ufw allow from 192.168.1.10 to any port 11434 proto tcp
+    - curtin in-target -- ufw --force enable
+
+  user-data:
+    disable_root: false
+    timezone: Africa/Dar_es_Salaam

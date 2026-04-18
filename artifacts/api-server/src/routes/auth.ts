@@ -92,7 +92,7 @@ router.post("/v1/auth/teacher/login", async (req, res) => {
   });
 });
 
-router.post("/v1/auth/parent/login", (req, res) => {
+router.post("/v1/auth/parent/login", async (req, res) => {
   const parsed = ParentLoginBody.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Invalid request" });
@@ -103,18 +103,35 @@ router.post("/v1/auth/parent/login", (req, res) => {
     res.status(401).json({ error: "Invalid phone or PIN" });
     return;
   }
-  // Parents aren't in the users table yet (out of scope) — issue a JWT keyed
-  // on phone so per-request auth still works against the parent endpoints.
+  // Find or create the parent user row (we reuse the `email` column for the
+  // phone — the schema rebrand is out of scope). Real parent rows enable
+  // FK-clean ownership of `parent_children`, `stationery_orders`, etc.
+  let parent = (
+    await db.select().from(usersTable).where(eq(usersTable.email, phone))
+  )[0];
+  if (!parent) {
+    [parent] = await db
+      .insert(usersTable)
+      .values({
+        role: "parent",
+        name: "Parent",
+        email: phone,
+      })
+      .returning();
+  } else if (parent.role !== "parent") {
+    res.status(409).json({ error: "Phone already registered with another role" });
+    return;
+  }
   const token = signToken({
     role: "parent",
-    user_id: 0,
-    name: "Grace Mwangi",
+    user_id: parent!.id,
+    name: parent!.name,
     email: phone,
   });
   res.json({
     access_token: token,
     token_type: "bearer",
-    parent_name: "Grace Mwangi",
+    parent_name: parent!.name,
   });
 });
 

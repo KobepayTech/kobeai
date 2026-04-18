@@ -1,6 +1,6 @@
 import { Router } from "express";
-import { db, usersTable, classesTable, classMembershipsTable, documentsTable, documentAssignmentsTable } from "@workspace/db";
-import { and, eq, inArray, or } from "drizzle-orm";
+import { db, usersTable, classesTable, classMembershipsTable, documentsTable, documentAssignmentsTable, quizzesTable, quizQuestionsTable, quizAttemptsTable } from "@workspace/db";
+import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
 import { requireAuth } from "../lib/auth";
 import { ObjectStorageService } from "../lib/objectStorage";
 
@@ -206,7 +206,7 @@ router.post("/v1/teacher/documents", async (req, res) => {
 
 router.post("/v1/teacher/documents/:docId/assign", async (req, res) => {
   const docId = Number(req.params.docId);
-  const { class_id } = req.body ?? {};
+  const { class_id, scheduled_at, expires_at } = req.body ?? {};
   if (!Number.isFinite(docId) || !Number.isFinite(class_id)) {
     res.status(400).json({ error: "docId and class_id required" });
     return;
@@ -219,9 +219,23 @@ router.post("/v1/teacher/documents/:docId/assign", async (req, res) => {
     res.status(403).json({ error: "class not owned by this teacher" });
     return;
   }
+  // Optional scheduling window — accepted as ISO strings or `null` to clear.
+  const parseDate = (v: unknown): Date | null => {
+    if (v === null || v === undefined || v === "") return null;
+    const d = new Date(String(v));
+    return Number.isNaN(d.getTime()) ? null : d;
+  };
+  const scheduledAt = parseDate(scheduled_at);
+  const expiresAt = parseDate(expires_at);
   await db.insert(documentAssignmentsTable).values({
-    document_id: docId, class_id: Number(class_id),
-  }).onConflictDoNothing();
+    document_id: docId,
+    class_id: Number(class_id),
+    scheduled_at: scheduledAt,
+    expires_at: expiresAt,
+  }).onConflictDoUpdate({
+    target: [documentAssignmentsTable.document_id, documentAssignmentsTable.class_id],
+    set: { scheduled_at: scheduledAt, expires_at: expiresAt },
+  });
   res.json({ ok: true });
 });
 
@@ -231,6 +245,177 @@ router.get("/v1/teacher/documents", async (req, res) => {
     ? await db.select().from(documentsTable)
     : await db.select().from(documentsTable).where(eq(documentsTable.uploaded_by, req.auth!.user_id));
   res.json({ documents: rows });
+});
+
+// ---------------------------------------------------------------------------
+// Quiz authoring. Teachers write quizzes here; the watch reads them via
+// /v1/quizzes (which falls back to a hardcoded set when the table is empty).
+// ---------------------------------------------------------------------------
+
+/**
+ * GET /v1/teacher/quizzes
+ * Lists quizzes authored by the current teacher (admins see all). Each row
+ * carries an aggregated questions_count + points_possible so the dashboard
+ * doesn't need a follow-up per-quiz fetch.
+ */
+router.get("/v1/teacher/quizzes", async (req, res) => {
+  const isAdmin = req.auth?.role === "admin";
+  const teacherId = req.auth!.user_id;
+  const quizzes = isAdmin
+    ? await db.select().from(quizzesTable).orderBy(desc(quizzesTable.created_at))
+    : await db
+        .select()
+        .from(quizzesTable)
+        .where(eq(quizzesTable.teacher_id, teacherId))
+        .orderBy(desc(quizzesTable.created_at));
+  if (quizzes.length === 0) {
+    res.json({ quizzes: [] });
+    return;
+  }
+  const counts = await db
+    .select({
+      quiz_id: quizQuestionsTable.quiz_id,
+      questions_count: sql<number>`COUNT(*)::int`,
+      points_possible: sql<number>`COALESCE(SUM(${quizQuestionsTable.points}), 0)::int`,
+    })
+    .from(quizQuestionsTable)
+    .where(inArray(quizQuestionsTable.quiz_id, quizzes.map((q) => q.id)))
+    .groupBy(quizQuestionsTable.quiz_id);
+  const map = new Map(counts.map((c) => [c.quiz_id, c]));
+  res.json({
+    quizzes: quizzes.map((q) => ({
+      id: String(q.id),
+      title: q.title,
+      subject: q.subject,
+      class_id: q.class_id,
+      duration_minutes: q.duration_minutes,
+      created_at: q.created_at,
+      questions_count: map.get(q.id)?.questions_count ?? 0,
+      points_possible: map.get(q.id)?.points_possible ?? 0,
+    })),
+  });
+});
+
+/**
+ * POST /v1/teacher/quizzes
+ * Creates a quiz + its questions in one atomic write so a teacher who
+ * partially submits a 10-question quiz doesn't end up with an empty quiz
+ * row that students can see.
+ *
+ * Body: { title, subject, duration_minutes?, class_id?, questions:
+ *   [{ text, options: string[], correct_letter: "A"|"B"|..., points? }] }
+ */
+router.post("/v1/teacher/quizzes", async (req, res) => {
+  const body = req.body ?? {};
+  const title = typeof body.title === "string" ? body.title.trim() : "";
+  const subject = typeof body.subject === "string" ? body.subject.trim() : "";
+  const duration = Number.isFinite(body.duration_minutes) ? Number(body.duration_minutes) : 15;
+  const classId = body.class_id == null ? null : Number(body.class_id);
+  const questions = Array.isArray(body.questions) ? body.questions : [];
+  if (!title || !subject) {
+    res.status(400).json({ error: "title and subject are required" });
+    return;
+  }
+  if (questions.length === 0) {
+    res.status(400).json({ error: "at least one question is required" });
+    return;
+  }
+  // Validate every question up-front so we never partially write.
+  for (const q of questions) {
+    if (typeof q?.text !== "string" || !q.text.trim()) {
+      res.status(400).json({ error: "every question needs a text" });
+      return;
+    }
+    if (!Array.isArray(q.options) || q.options.length < 2 || q.options.some((o: unknown) => typeof o !== "string" || !String(o).trim())) {
+      res.status(400).json({ error: "every question needs at least 2 non-empty options" });
+      return;
+    }
+    if (typeof q.correct_letter !== "string" || !/^[A-Z]$/.test(q.correct_letter)) {
+      res.status(400).json({ error: "correct_letter must be a single uppercase letter" });
+      return;
+    }
+    const idx = q.correct_letter.charCodeAt(0) - 65;
+    if (idx < 0 || idx >= q.options.length) {
+      res.status(400).json({ error: `correct_letter ${q.correct_letter} is out of range for ${q.options.length} options` });
+      return;
+    }
+  }
+
+  const result = await db.transaction(async (tx) => {
+    const [quiz] = await tx
+      .insert(quizzesTable)
+      .values({
+        title,
+        subject,
+        duration_minutes: duration,
+        class_id: classId && Number.isFinite(classId) ? classId : null,
+        teacher_id: req.auth!.user_id,
+      })
+      .returning();
+    const rows = questions.map((q: { text: string; options: string[]; correct_letter: string; points?: number }, i: number) => ({
+      quiz_id: quiz.id,
+      text: q.text.trim(),
+      options: q.options.map((o) => String(o)),
+      correct_letter: q.correct_letter,
+      points: Number.isFinite(q.points) ? Number(q.points) : 10,
+      order_idx: i,
+    }));
+    await tx.insert(quizQuestionsTable).values(rows);
+    return quiz;
+  });
+  res.status(201).json({ id: String(result.id), title: result.title });
+});
+
+/**
+ * DELETE /v1/teacher/quizzes/:id
+ * Cascade-deletes the quiz and its questions/attempts (FK ON DELETE CASCADE).
+ * Teachers can only delete their own quizzes; admins can delete any.
+ */
+router.delete("/v1/teacher/quizzes/:id", async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) {
+    res.status(400).json({ error: "invalid id" });
+    return;
+  }
+  const [existing] = await db.select().from(quizzesTable).where(eq(quizzesTable.id, id)).limit(1);
+  if (!existing) {
+    res.status(404).json({ error: "quiz not found" });
+    return;
+  }
+  if (req.auth?.role !== "admin" && existing.teacher_id !== req.auth!.user_id) {
+    res.status(403).json({ error: "not your quiz" });
+    return;
+  }
+  await db.delete(quizzesTable).where(eq(quizzesTable.id, id));
+  res.json({ ok: true });
+});
+
+/**
+ * GET /v1/teacher/quizzes/:id/leaderboard
+ * Per-quiz leaderboard for the teacher dashboard. Returns each student's
+ * BEST score (a re-take that scored worse doesn't bump them down) along
+ * with attempt count.
+ */
+router.get("/v1/teacher/quizzes/:id/leaderboard", async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) {
+    res.status(400).json({ error: "invalid id" });
+    return;
+  }
+  const rows = await db
+    .select({
+      student_code: quizAttemptsTable.student_code,
+      student_name: quizAttemptsTable.student_name,
+      best_score: sql<number>`MAX(${quizAttemptsTable.score})::int`,
+      best_points: sql<number>`MAX(${quizAttemptsTable.points_earned})::int`,
+      attempts: sql<number>`COUNT(*)::int`,
+      last_at: sql<string>`MAX(${quizAttemptsTable.created_at})`,
+    })
+    .from(quizAttemptsTable)
+    .where(eq(quizAttemptsTable.quiz_id, id))
+    .groupBy(quizAttemptsTable.student_code, quizAttemptsTable.student_name)
+    .orderBy(sql`MAX(${quizAttemptsTable.score}) DESC`);
+  res.json({ leaderboard: rows });
 });
 
 export default router;

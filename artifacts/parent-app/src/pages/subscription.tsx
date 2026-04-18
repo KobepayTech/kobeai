@@ -45,6 +45,7 @@ type Payment = {
   phone: string;
   mpesa_receipt: string | null;
   failure_reason: string | null;
+  kp_granted?: number;
 };
 
 function statusBadge(status: string) {
@@ -280,6 +281,26 @@ export default function SubscriptionPage() {
                 <p className="text-sm text-gray-500 mt-1">Receipt: <span className="font-mono">{payment.mpesa_receipt}</span></p>
                 <p className="text-sm text-gray-500">Subscription extended by 30 days.</p>
               </div>
+              {payment.kp_granted && payment.kp_granted > 0 && (
+                <div
+                  className="rounded-2xl p-4 flex items-center gap-3 text-left"
+                  style={{ background: "linear-gradient(135deg,#00A86B 0%,#008A57 100%)", color: "white" }}
+                  data-testid="kp-bonus-card"
+                >
+                  <div className="w-12 h-12 rounded-full flex items-center justify-center text-base font-bold shrink-0" style={{ background: "rgba(255,255,255,0.18)" }}>
+                    KP
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[10px] uppercase tracking-wide opacity-80">
+                      Bonus credited to {selected?.child_name ?? "your child"}
+                    </div>
+                    <div className="text-xl font-bold leading-tight">+{payment.kp_granted} KP</div>
+                    <div className="text-[10px] opacity-90">
+                      They'll see this on their watch instantly.
+                    </div>
+                  </div>
+                </div>
+              )}
               <Button onClick={() => setPayOpen(false)} className="w-full h-12 rounded-xl">Done</Button>
             </div>
           )}

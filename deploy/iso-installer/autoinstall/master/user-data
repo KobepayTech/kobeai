@@ -1,0 +1,79 @@
+#cloud-config
+# =============================================================================
+# KobeAI MASTER node — Ubuntu 24.04 autoinstall profile
+# Locked-in choices:
+#   * Hostname:   kobeai-master
+#   * LAN IP:     192.168.1.10/24  gateway 192.168.1.1
+#   * Shell user: kobeai  (sudo, password auto-set on first boot)
+#   * Disk:       wipe & install on the largest disk
+#   * Role:       master  (runs Postgres, API, dashboards, Caddy, Ollama-fallback)
+#
+# After install completes, the system reboots once and `kobeai-firstboot.service`
+# runs install-master.sh which sets up Docker + the full KobeAI stack.
+# =============================================================================
+autoinstall:
+  version: 1
+
+  locale: en_US.UTF-8
+  keyboard:
+    layout: us
+
+  identity:
+    hostname: kobeai-master
+    username: kobeai
+    # placeholder password "kobeai-temp" — firstboot.sh forces a password change
+    # and writes the real auto-generated super-admin password to
+    # /root/kobeai-credentials.txt
+    password: "$6$rounds=4096$kobeai$ePKqg.5PVN8c7d3GZxWqfKxw9f1RvT.jJ8Z6r7vX9YyZc5sNc3qS7nQbF1wKJ8mN2pL0xY3oH4iR5tU6vW8sB9"
+
+  ssh:
+    install-server: true
+    allow-pw: true
+
+  network:
+    version: 2
+    ethernets:
+      en:
+        match:
+          name: "en*"
+        dhcp4: false
+        addresses: [192.168.1.10/24]
+        routes:
+          - to: default
+            via: 192.168.1.1
+        nameservers:
+          addresses: [1.1.1.1, 8.8.8.8]
+
+  storage:
+    layout:
+      name: direct
+
+  packages:
+    - curl
+    - ca-certificates
+    - gnupg
+    - openssl
+    - jq
+    - git
+    - htop
+    - ufw
+
+  late-commands:
+    # Copy the KobeAI payload from the ISO into the installed system so the
+    # firstboot service has everything it needs even without internet.
+    - mkdir -p /target/opt/kobeai-payload
+    - cp -r /cdrom/payload/. /target/opt/kobeai-payload/
+    - cp /cdrom/payload/firstboot.sh /target/usr/local/sbin/kobeai-firstboot
+    - chmod +x /target/usr/local/sbin/kobeai-firstboot
+    - cp /cdrom/payload/kobeai-firstboot.service /target/etc/systemd/system/kobeai-firstboot.service
+    - echo "master" > /target/etc/kobeai-role
+    - curtin in-target -- systemctl enable kobeai-firstboot.service
+    # Allow the parent app (443) and the API (only from LAN) through ufw.
+    - curtin in-target -- ufw allow 22/tcp
+    - curtin in-target -- ufw allow 80/tcp
+    - curtin in-target -- ufw allow 443/tcp
+    - curtin in-target -- ufw --force enable
+
+  user-data:
+    disable_root: false
+    timezone: Africa/Dar_es_Salaam

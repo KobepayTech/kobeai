@@ -12,11 +12,19 @@ import Dashboard from "@/pages/dashboard";
 import Students from "@/pages/students";
 import Attendance from "@/pages/attendance";
 import Quizzes from "@/pages/quizzes";
+import Timetable from "@/pages/timetable";
+import Exams from "@/pages/exams";
 import Bursar from "@/pages/bursar";
 import Documents from "@/pages/documents";
 import SchoolAi from "@/pages/school-ai";
 import CentralTenants from "@/pages/central-tenants";
 import CentralTenantDetail from "@/pages/central-tenant-detail";
+import CentralMarket from "@/pages/central-market";
+import CentralKpLedger from "@/pages/central-kp-ledger";
+import ParentInstall from "@/pages/parent-install";
+import StationeryDrivePage from "@/pages/stationery-drive";
+import ClaimCodesPage from "@/pages/claim-codes";
+import CentralStationeryPage from "@/pages/central-stationery";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -45,6 +53,12 @@ function Router() {
       <Route path="/quizzes">
         <Shell><Quizzes /></Shell>
       </Route>
+      <Route path="/timetable">
+        <Shell><Timetable /></Shell>
+      </Route>
+      <Route path="/exams">
+        <Shell><Exams /></Shell>
+      </Route>
       <Route path="/bursar">
         <Shell><Bursar /></Shell>
       </Route>
@@ -56,6 +70,24 @@ function Router() {
       </Route>
       <Route path="/central">
         <Shell><CentralTenants /></Shell>
+      </Route>
+      <Route path="/central-market">
+        <Shell><CentralMarket /></Shell>
+      </Route>
+      <Route path="/central-kp">
+        <Shell><CentralKpLedger /></Shell>
+      </Route>
+      <Route path="/parent-install">
+        <Shell><ParentInstall /></Shell>
+      </Route>
+      <Route path="/stationery">
+        <Shell><StationeryDrivePage /></Shell>
+      </Route>
+      <Route path="/claim-codes">
+        <Shell><ClaimCodesPage /></Shell>
+      </Route>
+      <Route path="/central-stationery">
+        <Shell><CentralStationeryPage /></Shell>
       </Route>
       <Route path="/central/:id">
         <Shell><CentralTenantDetail /></Shell>

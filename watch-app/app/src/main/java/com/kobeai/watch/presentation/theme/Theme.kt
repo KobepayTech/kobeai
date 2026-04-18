@@ -10,11 +10,16 @@ fun KobeAITheme(content: @Composable () -> Unit) {
             primary = Primary,
             primaryVariant = PrimaryDark,
             secondary = Accent,
+            secondaryVariant = Accent,
             background = Background,
             surface = Surface,
             error = ErrorRed,
             onPrimary = OnSurface,
-            onSurface = OnSurface
+            onSecondary = Navy,
+            onBackground = OnSurface,
+            onSurface = OnSurface,
+            onSurfaceVariant = OnSurfaceMuted,
+            onError = OnSurface
         ),
         typography = KobeAITypography,
         content = content

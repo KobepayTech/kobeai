@@ -4,7 +4,7 @@ import { useAuth } from "@/lib/auth";
 import { Layout } from "@/components/layout";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Settings, HelpCircle, FileText, LogOut, ChevronRight, User } from "lucide-react";
+import { Settings, HelpCircle, FileText, LogOut, ChevronRight, User, Watch, Bell } from "lucide-react";
 import { useGetParentDashboard } from "@workspace/api-client-react";
 
 export default function Profile() {
@@ -27,6 +27,8 @@ export default function Profile() {
   if (!token) return null;
 
   const menuItems = [
+    { icon: Watch, label: "Watch Settings", href: "/profile/watch" },
+    { icon: Bell, label: "Notifications", href: "/profile/notifications" },
     { icon: Settings, label: "Account Settings", href: "#" },
     { icon: HelpCircle, label: "Help & Support", href: "#" },
     { icon: FileText, label: "Terms & Privacy", href: "#" },
@@ -50,7 +52,13 @@ export default function Profile() {
         <Card className="rounded-3xl border-gray-100 shadow-sm overflow-hidden mb-6">
           <div className="divide-y divide-gray-100">
             {menuItems.map((item, i) => (
-              <button key={i} className="w-full flex items-center justify-between p-4 hover:bg-gray-50 transition-colors">
+              <button
+                key={i}
+                onClick={() => {
+                  if (item.href && item.href !== "#") setLocation(item.href);
+                }}
+                className="w-full flex items-center justify-between p-4 hover:bg-gray-50 transition-colors"
+              >
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-xl bg-gray-50 flex items-center justify-center text-gray-500">
                     <item.icon className="w-5 h-5" />

@@ -1,0 +1,159 @@
+#!/bin/bash
+# =============================================================================
+# kobeai-backup — full nightly snapshot of KobeAI state to a USB drive.
+#
+# Run on the master node (typically via the kobeai-backup.timer systemd unit
+# installed alongside this script). Behaviour:
+#
+#   1. Looks for a USB-connected backup drive (label "KOBEAI-BACKUP" by default).
+#      Falls back to /opt/kobeai/backups/local if no USB is mounted.
+#   2. Dumps Postgres (gzip).
+#   3. Dumps Redis (RDB snapshot).
+#   4. Tars Ollama models if present (skipped if running on a worker arch).
+#   5. Copies /opt/kobeai/.env, /root/kobeai-credentials.txt, and Caddy data.
+#   6. Writes a manifest with checksums + sizes.
+#   7. Rotates: keeps last N backups (default 14), deletes older.
+#
+# Usage:
+#   sudo kobeai-backup                        # auto-detect destination
+#   sudo kobeai-backup --dest /mnt/somewhere  # force destination
+#   sudo kobeai-backup --keep 30              # keep last 30 backups
+# =============================================================================
+set -euo pipefail
+
+GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; CYAN='\033[0;36m'
+BOLD='\033[1m'; NC='\033[0m'
+step() { echo -e "\n${CYAN}==>${NC} ${BOLD}$*${NC}"; }
+ok()   { echo -e "  ${GREEN}OK${NC} $*"; }
+warn() { echo -e "  ${YELLOW}!!${NC} $*"; }
+die()  { echo -e "  ${RED}FAIL${NC} $*"; exit 1; }
+
+[[ $EUID -eq 0 ]] || die "Run with sudo."
+
+USB_LABEL="${KOBEAI_BACKUP_LABEL:-KOBEAI-BACKUP}"
+KEEP=14
+DEST=""
+
+for ((i=1; i<=$#; i++)); do
+  case "${!i}" in
+    --dest)  ((i++)); DEST="${!i}" ;;
+    --keep)  ((i++)); KEEP="${!i}" ;;
+    --label) ((i++)); USB_LABEL="${!i}" ;;
+    -h|--help) sed -n '2,18p' "$0"; exit 0 ;;
+  esac
+done
+
+# -----------------------------------------------------------------------------
+# 1. Pick destination
+# -----------------------------------------------------------------------------
+if [[ -z "$DEST" ]]; then
+  USB_DEV="$(blkid -L "$USB_LABEL" 2>/dev/null || true)"
+  if [[ -n "$USB_DEV" ]]; then
+    MOUNT_POINT="/mnt/kobeai-backup"
+    mkdir -p "$MOUNT_POINT"
+    if ! mountpoint -q "$MOUNT_POINT"; then
+      mount "$USB_DEV" "$MOUNT_POINT" || die "Failed to mount $USB_DEV"
+    fi
+    DEST="$MOUNT_POINT/kobeai-backups"
+    USB_MOUNTED=true
+    ok "Backup destination: USB drive '$USB_LABEL' → $DEST"
+  else
+    DEST="/opt/kobeai/backups/local"
+    USB_MOUNTED=false
+    warn "USB drive labelled '$USB_LABEL' not found; falling back to $DEST"
+  fi
+else
+  USB_MOUNTED=false
+fi
+
+mkdir -p "$DEST"
+TS=$(date -u +%Y%m%dT%H%M%SZ)
+BACKUP="$DEST/kobeai-$TS"
+mkdir -p "$BACKUP"
+
+# -----------------------------------------------------------------------------
+# 2. Postgres
+# -----------------------------------------------------------------------------
+step "Dumping Postgres"
+if docker exec kobeai-postgres pg_isready -U kobeai >/dev/null 2>&1; then
+  docker exec kobeai-postgres pg_dump -U kobeai -Fc kobeai > "$BACKUP/postgres.dump"
+  ok "$(du -h "$BACKUP/postgres.dump" | cut -f1)"
+else
+  warn "Postgres unreachable — skipping"
+fi
+
+# -----------------------------------------------------------------------------
+# 3. Redis
+# -----------------------------------------------------------------------------
+step "Snapshotting Redis"
+if docker exec kobeai-redis redis-cli SAVE >/dev/null 2>&1; then
+  docker cp kobeai-redis:/data/dump.rdb "$BACKUP/redis.rdb" 2>/dev/null \
+    && ok "$(du -h "$BACKUP/redis.rdb" | cut -f1)" \
+    || warn "Could not copy redis dump"
+else
+  warn "Redis unreachable — skipping"
+fi
+
+# -----------------------------------------------------------------------------
+# 4. Ollama models (only if Ollama lives on this host — worker, mostly)
+# -----------------------------------------------------------------------------
+if [[ -d /opt/kobeai/data/ollama ]] && [[ -n "$(ls -A /opt/kobeai/data/ollama 2>/dev/null)" ]]; then
+  step "Archiving local Ollama models (skipped on master if worker holds them)"
+  tar --warning=no-file-changed -czf "$BACKUP/ollama.tar.gz" -C /opt/kobeai/data ollama || warn "ollama tar non-zero"
+  [[ -f "$BACKUP/ollama.tar.gz" ]] && ok "$(du -h "$BACKUP/ollama.tar.gz" | cut -f1)"
+fi
+
+# -----------------------------------------------------------------------------
+# 5. Config + secrets
+# -----------------------------------------------------------------------------
+step "Capturing config + secrets"
+mkdir -p "$BACKUP/config"
+cp /opt/kobeai/.env "$BACKUP/config/.env" 2>/dev/null || warn "no .env"
+cp /opt/kobeai/docker-compose.yml "$BACKUP/config/" 2>/dev/null || true
+cp /opt/kobeai/docker-compose.caddy.yml "$BACKUP/config/" 2>/dev/null || true
+cp -r /opt/kobeai/caddy "$BACKUP/config/" 2>/dev/null || true
+cp /root/kobeai-credentials.txt "$BACKUP/config/credentials.txt" 2>/dev/null || warn "no credentials.txt"
+chmod -R go-rwx "$BACKUP/config"
+ok "Config saved (root-only perms)"
+
+# -----------------------------------------------------------------------------
+# 6. Manifest
+# -----------------------------------------------------------------------------
+step "Writing manifest"
+{
+  echo "host:     $(hostname)"
+  echo "role:     $(cat /etc/kobeai-role 2>/dev/null || echo unknown)"
+  echo "taken:    $(date -Is)"
+  echo "git:      $(git -C /opt/kobeai-src rev-parse HEAD 2>/dev/null || echo unknown)"
+  echo "files:"
+  (cd "$BACKUP" && find . -type f -exec sha256sum {} \;)
+} > "$BACKUP/MANIFEST.txt"
+ok "Manifest written"
+
+# -----------------------------------------------------------------------------
+# 7. Rotation — keep the last $KEEP backups
+# -----------------------------------------------------------------------------
+step "Rotating (keeping last $KEEP)"
+mapfile -t OLD < <(ls -1dt "$DEST"/kobeai-* 2>/dev/null | tail -n +$((KEEP+1)))
+for d in "${OLD[@]}"; do
+  rm -rf "$d"
+  echo "    pruned $(basename "$d")"
+done
+ok "Done"
+
+# -----------------------------------------------------------------------------
+# 8. Sync + (optionally) unmount the USB so the user can yank it safely.
+# -----------------------------------------------------------------------------
+sync
+if [[ "${USB_MOUNTED:-false}" == "true" ]]; then
+  umount "$MOUNT_POINT" 2>/dev/null && ok "Unmounted USB — safe to remove"
+fi
+
+cat <<EOF
+
+${BOLD}${GREEN}Backup complete.${NC}
+  Location:  $BACKUP
+  Size:      $(du -sh "$BACKUP" | cut -f1)
+  Restore:   docker exec -i kobeai-postgres pg_restore -U kobeai -d kobeai --clean --if-exists < "$BACKUP/postgres.dump"
+
+EOF

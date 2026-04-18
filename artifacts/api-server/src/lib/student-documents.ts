@@ -5,7 +5,7 @@ import {
   documentAssignmentsTable,
   documentsTable,
 } from "@workspace/db";
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, and, or, isNull, lte, gt } from "drizzle-orm";
 
 export type StudentDocument = {
   id: number;
@@ -39,10 +39,20 @@ export async function listDocumentsForStudent(studentCode: string): Promise<Stud
   if (memberships.length === 0) return [];
 
   const classIds = memberships.map((m) => m.class_id);
+  const now = new Date();
+  // Honour scheduled_at / expires_at: a row is visible when
+  //   (scheduled_at IS NULL OR scheduled_at <= now) AND
+  //   (expires_at   IS NULL OR expires_at   >  now)
   const assignments = await db
     .select()
     .from(documentAssignmentsTable)
-    .where(inArray(documentAssignmentsTable.class_id, classIds));
+    .where(
+      and(
+        inArray(documentAssignmentsTable.class_id, classIds),
+        or(isNull(documentAssignmentsTable.scheduled_at), lte(documentAssignmentsTable.scheduled_at, now)),
+        or(isNull(documentAssignmentsTable.expires_at), gt(documentAssignmentsTable.expires_at, now)),
+      ),
+    );
   if (assignments.length === 0) return [];
 
   const docIds = Array.from(new Set(assignments.map((a) => a.document_id)));

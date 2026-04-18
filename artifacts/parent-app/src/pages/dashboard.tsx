@@ -5,7 +5,7 @@ import { useGetParentDashboard } from "@workspace/api-client-react";
 import { Layout } from "@/components/layout";
 import { Card } from "@/components/ui/card";
 import { RenewalBanner } from "@/components/renewal-banner";
-import { Star, TrendingUp, ArrowRight, Skeleton } from "lucide-react";
+import { Star, TrendingUp, ArrowRight, Skeleton, UserPlus, Package } from "lucide-react";
 
 export default function Dashboard() {
   const [, setLocation] = useLocation();
@@ -33,6 +33,30 @@ export default function Dashboard() {
 
       <div className="px-6 -mt-8 relative z-20 space-y-6">
         <RenewalBanner />
+        <div className="grid grid-cols-2 gap-3">
+          <button
+            onClick={() => setLocation("/stationery")}
+            data-testid="link-stationery"
+            className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex flex-col items-start gap-2 hover:shadow-md transition"
+          >
+            <div className="w-10 h-10 bg-primary/10 text-primary rounded-xl flex items-center justify-center">
+              <Package className="w-5 h-5" />
+            </div>
+            <p className="text-sm font-bold">Stationery</p>
+            <p className="text-xs text-gray-500 -mt-1">Order supplies</p>
+          </button>
+          <button
+            onClick={() => setLocation("/add-child")}
+            data-testid="link-add-child"
+            className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex flex-col items-start gap-2 hover:shadow-md transition"
+          >
+            <div className="w-10 h-10 bg-primary/10 text-primary rounded-xl flex items-center justify-center">
+              <UserPlus className="w-5 h-5" />
+            </div>
+            <p className="text-sm font-bold">Add a child</p>
+            <p className="text-xs text-gray-500 -mt-1">Claim or scan</p>
+          </button>
+        </div>
         {isLoading ? (
           <div className="space-y-4">
             <Card className="p-6 rounded-3xl shadow-sm border-none"><div className="h-24 bg-gray-100 animate-pulse rounded-xl"></div></Card>

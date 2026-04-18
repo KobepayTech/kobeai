@@ -10,7 +10,15 @@ import {
   Cpu,
   Building2,
   LogOut,
-  School
+  School,
+  CalendarClock,
+  Timer,
+  Target,
+  Coins,
+  Share2,
+  Package,
+  KeyRound,
+  Boxes,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -20,10 +28,18 @@ const navItems = [
   { href: "/students", label: "Students", icon: Users },
   { href: "/attendance", label: "Attendance", icon: CalendarCheck },
   { href: "/quizzes", label: "Quizzes", icon: BookOpenCheck },
+  { href: "/timetable", label: "Timetable", icon: CalendarClock },
+  { href: "/exams", label: "Exam Mode", icon: Timer },
   { href: "/documents", label: "Documents", icon: FileText },
   { href: "/bursar", label: "Bursar", icon: Wallet },
+  { href: "/stationery", label: "Stationery", icon: Package },
+  { href: "/claim-codes", label: "Claim Codes", icon: KeyRound },
   { href: "/school-ai", label: "School AI", icon: Cpu },
   { href: "/central", label: "Central Admin", icon: Building2 },
+  { href: "/central-market", label: "Question Market", icon: Target },
+  { href: "/central-stationery", label: "Central Stationery", icon: Boxes },
+  { href: "/central-kp", label: "KP Ledger", icon: Coins },
+  { href: "/parent-install", label: "Parent Install Link", icon: Share2 },
 ];
 
 export function Sidebar() {

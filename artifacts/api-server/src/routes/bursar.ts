@@ -236,6 +236,92 @@ router.post("/v1/bursar/deposit", (req, res) => {
   });
 });
 
+/**
+ * POST /v1/bursar/invoices/bulk
+ * Sends an STK push to multiple parents in one click. The bursar selects
+ * a list of student_ids + an amount; we proxy each one through the central
+ * server's /central/v1/payments/initiate endpoint (using the school's
+ * tenant license key) so the resulting subscription_payments rows live in
+ * central where the rest of the billing flow expects them.
+ *
+ * AUTH: teacher/admin only (real PII — initiates a charge on a parent's
+ * phone). Rate limit is implicit — central enforces idempotency by
+ * checkout_request_id.
+ *
+ * Body: { student_ids: string[], amount_tsh: number }
+ * Response: { successes, failures, results: [{ student_id, ok, payment_id?, error? }] }
+ */
+router.post("/v1/bursar/invoices/bulk", requireAuth(["admin", "teacher", "super_admin"]), async (req, res) => {
+  const studentIds: unknown[] = Array.isArray(req.body?.student_ids) ? req.body.student_ids : [];
+  const amount = Number(req.body?.amount_tsh);
+  if (studentIds.length === 0) {
+    res.status(400).json({ error: "student_ids must be a non-empty array" });
+    return;
+  }
+  if (studentIds.length > 100) {
+    res.status(400).json({ error: "max 100 invoices per batch" });
+    return;
+  }
+  if (!Number.isFinite(amount) || amount <= 0) {
+    res.status(400).json({ error: "amount_tsh must be a positive number" });
+    return;
+  }
+  const base = process.env["CENTRAL_BASE_URL"] ?? "";
+  const key = process.env["TENANT_LICENSE_KEY"] ?? "";
+  if (!base || !key) {
+    res.status(503).json({ error: "central server not configured" });
+    return;
+  }
+  // We need a phone per student. The local mock STUDENTS list doesn't carry
+  // phone numbers, so we fall back to a deterministic demo phone derived from
+  // the student_id. Real prod swaps this for a JOIN against the parents
+  // table. Documented loudly in the response so a real bursar wouldn't ship
+  // this against live numbers without wiring a real phone source.
+  const balances = buildBalances();
+  const results = await Promise.all(
+    studentIds.map(async (sid) => {
+      const idStr = String(sid);
+      const student = balances.find((b) => b.student_id === idStr || b.id === idStr);
+      if (!student) {
+        return { student_id: idStr, ok: false, error: "student not found" };
+      }
+      // Demo-only phone derivation. Replace with parents.phone JOIN in prod.
+      const phone = `2557${String(student.id).padStart(8, "0").slice(-8)}`;
+      try {
+        const upstream = await fetch(`${base}/api/central/v1/payments/initiate`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-tenant-license-key": key,
+          },
+          body: JSON.stringify({
+            student_code: student.student_id,
+            phone,
+            amount_tsh: amount,
+          }),
+          signal: AbortSignal.timeout(8000),
+        });
+        if (!upstream.ok) {
+          const text = await upstream.text().catch(() => "");
+          return { student_id: idStr, ok: false, error: `central ${upstream.status}: ${text.slice(0, 120)}` };
+        }
+        const body = (await upstream.json()) as { payment_id?: number };
+        return { student_id: idStr, ok: true, payment_id: body.payment_id, phone };
+      } catch (err) {
+        logger.warn({ err, student_id: idStr }, "bulk invoice initiate failed");
+        return { student_id: idStr, ok: false, error: "central unreachable" };
+      }
+    }),
+  );
+  const successes = results.filter((r) => r.ok).length;
+  res.status(207).json({
+    successes,
+    failures: results.length - successes,
+    results,
+    note: "Demo: parent phone numbers were derived from student_id. Wire a real parent phone source before production use.",
+  });
+});
+
 router.get("/v1/bursar/billing/summary", (_req, res) => {
   const now = new Date();
   const period = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;

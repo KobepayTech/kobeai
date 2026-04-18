@@ -1,0 +1,12 @@
+[Unit]
+Description=KobeAI nightly backup to USB
+After=docker.service network-online.target
+Wants=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/kobeai-backup
+Nice=10
+IOSchedulingClass=idle
+StandardOutput=journal+console
+StandardError=journal+console

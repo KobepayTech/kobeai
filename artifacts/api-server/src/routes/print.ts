@@ -1,6 +1,6 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import crypto from "node:crypto";
-import { db, usersTable, classMembershipsTable, documentAssignmentsTable, documentsTable } from "@workspace/db";
+import { db, usersTable, classMembershipsTable, documentAssignmentsTable, documentsTable, printJobsTable } from "@workspace/db";
 import { eq, and, inArray } from "drizzle-orm";
 import { getPrintStore, type Pairing, type PrintJob } from "../lib/print-store";
 import { ObjectStorageService, ObjectNotFoundError } from "../lib/objectStorage";
@@ -221,6 +221,28 @@ router.post("/v1/print/submit", requireStudent, async (req, res) => {
   await store.putJob(job, JOB_TTL_MS);
   await store.updatePairingJob(pairing_id, job.id);
 
+  // Persist a long-term audit record. The student_code on the job is the
+  // student.user.student_code (set at session creation), so we resolve the
+  // numeric user.id for FK linkage.
+  try {
+    const studentRow = (
+      await db.select().from(usersTable).where(eq(usersTable.student_code, pairing.student_id))
+    )[0];
+    await db.insert(printJobsTable).values({
+      job_ref: job.id,
+      student_code: pairing.student_id,
+      student_id: studentRow?.id ?? null,
+      document_id: doc.id,
+      document_name: doc.name,
+      pages: doc.pages ?? 1,
+      printer_id: pairing.printer_id,
+      printer_name: PRINTERS[pairing.printer_id]?.name ?? null,
+      status: "queued",
+    });
+  } catch (err) {
+    req.log?.error({ err }, "failed to persist print job audit row");
+  }
+
   res.json({ job_id: job.id, status: job.status, document_name: doc.name });
 });
 
@@ -289,6 +311,19 @@ router.post("/v1/print/jobs/:id/status", requireTapBox, async (req, res) => {
   if (!updated) {
     res.status(404).json({ error: "job not found" });
     return;
+  }
+  // Mirror the status onto the audit row (best-effort).
+  try {
+    await db
+      .update(printJobsTable)
+      .set({
+        status,
+        status_message: typeof message === "string" ? message : null,
+        completed_at: status === "done" || status === "failed" ? new Date() : null,
+      })
+      .where(eq(printJobsTable.job_ref, String(req.params.id)));
+  } catch (err) {
+    req.log?.error({ err }, "failed to update print job audit row");
   }
   res.json({ ok: true, job: updated });
 });

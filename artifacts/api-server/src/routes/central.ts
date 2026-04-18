@@ -5,8 +5,14 @@ import {
   studentSubscriptionsTable,
   tenantUsageSnapshotsTable,
   subscriptionPaymentsTable,
+  usersTable,
+  studentKpTable,
+  kpLedgerTable,
+  kpPendingGrantsTable,
+  questionLocksTable,
 } from "@workspace/db";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, gte, sql, isNull, inArray } from "drizzle-orm";
+import { marketQuestionsTable } from "@workspace/db";
 import crypto from "node:crypto";
 import { requireAuth } from "../lib/auth";
 import { generateLicenseKey, compareLicenseKeys } from "../lib/license";
@@ -314,6 +320,60 @@ async function completePayment(paymentId: number): Promise<void> {
         "payment succeeded but subscription row missing — bursar should refund or recreate",
       );
     }
+
+    // Membership KP grant: every successful subscription payment also tops
+    // up the student's KP balance so the question-market is funded and the
+    // child has something to spend on locks. Conservation invariant
+    // (sum(kp_ledger.delta) == student_kp.balance) is preserved by doing
+    // both writes in this same transaction.
+    const grant = Number(process.env["MEMBERSHIP_KP_GRANT"] ?? 100);
+    if (grant > 0) {
+      const [student] = await tx
+        .select({ id: usersTable.id })
+        .from(usersTable)
+        .where(eq(usersTable.student_code, payment.student_code))
+        .limit(1);
+      if (student) {
+        const [bal] = await tx
+          .select({ balance: studentKpTable.balance })
+          .from(studentKpTable)
+          .where(eq(studentKpTable.user_id, student.id))
+          .for("update")
+          .limit(1);
+        const newBalance = (bal?.balance ?? 0) + grant;
+        await tx
+          .insert(studentKpTable)
+          .values({ user_id: student.id, balance: newBalance })
+          .onConflictDoUpdate({
+            target: studentKpTable.user_id,
+            set: { balance: newBalance, updated_at: new Date() },
+          });
+        await tx.insert(kpLedgerTable).values({
+          user_id: student.id,
+          delta: grant,
+          reason: "membership_grant",
+          balance_after: newBalance,
+        });
+        logger.info(
+          { paymentId, student_id: student.id, grant, newBalance },
+          "membership KP grant credited",
+        );
+      } else {
+        // No `users` row yet for this student_code (the per-school student
+        // hasn't been provisioned in this DB). Park the grant in
+        // `kp_pending_grants` so it isn't lost — it will be drained the
+        // first time that student calls a KP-aware endpoint.
+        await tx.insert(kpPendingGrantsTable).values({
+          student_code: payment.student_code,
+          delta: grant,
+          reason: "membership_grant",
+        });
+        logger.info(
+          { paymentId, student_code: payment.student_code, grant },
+          "no users row yet — KP grant parked in kp_pending_grants",
+        );
+      }
+    }
   });
   logger.info({ paymentId, receipt }, "subscription payment SUCCESS");
 }
@@ -389,7 +449,14 @@ router.get("/central/v1/payments/:id", authenticateTenant, async (req, res) => {
     res.status(404).json({ error: "Payment not found" });
     return;
   }
-  res.json({ payment });
+  // Surface the KP bonus the parent app shows on the success screen. Only
+  // populated when the payment actually settled — failed/pending payments
+  // never trigger the grant transaction in completePayment.
+  const kp_granted =
+    payment.status === "success"
+      ? Number(process.env["MEMBERSHIP_KP_GRANT"] ?? 100)
+      : 0;
+  res.json({ payment: { ...payment, kp_granted } });
 });
 
 router.get("/central/v1/payments", authenticateTenant, async (req, res) => {
@@ -425,6 +492,246 @@ router.get("/central/v1/admin/tenants/:id/payments", async (req, res) => {
     .orderBy(desc(subscriptionPaymentsTable.initiated_at))
     .limit(100);
   res.json({ payments });
+});
+
+// ---------------------------------------------------------------------------
+// SUPER-ADMIN: Question Market admin (CRUD on questions)
+// The market is operator-curated: super admin authors questions, students
+// across all schools lock + answer. These routes sit under /central/v1/admin
+// which already requires a super_admin JWT (see router.use at top).
+// ---------------------------------------------------------------------------
+router.get("/central/v1/admin/market/questions", async (req, res) => {
+  const status = (req.query.status as string | undefined)?.trim();
+  const limit = Math.min(Number(req.query.limit ?? 200), 500);
+  const where = status ? eq(marketQuestionsTable.status, status) : undefined;
+  const rows = await db
+    .select()
+    .from(marketQuestionsTable)
+    .where(where as never)
+    .orderBy(desc(marketQuestionsTable.created_at))
+    .limit(limit);
+  // Active locks per question (for the "active locks" column in the admin UI).
+  const lockCounts = await db
+    .select({
+      question_id: questionLocksTable.question_id,
+      n: sql<number>`count(*)::int`,
+    })
+    .from(questionLocksTable)
+    .where(
+      and(
+        isNull(questionLocksTable.released_at),
+        gte(questionLocksTable.expires_at, new Date()),
+      ),
+    )
+    .groupBy(questionLocksTable.question_id);
+  const lockMap = new Map(lockCounts.map((l) => [l.question_id, l.n]));
+  res.json({
+    questions: rows.map((q) => ({ ...q, active_locks: lockMap.get(q.id) ?? 0 })),
+  });
+});
+
+// Allowed lifecycle states an admin can set on a question. We deliberately
+// exclude "won" (set automatically when a student answers correctly) and
+// "locked" (transient state owned by the lock flow).
+const ADMIN_SETTABLE_STATUSES = new Set(["open", "expired"]);
+const KP_REWARD_MIN = 1;
+const KP_REWARD_MAX = 100_000;
+
+router.post("/central/v1/admin/market/questions", async (req, res) => {
+  const { subject, prompt, choices, correct_index, kp_reward, expires_at } =
+    req.body ?? {};
+  if (typeof subject !== "string" || !subject.trim()) {
+    res.status(400).json({ error: "subject required" });
+    return;
+  }
+  if (typeof prompt !== "string" || !prompt.trim()) {
+    res.status(400).json({ error: "prompt required" });
+    return;
+  }
+  if (
+    !Array.isArray(choices) ||
+    choices.length < 2 ||
+    choices.length > 6 ||
+    !choices.every((c) => typeof c === "string" && c.trim())
+  ) {
+    res.status(400).json({ error: "choices must be 2-6 non-empty strings" });
+    return;
+  }
+  const ci = Number(correct_index);
+  if (!Number.isInteger(ci) || ci < 0 || ci >= choices.length) {
+    res
+      .status(400)
+      .json({ error: `correct_index must be integer in [0, ${choices.length})` });
+    return;
+  }
+  const rewardRaw = kp_reward ?? 500;
+  const reward = Number(rewardRaw);
+  if (!Number.isFinite(reward) || !Number.isInteger(reward) || reward < KP_REWARD_MIN || reward > KP_REWARD_MAX) {
+    res.status(400).json({
+      error: `kp_reward must be integer in [${KP_REWARD_MIN}, ${KP_REWARD_MAX}]`,
+    });
+    return;
+  }
+  let expiresAtDate: Date | null = null;
+  if (expires_at != null && expires_at !== "") {
+    const d = new Date(expires_at);
+    if (Number.isNaN(d.getTime())) {
+      res.status(400).json({ error: "expires_at must be a valid ISO datetime" });
+      return;
+    }
+    expiresAtDate = d;
+  }
+  const [created] = await db
+    .insert(marketQuestionsTable)
+    .values({
+      subject: subject.trim(),
+      prompt: prompt.trim(),
+      choices,
+      correct_index: ci,
+      kp_reward: reward,
+      status: "open",
+      expires_at: expiresAtDate,
+    })
+    .returning();
+  res.status(201).json({ question: created });
+});
+
+router.patch("/central/v1/admin/market/questions/:id", async (req, res) => {
+  const id = Number(req.params.id);
+  const patch: Record<string, unknown> = {};
+  if (typeof req.body?.prompt === "string" && req.body.prompt.trim()) {
+    patch.prompt = req.body.prompt.trim();
+  }
+  if (typeof req.body?.subject === "string" && req.body.subject.trim()) {
+    patch.subject = req.body.subject.trim();
+  }
+  if (req.body?.kp_reward !== undefined) {
+    const n = Number(req.body.kp_reward);
+    if (!Number.isInteger(n) || n < KP_REWARD_MIN || n > KP_REWARD_MAX) {
+      res.status(400).json({
+        error: `kp_reward must be integer in [${KP_REWARD_MIN}, ${KP_REWARD_MAX}]`,
+      });
+      return;
+    }
+    patch.kp_reward = n;
+  }
+  if (req.body?.status !== undefined) {
+    if (typeof req.body.status !== "string" || !ADMIN_SETTABLE_STATUSES.has(req.body.status)) {
+      res.status(400).json({
+        error: `status must be one of: ${[...ADMIN_SETTABLE_STATUSES].join(", ")}`,
+      });
+      return;
+    }
+    patch.status = req.body.status;
+  }
+  if (Object.keys(patch).length === 0) {
+    res.status(400).json({ error: "no fields to update" });
+    return;
+  }
+  const [updated] = await db
+    .update(marketQuestionsTable)
+    .set(patch)
+    .where(eq(marketQuestionsTable.id, id))
+    .returning();
+  if (!updated) {
+    res.status(404).json({ error: "question not found" });
+    return;
+  }
+  res.json({ question: updated });
+});
+
+// ---------------------------------------------------------------------------
+// SUPER-ADMIN: Global KP economy view (ledger + headline stats)
+// ---------------------------------------------------------------------------
+router.get("/central/v1/admin/kp/stats", async (_req, res) => {
+  const since = new Date(Date.now() - 86_400_000);
+  const [agg24h] = await db
+    .select({
+      n: sql<number>`count(*)::int`,
+      net: sql<number>`coalesce(sum(${kpLedgerTable.delta}), 0)::int`,
+    })
+    .from(kpLedgerTable)
+    .where(gte(kpLedgerTable.created_at, since));
+  const [pending] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(kpPendingGrantsTable)
+    .where(isNull(kpPendingGrantsTable.claimed_at));
+  const [ledgerSum] = await db
+    .select({ s: sql<number>`coalesce(sum(${kpLedgerTable.delta}), 0)::int` })
+    .from(kpLedgerTable);
+  const [balanceSum] = await db
+    .select({ s: sql<number>`coalesce(sum(${studentKpTable.balance}), 0)::int` })
+    .from(studentKpTable);
+  res.json({
+    entries_24h: agg24h?.n ?? 0,
+    net_kp_24h: agg24h?.net ?? 0,
+    pending_grants: pending?.n ?? 0,
+    conservation: {
+      ledger_sum: ledgerSum?.s ?? 0,
+      balance_sum: balanceSum?.s ?? 0,
+      balanced: (ledgerSum?.s ?? 0) === (balanceSum?.s ?? 0),
+    },
+  });
+});
+
+router.get("/central/v1/admin/kp/ledger", async (req, res) => {
+  const limit = Math.min(Number(req.query.limit ?? 50), 200);
+  const tenantFilter = req.query.tenant_id
+    ? Number(req.query.tenant_id)
+    : null;
+  if (tenantFilter !== null && !Number.isFinite(tenantFilter)) {
+    res.status(400).json({ error: "tenant_id must be an integer" });
+    return;
+  }
+  // Resolve school per-row in SQL using a LATERAL subquery so the tenant
+  // filter is applied in the database (correct paging) and we deterministically
+  // pick the most recent subscription when a student exists in multiple
+  // tenants — the `(tenant_id, student_code)` uniqueness in
+  // student_subscriptions means there's typically one row, but ordering by
+  // created_at desc keeps us correct under any reseed.
+  const whereClause =
+    tenantFilter !== null
+      ? sql`WHERE sub.tenant_id = ${tenantFilter}`
+      : sql``;
+  const result = await db.execute(sql`
+    SELECT
+      l.id,
+      l.created_at,
+      l.delta,
+      l.reason,
+      l.balance_after,
+      l.user_id,
+      u.student_code,
+      u.name AS student_name,
+      sub.tenant_id,
+      t.name AS school_name
+    FROM kp_ledger l
+    LEFT JOIN users u ON u.id = l.user_id
+    LEFT JOIN LATERAL (
+      SELECT s.tenant_id, s.created_at
+      FROM student_subscriptions s
+      WHERE s.student_code = u.student_code
+      ORDER BY s.created_at DESC
+      LIMIT 1
+    ) sub ON TRUE
+    LEFT JOIN tenants t ON t.id = sub.tenant_id
+    ${whereClause}
+    ORDER BY l.created_at DESC
+    LIMIT ${limit}
+  `);
+  const entries = (result.rows as Array<Record<string, unknown>>).map((r) => ({
+    id: Number(r.id),
+    created_at: r.created_at,
+    delta: Number(r.delta),
+    reason: r.reason,
+    balance_after: Number(r.balance_after),
+    user_id: Number(r.user_id),
+    student_code: r.student_code ?? null,
+    student_name: r.student_name ?? null,
+    tenant_id: r.tenant_id == null ? null : Number(r.tenant_id),
+    school_name: r.school_name ?? null,
+  }));
+  res.json({ entries });
 });
 
 router.post("/central/v1/usage", authenticateTenant, async (req, res) => {

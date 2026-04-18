@@ -4,8 +4,9 @@ import { useAuth } from "@/lib/auth";
 import { useGetParentDashboard } from "@workspace/api-client-react";
 import { Layout } from "@/components/layout";
 import { Card } from "@/components/ui/card";
-import { FileText, Printer, BookOpen, Loader2 } from "lucide-react";
+import { FileText, Printer, BookOpen, Loader2, Clock } from "lucide-react";
 import { apiGet } from "@/lib/api";
+import { Link } from "wouter";
 
 type Doc = {
   id: number;
@@ -55,6 +56,14 @@ export default function PrintPage() {
           <h1 className="text-sm font-medium text-primary-foreground/80 mb-1">Tap-to-print</h1>
           <h2 className="text-2xl font-bold">Assigned documents</h2>
           <p className="text-primary-foreground/80 text-sm mt-2">What your child can print from their watch.</p>
+          <Link
+            href="/print/history"
+            className="inline-flex items-center gap-1.5 mt-3 text-xs font-medium text-white/90 hover:text-white bg-white/15 hover:bg-white/25 px-3 py-1.5 rounded-full transition-colors"
+            data-testid="link-print-history"
+          >
+            <Clock className="w-3.5 h-3.5" />
+            View print history
+          </Link>
         </div>
       </div>
 

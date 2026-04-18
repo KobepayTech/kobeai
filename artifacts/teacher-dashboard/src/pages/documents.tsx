@@ -45,6 +45,8 @@ export default function Documents() {
 
   const [assignDoc, setAssignDoc] = useState<Doc | null>(null);
   const [assignClassId, setAssignClassId] = useState<string>("");
+  const [assignScheduledAt, setAssignScheduledAt] = useState<string>("");
+  const [assignExpiresAt, setAssignExpiresAt] = useState<string>("");
   const [assigning, setAssigning] = useState(false);
 
   async function refresh() {
@@ -100,10 +102,20 @@ export default function Documents() {
     if (!assignDoc || !assignClassId) return;
     setAssigning(true);
     try {
-      await apiPost(`/v1/teacher/documents/${assignDoc.id}/assign`, { class_id: Number(assignClassId) });
+      // datetime-local values are in the browser's local zone with no offset.
+      // Converting via `new Date(value).toISOString()` normalises to UTC for
+      // the server, matching what `parseDate` expects on the API.
+      const toIso = (v: string) => v ? new Date(v).toISOString() : null;
+      await apiPost(`/v1/teacher/documents/${assignDoc.id}/assign`, {
+        class_id: Number(assignClassId),
+        scheduled_at: toIso(assignScheduledAt),
+        expires_at: toIso(assignExpiresAt),
+      });
       toast({ title: "Assigned", description: `${assignDoc.name} → ${classes.find(c => c.id === Number(assignClassId))?.name ?? "class"}` });
       setAssignDoc(null);
       setAssignClassId("");
+      setAssignScheduledAt("");
+      setAssignExpiresAt("");
     } catch (e) {
       const msg = e instanceof ApiError ? `${e.status}: ${e.message.slice(0, 120)}` : String(e);
       toast({ variant: "destructive", title: "Assign failed", description: msg });
@@ -211,14 +223,43 @@ export default function Documents() {
             <DialogTitle>Assign to class</DialogTitle>
             <DialogDescription>{assignDoc?.name}</DialogDescription>
           </DialogHeader>
-          <div className="py-2 space-y-2">
-            <Label>Class</Label>
-            <Select value={assignClassId} onValueChange={setAssignClassId}>
-              <SelectTrigger data-testid="select-assign-class"><SelectValue placeholder="Pick a class" /></SelectTrigger>
-              <SelectContent>
-                {classes.map((c) => (<SelectItem key={c.id} value={String(c.id)}>{c.name} — {c.grade}</SelectItem>))}
-              </SelectContent>
-            </Select>
+          <div className="py-2 space-y-4">
+            <div className="space-y-2">
+              <Label>Class</Label>
+              <Select value={assignClassId} onValueChange={setAssignClassId}>
+                <SelectTrigger data-testid="select-assign-class"><SelectValue placeholder="Pick a class" /></SelectTrigger>
+                <SelectContent>
+                  {classes.map((c) => (<SelectItem key={c.id} value={String(c.id)}>{c.name} — {c.grade}</SelectItem>))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label htmlFor="assign-scheduled-at">Available from <span className="text-muted-foreground font-normal">(optional)</span></Label>
+                <input
+                  id="assign-scheduled-at"
+                  type="datetime-local"
+                  data-testid="input-scheduled-at"
+                  value={assignScheduledAt}
+                  onChange={(e) => setAssignScheduledAt(e.target.value)}
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="assign-expires-at">Expires at <span className="text-muted-foreground font-normal">(optional)</span></Label>
+                <input
+                  id="assign-expires-at"
+                  type="datetime-local"
+                  data-testid="input-expires-at"
+                  value={assignExpiresAt}
+                  onChange={(e) => setAssignExpiresAt(e.target.value)}
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                />
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Leave both blank for an always-available document. Set "available from" to schedule homework in advance, or "expires at" to auto-retire stale worksheets.
+            </p>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setAssignDoc(null)} disabled={assigning}>Cancel</Button>

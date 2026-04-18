@@ -2,7 +2,9 @@ import app from "./app";
 import { logger } from "./lib/logger";
 import { seedDemoData } from "./lib/seed";
 import { seedCentralDemo } from "./lib/seed-central";
+import { seedStationeryDemo } from "./lib/seed-stationery";
 import { startCentralSync } from "./lib/central-sync";
+import { startDailyDigest } from "./routes/parent-push";
 
 const rawPort = process.env["PORT"];
 
@@ -47,5 +49,10 @@ app.listen(port, async (err) => {
     logger.error({ err }, "central seed failed");
   }
 
+  await seedStationeryDemo().catch((err) =>
+    logger.error({ err }, "stationery seed failed"),
+  );
+
   startCentralSync();
+  startDailyDigest();
 });

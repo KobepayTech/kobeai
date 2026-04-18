@@ -1,4 +1,5 @@
-import { pgTable, text, serial, timestamp, integer, uniqueIndex, primaryKey, boolean } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, integer, uniqueIndex, primaryKey, boolean, jsonb, index } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 /**
  * Core identity table. Covers students, teachers, and admins by `role`.
@@ -81,9 +82,52 @@ export const documentAssignmentsTable = pgTable(
       .notNull()
       .references(() => classesTable.id, { onDelete: "cascade" }),
     assigned_at: timestamp("assigned_at").defaultNow().notNull(),
+    // Optional scheduling window. The watch print picker, parent app, and
+    // tap-box only show the document when (now >= scheduled_at OR null) AND
+    // (now < expires_at OR null). Lets teachers queue homework in advance and
+    // auto-retire stale worksheets without manual cleanup.
+    scheduled_at: timestamp("scheduled_at"),
+    expires_at: timestamp("expires_at"),
   },
   (t) => ({ pk: primaryKey({ columns: [t.document_id, t.class_id] }) }),
 );
+
+/**
+ * Persistent record of every print job. The in-memory `print_store` keeps
+ * the live job state (queued / printing / done) for the tap-box flow, but it
+ * evicts entries after JOB_TTL_MS. This table is the long-term audit log so
+ * parents can see history and bursars can spot abuse.
+ */
+/**
+ * Per-student watch device preferences. The parent app writes these via
+ * /v1/parent/child/:childId/settings; the watch reads them on login (and on
+ * each app launch) and mirrors them into local DataStore so they survive
+ * being offline. Defaults assume both audio and keyboard are enabled — a
+ * fresh student gets the full experience until a parent dials it back.
+ */
+export const studentSettingsTable = pgTable("student_settings", {
+  student_code: text("student_code").primaryKey(),
+  audio_enabled: boolean("audio_enabled").notNull().default(true),
+  keyboard_enabled: boolean("keyboard_enabled").notNull().default(true),
+  updated_at: timestamp("updated_at").defaultNow().notNull(),
+});
+export type StudentSettings = typeof studentSettingsTable.$inferSelect;
+
+export const printJobsTable = pgTable("print_jobs", {
+  id: serial("id").primaryKey(),
+  job_ref: text("job_ref").notNull().unique(),
+  student_code: text("student_code").notNull(),
+  student_id: integer("student_id").references(() => usersTable.id, { onDelete: "set null" }),
+  document_id: integer("document_id"),
+  document_name: text("document_name").notNull(),
+  pages: integer("pages").notNull().default(1),
+  printer_id: text("printer_id").notNull(),
+  printer_name: text("printer_name"),
+  status: text("status").notNull().default("queued"),
+  status_message: text("status_message"),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+  completed_at: timestamp("completed_at"),
+});
 
 // ---------------------------------------------------------------------------
 // Multi-tenant control plane: managed by the central server.
@@ -220,3 +264,577 @@ export const tenantUsageSnapshotsTable = pgTable("tenant_usage_snapshots", {
   print_jobs_24h: integer("print_jobs_24h").notNull().default(0),
 });
 export type TenantUsageSnapshot = typeof tenantUsageSnapshotsTable.$inferSelect;
+
+// ---------------------------------------------------------------------------
+// Teacher-authored quizzes + per-student attempt history.
+//
+// Replaces the original hardcoded QUIZZES list in routes/quizzes.ts. The
+// route falls back to the legacy hardcoded set when the table is empty so
+// existing demos and watch builds keep working out of the box.
+// ---------------------------------------------------------------------------
+
+export const quizzesTable = pgTable(
+  "quizzes",
+  {
+    id: serial("id").primaryKey(),
+    title: text("title").notNull(),
+    subject: text("subject").notNull(),
+    // Optional class scoping: if null, the quiz is globally visible. If set,
+    // /v1/watch/quizzes filters to quizzes whose class matches one of the
+    // student's enrolled classes.
+    class_id: integer("class_id").references(() => classesTable.id, {
+      onDelete: "set null",
+    }),
+    teacher_id: integer("teacher_id").references(() => usersTable.id, {
+      onDelete: "set null",
+    }),
+    duration_minutes: integer("duration_minutes").notNull().default(15),
+    created_at: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    teacher_idx: index("quizzes_teacher_idx").on(t.teacher_id),
+    class_idx: index("quizzes_class_idx").on(t.class_id),
+  }),
+);
+export type Quiz = typeof quizzesTable.$inferSelect;
+
+/**
+ * One row per question. `options` is a 2..6-element jsonb array of strings.
+ * `correct_letter` is "A"|"B"|... matching the option order.
+ */
+export const quizQuestionsTable = pgTable(
+  "quiz_questions",
+  {
+    id: serial("id").primaryKey(),
+    quiz_id: integer("quiz_id")
+      .notNull()
+      .references(() => quizzesTable.id, { onDelete: "cascade" }),
+    text: text("text").notNull(),
+    options: jsonb("options").$type<string[]>().notNull(),
+    correct_letter: text("correct_letter").notNull(),
+    points: integer("points").notNull().default(10),
+    order_idx: integer("order_idx").notNull().default(0),
+  },
+  (t) => ({ quiz_idx: index("quiz_questions_quiz_idx").on(t.quiz_id) }),
+);
+export type QuizQuestion = typeof quizQuestionsTable.$inferSelect;
+
+/**
+ * Persistent record of one student's attempt at one quiz. Powers the watch
+ * leaderboard and the teacher's "who attempted what" view. Only the most
+ * recent attempt counts toward leaderboard ranking (we MAX(score) per
+ * student in the SELECT — a re-take that scored worse doesn't penalize them).
+ */
+export const quizAttemptsTable = pgTable(
+  "quiz_attempts",
+  {
+    id: serial("id").primaryKey(),
+    quiz_id: integer("quiz_id")
+      .notNull()
+      .references(() => quizzesTable.id, { onDelete: "cascade" }),
+    student_code: text("student_code").notNull(),
+    student_name: text("student_name").notNull(),
+    score: integer("score").notNull(), // 0..100 percent
+    points_earned: integer("points_earned").notNull(),
+    correct_answers: integer("correct_answers").notNull(),
+    total_questions: integer("total_questions").notNull(),
+    created_at: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    quiz_idx: index("quiz_attempts_quiz_idx").on(t.quiz_id),
+    student_idx: index("quiz_attempts_student_idx").on(t.student_code),
+  }),
+);
+export type QuizAttempt = typeof quizAttemptsTable.$inferSelect;
+
+// ---------------------------------------------------------------------------
+// Web Push (VAPID) subscriptions for the parent PWA.
+//
+// One row per (parent_phone, endpoint). We dedupe on `endpoint` because
+// re-installing the PWA generates a new subscription URL but the underlying
+// push service may already have an old one — letting both live in parallel
+// would double-send the daily digest.
+// ---------------------------------------------------------------------------
+export const pushSubscriptionsTable = pgTable(
+  "push_subscriptions",
+  {
+    id: serial("id").primaryKey(),
+    parent_phone: text("parent_phone").notNull(),
+    endpoint: text("endpoint").notNull(),
+    p256dh: text("p256dh").notNull(),
+    auth: text("auth").notNull(),
+    created_at: timestamp("created_at").defaultNow().notNull(),
+    last_sent_at: timestamp("last_sent_at"),
+  },
+  (t) => ({
+    endpoint_idx: uniqueIndex("push_subs_endpoint_idx").on(t.endpoint),
+    phone_idx: index("push_subs_phone_idx").on(t.parent_phone),
+  }),
+);
+export type PushSubscription = typeof pushSubscriptionsTable.$inferSelect;
+
+// ---------------------------------------------------------------------------
+// Class timetable. Admins/teachers populate one row per period in a class's
+// weekly schedule. The watch app polls /v1/watch/timetable/current to learn
+// which subject is happening *right now* and vibrates when it changes.
+//
+// Time-of-day is stored as `start_minute` / `end_minute` (minutes from
+// midnight, 0..1439) — keeps comparisons trivial in SQL/JS without dragging
+// timezone conversion into Postgres.
+//
+// `day_of_week`: ISO numbering 1=Mon .. 7=Sun (matches PostgreSQL EXTRACT(ISODOW)).
+// ---------------------------------------------------------------------------
+export const timetablePeriodsTable = pgTable(
+  "timetable_periods",
+  {
+    id: serial("id").primaryKey(),
+    class_id: integer("class_id")
+      .notNull()
+      .references(() => classesTable.id, { onDelete: "cascade" }),
+    day_of_week: integer("day_of_week").notNull(),
+    start_minute: integer("start_minute").notNull(),
+    end_minute: integer("end_minute").notNull(),
+    subject: text("subject").notNull(),
+    room: text("room"),
+    teacher_name: text("teacher_name"),
+    created_at: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    class_day_idx: index("timetable_class_day_idx").on(t.class_id, t.day_of_week),
+  }),
+);
+export type TimetablePeriod = typeof timetablePeriodsTable.$inferSelect;
+
+// ---------------------------------------------------------------------------
+// Exam sessions. A teacher acting as supervisor creates an exam against a
+// class. While it is `active`, every student watch in that class polls
+// /v1/watch/exam/active and switches to a fullscreen countdown until
+// `ends_at`. The supervisor can pause (status=paused, remaining_seconds
+// captured), resume (recomputes ends_at), add time (pushes ends_at forward
+// or grows remaining_seconds when paused), and finish.
+//
+// Only one non-finished exam per class is allowed (enforced by partial unique
+// index on class_id where status != 'finished').
+// ---------------------------------------------------------------------------
+export const examSessionsTable = pgTable(
+  "exam_sessions",
+  {
+    id: serial("id").primaryKey(),
+    class_id: integer("class_id")
+      .notNull()
+      .references(() => classesTable.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    // 'scheduled' | 'active' | 'paused' | 'finished'
+    status: text("status").notNull().default("scheduled"),
+    supervisor_user_id: integer("supervisor_user_id")
+      .notNull()
+      .references(() => usersTable.id, { onDelete: "restrict" }),
+    initial_seconds: integer("initial_seconds").notNull(),
+    seconds_added: integer("seconds_added").notNull().default(0),
+    // Wall-clock deadline while running. Null when scheduled or paused.
+    ends_at: timestamp("ends_at"),
+    // Captured remaining seconds while paused / scheduled.
+    remaining_seconds: integer("remaining_seconds"),
+    started_at: timestamp("started_at"),
+    finished_at: timestamp("finished_at"),
+    created_at: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    class_active_idx: uniqueIndex("exam_class_one_open_idx")
+      .on(t.class_id)
+      .where(sql`status <> 'finished'`),
+    class_idx: index("exam_class_idx").on(t.class_id),
+  }),
+);
+export type ExamSession = typeof examSessionsTable.$inferSelect;
+
+// ===========================================================================
+// Question market — "education exchange" feature.
+//
+// Currency is **KP** (KobeAI Points). KP is the in-app reward unit; never
+// call it "EduCoin" or "EC" anywhere.
+//
+// Tables:
+//   market_questions  — pool of solvable questions, each with a KP reward.
+//   question_locks    — a student "rents" exclusive answering time on a
+//                       question (others can see but not answer until it
+//                       expires or the locker submits a wrong answer).
+//   kp_ledger         — append-only signed-delta history of every KP move.
+//   student_kp        — denormalized fast-read balance keyed by user id.
+//
+// All KP-mutating operations MUST run inside a Drizzle transaction that
+// updates both `student_kp.balance` and inserts a `kp_ledger` row, so the
+// ledger sum always equals the cached balance.
+// ===========================================================================
+export const marketQuestionsTable = pgTable(
+  "market_questions",
+  {
+    id: serial("id").primaryKey(),
+    subject: text("subject").notNull(), // 'math' | 'physics' | 'coding' | 'geography' | 'history' | ...
+    prompt: text("prompt").notNull(),
+    choices: jsonb("choices").notNull(), // string[] of 2..6 options
+    correct_index: integer("correct_index").notNull(),
+    kp_reward: integer("kp_reward").notNull(), // KP awarded to the winning student
+    // 'open' (anyone can answer or lock) | 'locked' (only locker can answer)
+    // | 'won' (someone correctly answered) | 'expired' (no winner before expires_at)
+    status: text("status").notNull().default("open"),
+    won_by_user_id: integer("won_by_user_id").references(() => usersTable.id, { onDelete: "set null" }),
+    won_at: timestamp("won_at"),
+    released_at: timestamp("released_at").defaultNow().notNull(),
+    expires_at: timestamp("expires_at"), // null = no global deadline
+    created_at: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    status_idx: index("market_q_status_idx").on(t.status),
+    subject_idx: index("market_q_subject_idx").on(t.subject),
+  }),
+);
+export type MarketQuestion = typeof marketQuestionsTable.$inferSelect;
+
+export const questionLocksTable = pgTable(
+  "question_locks",
+  {
+    id: serial("id").primaryKey(),
+    question_id: integer("question_id")
+      .notNull()
+      .references(() => marketQuestionsTable.id, { onDelete: "cascade" }),
+    student_id: integer("student_id")
+      .notNull()
+      .references(() => usersTable.id, { onDelete: "cascade" }),
+    kp_cost: integer("kp_cost").notNull(),
+    expires_at: timestamp("expires_at").notNull(),
+    // Set when the lock is no longer in force: lock expired, locker submitted
+    // a wrong answer, or someone (locker or other) won. While null AND
+    // expires_at > now, this lock is "active".
+    released_at: timestamp("released_at"),
+    created_at: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    // At most one active (released_at IS NULL) lock per question.
+    one_active_per_q: uniqueIndex("question_lock_one_active_idx")
+      .on(t.question_id)
+      .where(sql`released_at IS NULL`),
+    student_idx: index("question_lock_student_idx").on(t.student_id),
+  }),
+);
+export type QuestionLock = typeof questionLocksTable.$inferSelect;
+
+export const kpLedgerTable = pgTable(
+  "kp_ledger",
+  {
+    id: serial("id").primaryKey(),
+    user_id: integer("user_id")
+      .notNull()
+      .references(() => usersTable.id, { onDelete: "cascade" }),
+    // Signed: positive for awards/grants/refunds, negative for spends.
+    delta: integer("delta").notNull(),
+    // 'membership_grant' | 'question_won' | 'lock_purchase' | 'lock_refund' | 'admin_adjust'
+    reason: text("reason").notNull(),
+    question_id: integer("question_id").references(() => marketQuestionsTable.id, { onDelete: "set null" }),
+    balance_after: integer("balance_after").notNull(),
+    created_at: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    user_idx: index("kp_ledger_user_idx").on(t.user_id, t.created_at),
+  }),
+);
+export type KpLedgerEntry = typeof kpLedgerTable.$inferSelect;
+
+export const studentKpTable = pgTable("student_kp", {
+  user_id: integer("user_id")
+    .primaryKey()
+    .references(() => usersTable.id, { onDelete: "cascade" }),
+  balance: integer("balance").notNull().default(0),
+  updated_at: timestamp("updated_at").defaultNow().notNull(),
+});
+export type StudentKp = typeof studentKpTable.$inferSelect;
+
+// ---------------------------------------------------------------------------
+// Pending KP grants — the membership grant runs in the payment-success
+// transaction inside the central control plane, where the *subscription*
+// row exists but the per-school student `users` row may not have been
+// provisioned yet. We can't look up a `user_id` and we can't fail the
+// payment over it, so we park the grant here keyed by `student_code` and
+// drain it the next time that student touches a KP-aware endpoint
+// (currently `GET /v1/watch/market/me`).
+//
+// Each row is at-most-once: when claimed, `claimed_at` and the resulting
+// `kp_ledger.id` are set in the same transaction that credits the
+// student. Concurrent drain attempts use `WHERE claimed_at IS NULL` as
+// the CAS guard.
+// ---------------------------------------------------------------------------
+export const kpPendingGrantsTable = pgTable(
+  "kp_pending_grants",
+  {
+    id: serial("id").primaryKey(),
+    student_code: text("student_code").notNull(),
+    delta: integer("delta").notNull(),
+    reason: text("reason").notNull(),
+    created_at: timestamp("created_at").defaultNow().notNull(),
+    claimed_at: timestamp("claimed_at"),
+    claimed_ledger_id: integer("claimed_ledger_id").references(() => kpLedgerTable.id, {
+      onDelete: "set null",
+    }),
+  },
+  (t) => ({
+    student_unclaimed_idx: index("kp_pending_student_idx")
+      .on(t.student_code)
+      .where(sql`claimed_at IS NULL`),
+  }),
+);
+export type KpPendingGrant = typeof kpPendingGrantsTable.$inferSelect;
+
+// ===========================================================================
+// Parent ↔ Student linking + watch QR pairing
+// ===========================================================================
+//
+// A parent has its own user row (role="parent") and is linked to one or more
+// students via `parent_children`. Linking happens through one of:
+//
+//   1. CLAIM CODE: school issues a globally-unique code shaped like
+//      `<school-prefix>-XXXX-XXXX` (e.g. "MARI-7K3P-9XQ2"). Parent types or
+//      pastes the code, server hashes + looks up the row in `claim_codes`,
+//      consumes it, and inserts into `parent_children`. The school prefix
+//      means a parent with kids in 5 different schools never has collisions
+//      and the code is self-describing.
+//
+//   2. WATCH QR: the kid opens "Link Parent" on their watch, which calls
+//      POST /v1/watch/pairing/start. Server stores a fresh row in
+//      `parent_pairing_tokens` (random short token, 2-min TTL, single-use,
+//      bound to that student). Watch displays the token as a QR. Parent
+//      scans → POST /v1/parent/pairing/scan { token } consumes the row and
+//      links. Static QR on watch face would let bus passengers steal a
+//      child link; on-demand + short TTL kills that attack.
+//
+// Both paths converge on the same `parent_children` join table.
+// ---------------------------------------------------------------------------
+
+export const parentChildrenTable = pgTable(
+  "parent_children",
+  {
+    parent_user_id: integer("parent_user_id")
+      .notNull()
+      .references(() => usersTable.id, { onDelete: "cascade" }),
+    student_user_id: integer("student_user_id")
+      .notNull()
+      .references(() => usersTable.id, { onDelete: "cascade" }),
+    tenant_id: integer("tenant_id").references(() => tenantsTable.id, {
+      onDelete: "set null",
+    }),
+    nickname: text("nickname"),
+    created_at: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.parent_user_id, t.student_user_id] }),
+    parent_idx: index("parent_children_parent_idx").on(t.parent_user_id),
+  }),
+);
+export type ParentChild = typeof parentChildrenTable.$inferSelect;
+
+// Globally unique claim codes. We store ONLY a SHA-256 hash of the code
+// (`code_hash`) so a DB dump can't be turned into a list of usable codes;
+// `code_prefix` (the school slug part, e.g. "MARI") is kept in plaintext for
+// display in the school-side "active codes" admin view. `consumed_by` flips
+// from null → parent_user_id when claimed; we keep the row as an audit trail
+// instead of deleting it. Per-school regeneration just inserts a new row and
+// expires the old one (sets `expires_at` in the past).
+export const claimCodesTable = pgTable(
+  "claim_codes",
+  {
+    id: serial("id").primaryKey(),
+    code_hash: text("code_hash").notNull(),
+    code_prefix: text("code_prefix").notNull(),
+    tenant_id: integer("tenant_id")
+      .notNull()
+      .references(() => tenantsTable.id, { onDelete: "cascade" }),
+    student_user_id: integer("student_user_id")
+      .notNull()
+      .references(() => usersTable.id, { onDelete: "cascade" }),
+    issued_by: integer("issued_by").references(() => usersTable.id, {
+      onDelete: "set null",
+    }),
+    consumed_by: integer("consumed_by").references(() => usersTable.id, {
+      onDelete: "set null",
+    }),
+    consumed_at: timestamp("consumed_at"),
+    expires_at: timestamp("expires_at"),
+    created_at: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    code_hash_idx: uniqueIndex("claim_codes_hash_idx").on(t.code_hash),
+    student_idx: index("claim_codes_student_idx").on(t.student_user_id),
+  }),
+);
+export type ClaimCode = typeof claimCodesTable.$inferSelect;
+
+// Watch → parent pairing tokens. Random ~12-char base32 string. Hash stored.
+// 2-minute TTL by default; consumed_at flips on first successful scan.
+export const parentPairingTokensTable = pgTable(
+  "parent_pairing_tokens",
+  {
+    id: serial("id").primaryKey(),
+    token_hash: text("token_hash").notNull(),
+    student_user_id: integer("student_user_id")
+      .notNull()
+      .references(() => usersTable.id, { onDelete: "cascade" }),
+    tenant_id: integer("tenant_id")
+      .notNull()
+      .references(() => tenantsTable.id, { onDelete: "cascade" }),
+    expires_at: timestamp("expires_at").notNull(),
+    consumed_by: integer("consumed_by").references(() => usersTable.id, {
+      onDelete: "set null",
+    }),
+    consumed_at: timestamp("consumed_at"),
+    created_at: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    hash_idx: uniqueIndex("pairing_tokens_hash_idx").on(t.token_hash),
+  }),
+);
+export type ParentPairingToken = typeof parentPairingTokensTable.$inferSelect;
+
+// ===========================================================================
+// Stationery ordering
+// ===========================================================================
+//
+// Super-admin owns the master catalog (`stationery_items`); each tenant can
+// override `default_price_tsh` via `stationery_school_prices`. Procurement
+// happens inside a `stationery_drives` window — only one open drive at a
+// time per tenant (enforced by partial unique index). Inside the window,
+// each student gets at most one `stationery_orders` row per drive (enforced
+// by unique). The order has lines in `stationery_order_items`.
+//
+// Status machine for stationery_orders:
+//   draft -> pending_parent_approval -> approved -> packed
+//                                    \-> rejected
+//
+//   - draft: started by teacher in class, not yet sent to parent
+//   - pending_parent_approval: parent gets push, can edit & approve
+//   - approved: parent confirmed, total locked, included in compilation
+//   - rejected: parent declined; archived but not in compilation
+//   - packed: super-admin marked it as packed/shipped
+//
+// Compilation = SUM(qty) per item across all approved orders, grouped by
+// tenant for per-school packing breakdown.
+// ---------------------------------------------------------------------------
+
+export const stationeryItemsTable = pgTable(
+  "stationery_items",
+  {
+    id: serial("id").primaryKey(),
+    name: text("name").notNull(),
+    category: text("category").notNull().default("Other"),
+    default_price_tsh: integer("default_price_tsh").notNull().default(0),
+    unit: text("unit").notNull().default("each"), // "each" | "pack" | "ream"
+    active: boolean("active").notNull().default(true),
+    created_at: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    name_idx: uniqueIndex("stationery_items_name_idx").on(t.name),
+  }),
+);
+export type StationeryItem = typeof stationeryItemsTable.$inferSelect;
+
+export const stationerySchoolPricesTable = pgTable(
+  "stationery_school_prices",
+  {
+    tenant_id: integer("tenant_id")
+      .notNull()
+      .references(() => tenantsTable.id, { onDelete: "cascade" }),
+    item_id: integer("item_id")
+      .notNull()
+      .references(() => stationeryItemsTable.id, { onDelete: "cascade" }),
+    price_tsh: integer("price_tsh").notNull(),
+    updated_at: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.tenant_id, t.item_id] }) }),
+);
+
+export const stationeryDrivesTable = pgTable(
+  "stationery_drives",
+  {
+    id: serial("id").primaryKey(),
+    title: text("title").notNull(),
+    description: text("description"),
+    opens_at: timestamp("opens_at").defaultNow().notNull(),
+    closes_at: timestamp("closes_at").notNull(),
+    // open | closed | invoiced
+    status: text("status").notNull().default("open"),
+    created_at: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    open_idx: uniqueIndex("stationery_drives_open_idx")
+      .on(t.status)
+      .where(sql`status = 'open'`),
+  }),
+);
+export type StationeryDrive = typeof stationeryDrivesTable.$inferSelect;
+
+export const stationeryOrdersTable = pgTable(
+  "stationery_orders",
+  {
+    id: serial("id").primaryKey(),
+    drive_id: integer("drive_id")
+      .notNull()
+      .references(() => stationeryDrivesTable.id, { onDelete: "cascade" }),
+    tenant_id: integer("tenant_id")
+      .notNull()
+      .references(() => tenantsTable.id, { onDelete: "cascade" }),
+    student_user_id: integer("student_user_id")
+      .notNull()
+      .references(() => usersTable.id, { onDelete: "cascade" }),
+    student_code: text("student_code").notNull(),
+    student_name: text("student_name").notNull(),
+    class_id: integer("class_id").references(() => classesTable.id, {
+      onDelete: "set null",
+    }),
+    class_name: text("class_name"),
+    parent_user_id: integer("parent_user_id").references(() => usersTable.id, {
+      onDelete: "set null",
+    }),
+    // Who drafted it: "teacher" | "student_watch" | "parent"
+    placed_by: text("placed_by").notNull().default("parent"),
+    // draft | pending_parent_approval | approved | rejected | packed
+    status: text("status").notNull().default("draft"),
+    total_tsh: integer("total_tsh").notNull().default(0),
+    notes: text("notes"),
+    submitted_at: timestamp("submitted_at"),
+    approved_at: timestamp("approved_at"),
+    packed_at: timestamp("packed_at"),
+    created_at: timestamp("created_at").defaultNow().notNull(),
+    updated_at: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    drive_student_idx: uniqueIndex("stationery_orders_drive_student_idx").on(
+      t.drive_id,
+      t.student_user_id,
+    ),
+    tenant_idx: index("stationery_orders_tenant_idx").on(t.tenant_id, t.drive_id),
+    status_idx: index("stationery_orders_status_idx").on(t.status, t.drive_id),
+  }),
+);
+export type StationeryOrder = typeof stationeryOrdersTable.$inferSelect;
+
+export const stationeryOrderItemsTable = pgTable(
+  "stationery_order_items",
+  {
+    id: serial("id").primaryKey(),
+    order_id: integer("order_id")
+      .notNull()
+      .references(() => stationeryOrdersTable.id, { onDelete: "cascade" }),
+    item_id: integer("item_id")
+      .notNull()
+      .references(() => stationeryItemsTable.id, { onDelete: "restrict" }),
+    item_name: text("item_name").notNull(), // snapshot for audit
+    qty: integer("qty").notNull(),
+    unit_price_tsh: integer("unit_price_tsh").notNull(),
+    line_total_tsh: integer("line_total_tsh").notNull(),
+  },
+  (t) => ({
+    order_item_idx: uniqueIndex("stationery_order_items_unique_idx").on(
+      t.order_id,
+      t.item_id,
+    ),
+  }),
+);
+export type StationeryOrderItem = typeof stationeryOrderItemsTable.$inferSelect;

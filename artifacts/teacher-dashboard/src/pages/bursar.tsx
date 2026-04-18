@@ -6,12 +6,13 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { Wallet, ArrowUpRight, FileText, Info, Smartphone, CheckCircle2, Clock, XCircle, Download } from "lucide-react";
+import { Wallet, ArrowUpRight, FileText, Info, Smartphone, CheckCircle2, Clock, XCircle, Download, Send } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
 
 async function downloadReceipt(paymentId: number, receipt: string | null) {
   const token = localStorage.getItem("teacher_token") ?? "";
@@ -83,6 +84,51 @@ export default function Bursar() {
   const [depositOpen, setDepositOpen] = useState(false);
   const [selectedStudent, setSelectedStudent] = useState<any>(null);
   const [amount, setAmount] = useState("");
+
+  // ---- Bulk invoice (STK push to many parents in one click) ----
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkSelected, setBulkSelected] = useState<Set<string>>(new Set());
+  const [bulkAmount, setBulkAmount] = useState("10000");
+  const [bulkSending, setBulkSending] = useState(false);
+  const [bulkResult, setBulkResult] = useState<{ successes: number; failures: number; results: { student_id: string; ok: boolean; error?: string; phone?: string }[] } | null>(null);
+
+  function toggleBulk(id: string, checked: boolean) {
+    setBulkSelected((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id); else next.delete(id);
+      return next;
+    });
+  }
+  function toggleBulkAll(allIds: string[], checked: boolean) {
+    setBulkSelected(checked ? new Set(allIds) : new Set());
+  }
+  async function sendBulkInvoices() {
+    setBulkSending(true);
+    setBulkResult(null);
+    try {
+      const token = localStorage.getItem("teacher_token") ?? "";
+      const res = await fetch("/api/v1/bursar/invoices/bulk", {
+        method: "POST",
+        headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ student_ids: Array.from(bulkSelected), amount_tsh: Number(bulkAmount) }),
+      });
+      const body = await res.json();
+      if (!res.ok && res.status !== 207) {
+        toast({ variant: "destructive", title: "Bulk invoicing failed", description: body.error ?? `HTTP ${res.status}` });
+        return;
+      }
+      setBulkResult(body);
+      toast({
+        title: `Sent ${body.successes} STK push${body.successes === 1 ? "" : "es"}`,
+        description: body.failures > 0 ? `${body.failures} failed — see details.` : "Parents will receive prompts on their phones.",
+      });
+      void queryClient.invalidateQueries({ queryKey: ["bursar-subscription-payments"] });
+    } catch (e) {
+      toast({ variant: "destructive", title: "Bulk invoicing failed", description: String((e as Error).message) });
+    } finally {
+      setBulkSending(false);
+    }
+  }
 
   const handleDeposit = () => {
     if (!selectedStudent || !amount || isNaN(Number(amount))) return;
@@ -269,9 +315,23 @@ export default function Bursar() {
       </Card>
 
       <Card>
-        <CardHeader>
-          <CardTitle>Student Balances</CardTitle>
-          <CardDescription>Manage individual student wallet funds and KobeAI usage.</CardDescription>
+        <CardHeader className="flex flex-row items-start justify-between gap-4">
+          <div>
+            <CardTitle>Student Balances</CardTitle>
+            <CardDescription>Manage individual student wallet funds and KobeAI usage.</CardDescription>
+          </div>
+          <Button
+            variant="outline"
+            className="gap-2 shrink-0"
+            onClick={() => {
+              setBulkResult(null);
+              const lows = (balancesData?.students ?? []).filter((s: any) => s.status === "low" || s.balance < 20000).map((s: any) => s.id);
+              setBulkSelected(new Set(lows));
+              setBulkOpen(true);
+            }}
+          >
+            <Send className="h-4 w-4" /> Bulk invoice
+          </Button>
         </CardHeader>
         <CardContent>
           <div className="rounded-md border">
@@ -393,6 +453,129 @@ export default function Bursar() {
               {depositMutation.isPending ? "Processing..." : "Confirm Deposit"}
             </Button>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Bulk invoicing — sends an STK push to many parents in one click. */}
+      <Dialog open={bulkOpen} onOpenChange={(open) => { setBulkOpen(open); if (!open) setBulkResult(null); }}>
+        <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
+          <DialogHeader>
+            <DialogTitle>Bulk invoice parents</DialogTitle>
+            <DialogDescription>
+              Sends an M-Pesa STK push to every selected student's parent. Recipients will see a payment prompt on their phones immediately.
+            </DialogDescription>
+          </DialogHeader>
+          {bulkResult ? (
+            <div className="space-y-3 overflow-y-auto">
+              <div className="grid grid-cols-2 gap-3">
+                <Card className="bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200">
+                  <CardContent className="pt-6 text-center">
+                    <div className="text-3xl font-bold text-emerald-600">{bulkResult.successes}</div>
+                    <div className="text-xs text-muted-foreground">STK pushes sent</div>
+                  </CardContent>
+                </Card>
+                <Card className={bulkResult.failures > 0 ? "bg-red-50 dark:bg-red-950/30 border-red-200" : ""}>
+                  <CardContent className="pt-6 text-center">
+                    <div className="text-3xl font-bold">{bulkResult.failures}</div>
+                    <div className="text-xs text-muted-foreground">Failed</div>
+                  </CardContent>
+                </Card>
+              </div>
+              <div className="rounded-md border max-h-[280px] overflow-y-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Student</TableHead>
+                      <TableHead>Phone</TableHead>
+                      <TableHead className="text-right">Result</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {bulkResult.results.map((r) => {
+                      const s = balancesData?.students?.find((x: any) => x.id === r.student_id);
+                      return (
+                        <TableRow key={r.student_id}>
+                          <TableCell>{s?.name ?? r.student_id}</TableCell>
+                          <TableCell className="text-muted-foreground text-xs">{r.phone ?? "—"}</TableCell>
+                          <TableCell className="text-right">
+                            {r.ok ? (
+                              <Badge className="bg-emerald-500 hover:bg-emerald-500">Sent</Badge>
+                            ) : (
+                              <Tooltip><TooltipTrigger asChild><Badge variant="destructive">Failed</Badge></TooltipTrigger><TooltipContent>{r.error}</TooltipContent></Tooltip>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+              <div className="flex justify-end">
+                <Button onClick={() => setBulkOpen(false)}>Close</Button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="space-y-3">
+                <div className="flex items-end gap-3">
+                  <div className="flex-1 space-y-1.5">
+                    <Label htmlFor="bulk-amount">Amount per student (TSh)</Label>
+                    <Input id="bulk-amount" type="number" min={1000} step={1000} value={bulkAmount} onChange={(e) => setBulkAmount(e.target.value)} />
+                  </div>
+                  <div className="text-sm text-muted-foreground pb-2.5">
+                    {bulkSelected.size} selected · Total <strong>TSh {(bulkSelected.size * (Number(bulkAmount) || 0)).toLocaleString()}</strong>
+                  </div>
+                </div>
+                <div className="rounded-md border flex-1 max-h-[340px] overflow-y-auto">
+                  <Table>
+                    <TableHeader className="sticky top-0 bg-background">
+                      <TableRow>
+                        <TableHead className="w-10">
+                          <Checkbox
+                            checked={bulkSelected.size > 0 && bulkSelected.size === (balancesData?.students?.length ?? 0)}
+                            onCheckedChange={(c) => toggleBulkAll((balancesData?.students ?? []).map((s: any) => s.id), c === true)}
+                          />
+                        </TableHead>
+                        <TableHead>Student</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead className="text-right">Balance</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {(balancesData?.students ?? []).map((s: any) => (
+                        <TableRow key={s.id}>
+                          <TableCell>
+                            <Checkbox
+                              checked={bulkSelected.has(s.id)}
+                              onCheckedChange={(c) => toggleBulk(s.id, c === true)}
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <div className="font-medium">{s.name}</div>
+                            <div className="text-xs text-muted-foreground">{s.student_id} · {s.grade}</div>
+                          </TableCell>
+                          <TableCell>
+                            {s.status === "low" ? <Badge variant="destructive">Low</Badge> : s.status === "medium" ? <Badge className="bg-amber-500 hover:bg-amber-500">Medium</Badge> : <Badge variant="outline">OK</Badge>}
+                          </TableCell>
+                          <TableCell className="text-right">TSh {s.balance.toLocaleString()}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setBulkOpen(false)}>Cancel</Button>
+                <Button
+                  onClick={sendBulkInvoices}
+                  disabled={bulkSelected.size === 0 || !bulkAmount || Number(bulkAmount) <= 0 || bulkSending}
+                  className="gap-2"
+                >
+                  <Send className="h-4 w-4" /> {bulkSending ? "Sending…" : `Send ${bulkSelected.size} STK push${bulkSelected.size === 1 ? "" : "es"}`}
+                </Button>
+              </DialogFooter>
+            </>
+          )}
         </DialogContent>
       </Dialog>
     </div>
