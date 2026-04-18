@@ -120,25 +120,24 @@ ok "Boot menu installed"
 #    Uses xorriso's "indev/outdev" replay pattern so the El Torito + UEFI
 #    partition layout from the original Ubuntu ISO is preserved exactly.
 # -----------------------------------------------------------------------------
-step "Repacking ISO as $FINAL_ISO"
+step "Repacking ISO as $FINAL_ISO (xorriso indev replay — preserves original boot setup)"
 rm -f "$FINAL_ISO"
-xorriso -as mkisofs \
-  -r -V "KOBEAI_INSTALLER" \
-  -J -joliet-long \
-  -iso-level 3 \
-  -partition_offset 16 \
-  --grub2-mbr "$EXTRACT/boot/grub/i386-pc/boot_hybrid.img" \
-  --mbr-force-bootable \
-  -append_partition 2 0xEF "$EXTRACT/boot/grub/efi.img" \
-  -appended_part_as_gpt \
-  -c '/boot.catalog' \
-  -b '/boot/grub/i386-pc/eltorito.img' \
-    -no-emul-boot -boot-load-size 4 -boot-info-table --grub2-boot-info \
-  -eltorito-alt-boot \
-  -e '--interval:appended_partition_2:::' \
-    -no-emul-boot \
-  -o "$FINAL_ISO" \
-  "$EXTRACT" \
+# Use xorriso's indev/outdev replay pattern: copy the ORIGINAL ISO's boot
+# config exactly (works for any combination of BIOS El Torito + UEFI partition
+# Ubuntu happens to ship in any given release), and just overlay our
+# autoinstall + payload + grub.cfg on top.
+xorriso \
+  -indev "$SRC_ISO" \
+  -outdev "$FINAL_ISO" \
+  -boot_image any replay \
+  -volid "KOBEAI_INSTALLER" \
+  -joliet on \
+  -compliance no_emul_toc \
+  -overwrite on \
+  -map "$HERE/autoinstall" /autoinstall \
+  -map "$HERE/payload" /payload \
+  -map "$PAYLOAD_TGZ" /payload/kobeai-src.tar.gz \
+  -map "$HERE/grub/grub.cfg" /boot/grub/grub.cfg \
   || die "xorriso failed — see output above"
 
 ok "Built $FINAL_ISO ($(du -h "$FINAL_ISO" | cut -f1))"
