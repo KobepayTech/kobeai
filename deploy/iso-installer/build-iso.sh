@@ -39,7 +39,7 @@ WORK="$HERE/build"
 OUT="$HERE/out"
 SRC_ISO="${1:-$WORK/ubuntu.iso}"
 EXTRACT="$WORK/extract"
-PAYLOAD_TGZ="$HERE/payload/kobeai-src.tar.gz"
+PAYLOAD_TGZ="$WORK/kobeai-src.tar.gz"
 FINAL_ISO="$OUT/kobeai-installer.iso"
 
 mkdir -p "$WORK" "$OUT"
@@ -98,6 +98,7 @@ step "Injecting KobeAI autoinstall profiles + payload"
 mkdir -p "$EXTRACT/autoinstall" "$EXTRACT/payload"
 rsync -a --delete "$HERE/autoinstall/" "$EXTRACT/autoinstall/"
 rsync -a --delete "$HERE/payload/"     "$EXTRACT/payload/"
+cp "$PAYLOAD_TGZ" "$EXTRACT/payload/kobeai-src.tar.gz"
 chmod +x "$EXTRACT/payload/firstboot.sh" \
          "$EXTRACT/payload/master/install-master.sh" \
          "$EXTRACT/payload/worker/install-worker.sh"
