@@ -8,15 +8,25 @@ import { db, usersTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { signToken } from "../lib/auth";
 import { checkPin } from "../lib/seed";
+import { rateLimit } from "../lib/rate-limit";
 
 const router = Router();
+
+// Demo credentials are only honoured in development. In any other env we fall
+// through to the hashed-password check so a misconfigured prod can't be logged
+// into with the README creds.
+const ALLOW_DEMO_CREDS = (process.env["NODE_ENV"] ?? "development") === "development";
+
+// Throttle every login surface. 10 attempts per minute per source IP is plenty
+// for a real classroom (one watch per student) and stops PIN brute-force cold.
+const loginLimiter = rateLimit({ windowMs: 60_000, max: 10, name: "auth-login" });
 
 /**
  * Student watch login. Keeps the legacy demo PIN ("1234") so the watch APK
  * doesn't need a rebuild, but now issues a real signed JWT instead of the
  * old `demo-student-token` string.
  */
-router.post("/v1/auth/login", async (req, res) => {
+router.post("/v1/auth/login", loginLimiter, async (req, res) => {
   const parsed = LoginBody.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Invalid request" });
@@ -30,10 +40,7 @@ router.post("/v1/auth/login", async (req, res) => {
     res.status(401).json({ error: "Invalid credentials" });
     return;
   }
-  // Hardcoded demo PIN is restricted to the seeded `TEST001` account so the
-  // existing watch APK still logs in. Every other student must validate
-  // against their stored hash.
-  const isDemo = student.student_code === "TEST001" && pin === "1234";
+  const isDemo = ALLOW_DEMO_CREDS && student.student_code === "TEST001" && pin === "1234";
   const ok = isDemo || (student.password_hash && checkPin(pin, student.password_hash));
   if (!ok) {
     res.status(401).json({ error: "Invalid credentials" });
@@ -54,7 +61,7 @@ router.post("/v1/auth/login", async (req, res) => {
   });
 });
 
-router.post("/v1/auth/teacher/login", async (req, res) => {
+router.post("/v1/auth/teacher/login", loginLimiter, async (req, res) => {
   const parsed = TeacherLoginBody.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Invalid request" });
@@ -66,13 +73,12 @@ router.post("/v1/auth/teacher/login", async (req, res) => {
     res.status(401).json({ error: "Invalid credentials" });
     return;
   }
-  // Demo creds are seeded as hashed pins; allow either the seeded hash or the
-  // raw demo password for backwards-compat with smoke tests.
-  const ok =
-    checkPin(password, user.password_hash) ||
-    (email === "teacher@school.tz" && password === "teacher123") ||
-    (email === "admin@school.tz" && password === "admin123") ||
-    (email === "superadmin@kobeai.tz" && password === "super123");
+  const demoOk =
+    ALLOW_DEMO_CREDS &&
+    ((email === "teacher@school.tz" && password === "teacher123") ||
+      (email === "admin@school.tz" && password === "admin123") ||
+      (email === "superadmin@kobeai.tz" && password === "super123"));
+  const ok = demoOk || checkPin(password, user.password_hash);
   if (!ok) {
     res.status(401).json({ error: "Invalid credentials" });
     return;
@@ -92,7 +98,7 @@ router.post("/v1/auth/teacher/login", async (req, res) => {
   });
 });
 
-router.post("/v1/auth/parent/login", async (req, res) => {
+router.post("/v1/auth/parent/login", loginLimiter, async (req, res) => {
   const parsed = ParentLoginBody.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Invalid request" });

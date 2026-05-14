@@ -1,6 +1,13 @@
-import { Router } from "express";
+import { Router, type Request, type Response as ExpressResponse } from "express";
 import { AddFundsBody } from "@workspace/api-zod";
-import { db, subscriptionCacheTable, printJobsTable, studentSettingsTable } from "@workspace/db";
+import {
+  db,
+  subscriptionCacheTable,
+  printJobsTable,
+  studentSettingsTable,
+  parentChildrenTable,
+  usersTable,
+} from "@workspace/db";
 import { eq, inArray, desc } from "drizzle-orm";
 import { requireAuth } from "../lib/auth";
 import { listDocumentsForStudent } from "../lib/student-documents";
@@ -24,25 +31,96 @@ async function centralFetch(path: string, init: RequestInit = {}): Promise<Respo
   });
 }
 
-// Demo bridge: parent demo child id -> real student_code in the DB.
-//
-// SECURITY NOTE: the parent demo currently uses a single hardcoded CHILDREN
-// list shared across all parent tokens (the auth payload has user_id 0 with
-// no parent->student FK in the schema yet). Every endpoint in this file
-// trusts the path-parameter child id against this static list. That's
-// intentional for the demo but is NOT production-safe — when the parents
-// schema lands, replace this map with a `parent_id -> student_id[]` query
-// and reject `:childId` values that aren't owned by `req.auth.sub`.
-const CHILD_TO_STUDENT_CODE: Record<string, string> = {
+// Demo bridge: legacy parent-app child ids ("1", "2") still need to map to
+// real student rows so the demo flow keeps working. Every endpoint below
+// resolves the child id through `parent_children` and rejects anything the
+// requesting parent doesn't actually own.
+const LEGACY_CHILD_ID_TO_STUDENT_CODE: Record<string, string> = {
   "1": "TEST001",
   "2": "TEST002",
 };
 
-const CHILDREN = [
-  {
-    id: "1",
-    name: "John Mwangi",
-    grade: "Form 1",
+type OwnedChild = {
+  /** users.id of the student row */
+  student_user_id: number;
+  /** users.student_code (used by every other table that keys on student) */
+  student_code: string;
+  name: string;
+  grade: string | null;
+};
+
+async function listOwnedChildren(parentUserId: number): Promise<OwnedChild[]> {
+  const rows = await db
+    .select({
+      student_user_id: usersTable.id,
+      student_code: usersTable.student_code,
+      name: usersTable.name,
+      grade: usersTable.grade,
+    })
+    .from(parentChildrenTable)
+    .innerJoin(usersTable, eq(usersTable.id, parentChildrenTable.student_user_id))
+    .where(eq(parentChildrenTable.parent_user_id, parentUserId))
+    .orderBy(parentChildrenTable.created_at);
+  return rows
+    .filter((r) => !!r.student_code)
+    .map((r) => ({
+      student_user_id: r.student_user_id,
+      student_code: r.student_code as string,
+      name: r.name,
+      grade: r.grade ?? null,
+    }));
+}
+
+/**
+ * Resolve the `:childId` path param to a student row that this parent owns.
+ * Accepts either a numeric users.id or a legacy demo id ("1", "2") for
+ * backward-compat with the existing parent-app build. Returns null if the
+ * parent does not own the requested child.
+ */
+async function resolveOwnedChild(
+  parentUserId: number,
+  rawChildId: string,
+): Promise<OwnedChild | null> {
+  const owned = await listOwnedChildren(parentUserId);
+  // Direct match by users.id
+  const numeric = Number(rawChildId);
+  if (Number.isFinite(numeric)) {
+    const hit = owned.find((c) => c.student_user_id === numeric);
+    if (hit) return hit;
+  }
+  // Legacy demo-id translation: "1" -> "TEST001" -> users row, then verify
+  // the parent actually owns that student.
+  const legacyCode = LEGACY_CHILD_ID_TO_STUDENT_CODE[rawChildId];
+  if (legacyCode) {
+    const hit = owned.find((c) => c.student_code === legacyCode);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+function parentIdOr401(req: Request, res: ExpressResponse): number | null {
+  const id = Number(req.auth?.user_id);
+  if (!Number.isFinite(id) || id <= 0) {
+    res.status(401).json({ error: "no parent in token" });
+    return null;
+  }
+  return id;
+}
+
+// Demo wallet/activity data, keyed by student_code. Real wallet + activity
+// aren't backed by tables yet — we still return these stub numbers, but only
+// for children the requesting parent actually owns (verified via parent_children).
+type DemoWalletExtras = {
+  balance: number;
+  today_points: number;
+  total_points: number;
+  attendance_streak: number;
+  daily_limit: number;
+  transactions: { id: string; amount: number; type: string; description: string; created_at: string }[];
+  activity: { id: string; type: string; description: string; points: number; timestamp: string; subject: string }[];
+};
+const DEMO_EXTRAS_BY_CODE: Record<string, DemoWalletExtras> = {
+  TEST001: {
     balance: 52000,
     today_points: 85,
     total_points: 3450,
@@ -53,11 +131,15 @@ const CHILDREN = [
       { id: "2", amount: 10, type: "ai_question", description: "Asked about photosynthesis", created_at: new Date(Date.now() - 7200000).toISOString() },
       { id: "3", amount: 25, type: "quiz", description: "Completed Science Quiz", created_at: new Date(Date.now() - 10800000).toISOString() },
     ],
+    activity: [
+      { id: "1", type: "attendance", description: "Checked in for school", points: 20, timestamp: new Date(Date.now() - 3600000).toISOString(), subject: "School" },
+      { id: "2", type: "ai_question", description: "Asked about photosynthesis", points: 10, timestamp: new Date(Date.now() - 7200000).toISOString(), subject: "Biology" },
+      { id: "3", type: "quiz", description: "Completed Science Quiz - Score 80%", points: 25, timestamp: new Date(Date.now() - 10800000).toISOString(), subject: "Science" },
+      { id: "4", type: "ai_question", description: "Asked about Pythagorean theorem", points: 10, timestamp: new Date(Date.now() - 14400000).toISOString(), subject: "Mathematics" },
+      { id: "5", type: "attendance", description: "Checked in for school", points: 20, timestamp: new Date(Date.now() - 86400000).toISOString(), subject: "School" },
+    ],
   },
-  {
-    id: "2",
-    name: "Mary Mwangi",
-    grade: "Standard 4",
+  TEST002: {
     balance: 18500,
     today_points: 45,
     total_points: 1820,
@@ -67,43 +149,57 @@ const CHILDREN = [
       { id: "4", amount: 20, type: "attendance", description: "Daily attendance check-in", created_at: new Date(Date.now() - 3600000).toISOString() },
       { id: "5", amount: 10, type: "ai_question", description: "Asked about Tanzania history", created_at: new Date(Date.now() - 7200000).toISOString() },
     ],
+    activity: [
+      { id: "1", type: "attendance", description: "Checked in for school", points: 20, timestamp: new Date(Date.now() - 3600000).toISOString(), subject: "School" },
+      { id: "2", type: "ai_question", description: "Asked about Tanzania history", points: 10, timestamp: new Date(Date.now() - 7200000).toISOString(), subject: "History" },
+      { id: "3", type: "quiz", description: "Completed Kiswahili Vocabulary", points: 30, timestamp: new Date(Date.now() - 86400000 + 3600000).toISOString(), subject: "Kiswahili" },
+    ],
   },
-];
-
-const ACTIVITY: Record<string, { id: string; type: string; description: string; points: number; timestamp: string; subject: string }[]> = {
-  "1": [
-    { id: "1", type: "attendance", description: "Checked in for school", points: 20, timestamp: new Date(Date.now() - 3600000).toISOString(), subject: "School" },
-    { id: "2", type: "ai_question", description: "Asked about photosynthesis", points: 10, timestamp: new Date(Date.now() - 7200000).toISOString(), subject: "Biology" },
-    { id: "3", type: "quiz", description: "Completed Science Quiz - Score 80%", points: 25, timestamp: new Date(Date.now() - 10800000).toISOString(), subject: "Science" },
-    { id: "4", type: "ai_question", description: "Asked about Pythagorean theorem", points: 10, timestamp: new Date(Date.now() - 14400000).toISOString(), subject: "Mathematics" },
-    { id: "5", type: "attendance", description: "Checked in for school", points: 20, timestamp: new Date(Date.now() - 86400000).toISOString(), subject: "School" },
-  ],
-  "2": [
-    { id: "1", type: "attendance", description: "Checked in for school", points: 20, timestamp: new Date(Date.now() - 3600000).toISOString(), subject: "School" },
-    { id: "2", type: "ai_question", description: "Asked about Tanzania history", points: 10, timestamp: new Date(Date.now() - 7200000).toISOString(), subject: "History" },
-    { id: "3", type: "quiz", description: "Completed Kiswahili Vocabulary", points: 30, timestamp: new Date(Date.now() - 86400000 + 3600000).toISOString(), subject: "Kiswahili" },
-  ],
 };
+const EMPTY_EXTRAS: DemoWalletExtras = {
+  balance: 0,
+  today_points: 0,
+  total_points: 0,
+  attendance_streak: 0,
+  daily_limit: 0,
+  transactions: [],
+  activity: [],
+};
+const extrasFor = (code: string): DemoWalletExtras =>
+  DEMO_EXTRAS_BY_CODE[code] ?? EMPTY_EXTRAS;
 
-router.get("/v1/parent/dashboard", (_req, res) => {
+router.get("/v1/parent/dashboard", async (req, res) => {
+  const parentId = parentIdOr401(req, res);
+  if (parentId == null) return;
+  const owned = await listOwnedChildren(parentId);
   res.json({
-    parent_name: "Grace Mwangi",
-    children: CHILDREN.map(({ id, name, grade, balance, today_points, total_points, attendance_streak }) => ({
-      id, name, grade, balance, today_points, total_points, attendance_streak,
-    })),
+    parent_name: req.auth?.name ?? "Parent",
+    children: owned.map((c) => {
+      const e = extrasFor(c.student_code);
+      return {
+        id: String(c.student_user_id),
+        name: c.name,
+        grade: c.grade ?? "Form 1",
+        balance: e.balance,
+        today_points: e.today_points,
+        total_points: e.total_points,
+        attendance_streak: e.attendance_streak,
+      };
+    }),
   });
 });
 
-router.get("/v1/parent/child/:childId/activity", (req, res) => {
-  const { childId } = req.params;
-  const child = CHILDREN.find((c) => c.id === childId);
+router.get("/v1/parent/child/:childId/activity", async (req, res) => {
+  const parentId = parentIdOr401(req, res);
+  if (parentId == null) return;
+  const child = await resolveOwnedChild(parentId, String(req.params["childId"]));
   if (!child) {
     res.status(404).json({ error: "Child not found" });
     return;
   }
   res.json({
     child_name: child.name,
-    activities: ACTIVITY[childId] ?? [],
+    activities: extrasFor(child.student_code).activity,
   });
 });
 
@@ -114,14 +210,14 @@ router.get("/v1/parent/child/:childId/activity", (req, res) => {
  * know exactly what is available for tap-to-print.
  */
 router.get("/v1/parent/child/:childId/documents", async (req, res) => {
-  const { childId } = req.params;
-  const child = CHILDREN.find((c) => c.id === childId);
+  const parentId = parentIdOr401(req, res);
+  if (parentId == null) return;
+  const child = await resolveOwnedChild(parentId, String(req.params["childId"]));
   if (!child) {
     res.status(404).json({ error: "Child not found" });
     return;
   }
-  const studentCode = CHILD_TO_STUDENT_CODE[childId];
-  const documents = studentCode ? await listDocumentsForStudent(studentCode) : [];
+  const documents = await listDocumentsForStudent(child.student_code);
   res.json({
     child_name: child.name,
     documents: documents.map((d) => ({
@@ -142,22 +238,20 @@ router.get("/v1/parent/child/:childId/documents", async (req, res) => {
  * actually use her print quota?") and surfaces abuse.
  */
 router.get("/v1/parent/child/:childId/print-history", async (req, res) => {
-  const { childId } = req.params;
-  const child = CHILDREN.find((c) => c.id === childId);
+  const parentId = parentIdOr401(req, res);
+  if (parentId == null) return;
+  const child = await resolveOwnedChild(parentId, String(req.params["childId"]));
   if (!child) {
     res.status(404).json({ error: "Child not found" });
     return;
   }
-  const studentCode = CHILD_TO_STUDENT_CODE[childId];
   const limit = Math.min(100, Math.max(1, Number(req.query["limit"] ?? 50)));
-  const rows = studentCode
-    ? await db
-        .select()
-        .from(printJobsTable)
-        .where(eq(printJobsTable.student_code, studentCode))
-        .orderBy(desc(printJobsTable.created_at))
-        .limit(limit)
-    : [];
+  const rows = await db
+    .select()
+    .from(printJobsTable)
+    .where(eq(printJobsTable.student_code, child.student_code))
+    .orderBy(desc(printJobsTable.created_at))
+    .limit(limit);
   res.json({
     child_name: child.name,
     jobs: rows.map((r) => ({
@@ -180,26 +274,29 @@ router.get("/v1/parent/child/:childId/print-history", async (req, res) => {
 // Defaults are applied here so brand-new students don't 404 — we never insert
 // a row until the parent actually changes something.
 router.get("/v1/parent/child/:childId/settings", async (req, res) => {
-  const childId = String(req.params["childId"]);
-  const studentCode = CHILD_TO_STUDENT_CODE[childId];
-  if (!studentCode) return res.status(404).json({ error: "child_not_found" });
+  const parentId = parentIdOr401(req, res);
+  if (parentId == null) return;
+  const child = await resolveOwnedChild(parentId, String(req.params["childId"]));
+  if (!child) return res.status(404).json({ error: "child_not_found" });
   const rows = await db
     .select()
     .from(studentSettingsTable)
-    .where(eq(studentSettingsTable.student_code, studentCode))
+    .where(eq(studentSettingsTable.student_code, child.student_code))
     .limit(1);
   const row = rows[0];
   res.json({
-    student_code: studentCode,
+    student_code: child.student_code,
     audio_enabled: row?.audio_enabled ?? true,
     keyboard_enabled: row?.keyboard_enabled ?? true,
   });
 });
 
 router.patch("/v1/parent/child/:childId/settings", async (req, res) => {
-  const childId = String(req.params["childId"]);
-  const studentCode = CHILD_TO_STUDENT_CODE[childId];
-  if (!studentCode) return res.status(404).json({ error: "child_not_found" });
+  const parentId = parentIdOr401(req, res);
+  if (parentId == null) return;
+  const child = await resolveOwnedChild(parentId, String(req.params["childId"]));
+  if (!child) return res.status(404).json({ error: "child_not_found" });
+  const studentCode = child.student_code;
   const body = req.body ?? {};
   const audio = typeof body.audio_enabled === "boolean" ? body.audio_enabled : undefined;
   const keyboard =
@@ -238,13 +335,24 @@ router.patch("/v1/parent/child/:childId/settings", async (req, res) => {
   });
 });
 
-router.get("/v1/parent/wallet", (_req, res) => {
-  const totalBalance = CHILDREN.reduce((sum, c) => sum + c.balance, 0);
+router.get("/v1/parent/wallet", async (req, res) => {
+  const parentId = parentIdOr401(req, res);
+  if (parentId == null) return;
+  const owned = await listOwnedChildren(parentId);
+  const enriched = owned.map((c) => {
+    const e = extrasFor(c.student_code);
+    return {
+      id: String(c.student_user_id),
+      name: c.name,
+      grade: c.grade ?? "Form 1",
+      balance: e.balance,
+      daily_limit: e.daily_limit,
+      transactions: e.transactions,
+    };
+  });
   res.json({
-    total_balance: totalBalance,
-    children: CHILDREN.map(({ id, name, grade, balance, daily_limit, transactions }) => ({
-      id, name, grade, balance, daily_limit, transactions,
-    })),
+    total_balance: enriched.reduce((sum, c) => sum + c.balance, 0),
+    children: enriched,
   });
 });
 
@@ -255,20 +363,21 @@ router.get("/v1/parent/wallet", (_req, res) => {
  * agent). Always reads from the local cache so the parent app keeps working
  * during a central outage.
  */
-router.get("/v1/parent/subscriptions", async (_req, res) => {
+router.get("/v1/parent/subscriptions", async (req, res) => {
+  const parentId = parentIdOr401(req, res);
+  if (parentId == null) return;
+  const owned = await listOwnedChildren(parentId);
   const out = await Promise.all(
-    CHILDREN.map(async (c) => {
-      const code = CHILD_TO_STUDENT_CODE[c.id];
-      if (!code) return null;
+    owned.map(async (c) => {
       const [sub] = await db
         .select()
         .from(subscriptionCacheTable)
-        .where(eq(subscriptionCacheTable.student_code, code));
+        .where(eq(subscriptionCacheTable.student_code, c.student_code));
       return {
-        child_id: c.id,
+        child_id: String(c.student_user_id),
         child_name: c.name,
-        grade: c.grade,
-        student_code: code,
+        grade: c.grade ?? "Form 1",
+        student_code: c.student_code,
         plan: sub?.plan ?? "basic",
         status: sub?.status ?? "uncached",
         monthly_price_tsh: sub?.monthly_price_tsh ?? 5000,
@@ -277,7 +386,7 @@ router.get("/v1/parent/subscriptions", async (_req, res) => {
       };
     }),
   );
-  res.json({ subscriptions: out.filter(Boolean) });
+  res.json({ subscriptions: out });
 });
 
 /**
@@ -288,13 +397,19 @@ router.get("/v1/parent/subscriptions", async (_req, res) => {
  * payment_id which the client can poll until status flips to success/failed.
  */
 router.post("/v1/parent/subscriptions/pay", async (req, res) => {
+  const parentId = parentIdOr401(req, res);
+  if (parentId == null) return;
   const { child_id, phone } = req.body ?? {};
-  const child = CHILDREN.find((c) => c.id === child_id);
-  const code = child_id ? CHILD_TO_STUDENT_CODE[child_id] : undefined;
-  if (!child || !code) {
+  if (typeof child_id !== "string" && typeof child_id !== "number") {
+    res.status(400).json({ error: "child_id required" });
+    return;
+  }
+  const child = await resolveOwnedChild(parentId, String(child_id));
+  if (!child) {
     res.status(404).json({ error: "Child not found" });
     return;
   }
+  const code = child.student_code;
   const [sub] = await db
     .select()
     .from(subscriptionCacheTable)
@@ -325,12 +440,16 @@ router.post("/v1/parent/subscriptions/pay", async (req, res) => {
  * offline; computes locally to avoid extra central calls.
  */
 const RENEWAL_REMINDER_DAYS = 3;
-router.get("/v1/parent/notifications", async (_req, res) => {
-  const ownedCodes = Object.values(CHILD_TO_STUDENT_CODE);
-  if (ownedCodes.length === 0) {
+router.get("/v1/parent/notifications", async (req, res) => {
+  const parentId = parentIdOr401(req, res);
+  if (parentId == null) return;
+  const owned = await listOwnedChildren(parentId);
+  if (owned.length === 0) {
     res.json({ notifications: [] });
     return;
   }
+  const ownedCodes = owned.map((c) => c.student_code);
+  const childByCode = new Map(owned.map((c) => [c.student_code, c]));
   const rows = await db
     .select()
     .from(subscriptionCacheTable)
@@ -338,16 +457,11 @@ router.get("/v1/parent/notifications", async (_req, res) => {
 
   const now = Date.now();
   const cutoff = now + RENEWAL_REMINDER_DAYS * 24 * 60 * 60 * 1000;
-  const childByCode = new Map(
-    Object.entries(CHILD_TO_STUDENT_CODE).map(([childId, code]) => [code, CHILDREN.find((c) => c.id === childId)]),
-  );
 
   const notifications = rows
     .filter((r) => {
       if (!r.expires_at) return false;
       const t = new Date(r.expires_at).getTime();
-      // Show reminder when expired OR expiring within window. Suppress for
-      // long-dated subs so the banner only appears when it matters.
       return t < cutoff;
     })
     .map((r) => {
@@ -355,12 +469,11 @@ router.get("/v1/parent/notifications", async (_req, res) => {
       const t = r.expires_at!.getTime();
       const days = Math.ceil((t - now) / (24 * 60 * 60 * 1000));
       const expired = t < now;
-      const childId = Object.entries(CHILD_TO_STUDENT_CODE).find(([, code]) => code === r.student_code)?.[0];
       return {
         id: `renew-${r.student_code}`,
         kind: "renewal_due" as const,
         severity: expired ? ("urgent" as const) : days <= 1 ? ("warning" as const) : ("info" as const),
-        child_id: childId ?? null,
+        child_id: child ? String(child.student_user_id) : null,
         child_name: child?.name ?? r.student_name ?? r.student_code,
         student_code: r.student_code,
         plan: r.plan,
@@ -390,6 +503,8 @@ router.get("/v1/parent/subscriptions/payment/:id", async (req, res) => {
   //
   // Then enforce that the payment belongs to a student this parent owns —
   // prevents enumerating other parents' payment IDs (IDOR).
+  const parentId = parentIdOr401(req, res);
+  if (parentId == null) return;
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) {
     res.status(400).json({ error: "Invalid payment id" });
@@ -403,7 +518,8 @@ router.get("/v1/parent/subscriptions/payment/:id", async (req, res) => {
   const body = (await upstream.json()) as {
     payment?: { student_code?: string } & Record<string, unknown>;
   };
-  const ownedCodes = new Set(Object.values(CHILD_TO_STUDENT_CODE));
+  const owned = await listOwnedChildren(parentId);
+  const ownedCodes = new Set(owned.map((c) => c.student_code));
   if (!body.payment || !ownedCodes.has(body.payment.student_code ?? "")) {
     res.status(404).json({ error: "Payment not found" });
     return;
@@ -411,19 +527,26 @@ router.get("/v1/parent/subscriptions/payment/:id", async (req, res) => {
   res.json({ payment: body.payment });
 });
 
-router.post("/v1/parent/wallet/add-funds", (req, res) => {
+router.post("/v1/parent/wallet/add-funds", async (req, res) => {
+  const parentId = parentIdOr401(req, res);
+  if (parentId == null) return;
   const parsed = AddFundsBody.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Invalid request" });
     return;
   }
   const { child_id, amount } = parsed.data;
-  const child = CHILDREN.find((c) => c.id === child_id);
-  const newBalance = (child?.balance ?? 0) + amount;
+  const child = await resolveOwnedChild(parentId, String(child_id));
+  if (!child) {
+    res.status(404).json({ error: "Child not found" });
+    return;
+  }
+  const e = extrasFor(child.student_code);
+  const newBalance = e.balance + amount;
   res.json({
     success: true,
     new_balance: newBalance,
-    message: `Successfully added TSh ${amount.toLocaleString()} to ${child?.name ?? "child"}'s wallet`,
+    message: `Successfully added TSh ${amount.toLocaleString()} to ${child.name}'s wallet`,
     receipt_id: `RCP-${Date.now()}`,
   });
 });

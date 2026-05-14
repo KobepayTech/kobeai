@@ -32,7 +32,6 @@ import com.kobeai.watch.data.PreferencesManager
 import com.kobeai.watch.data.remote.ApiService
 import com.kobeai.watch.data.remote.SubscriptionResponse
 import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -48,7 +47,7 @@ class SubscriptionViewModel @Inject constructor(
         state = SubscriptionUiState.Loading
         viewModelScope.launch {
             try {
-                val token = prefs.token.first()
+                val token = prefs.getAuthToken()
                 if (token.isNullOrBlank()) {
                     state = SubscriptionUiState.Error("Please log in again")
                     return@launch

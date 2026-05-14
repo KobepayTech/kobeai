@@ -29,6 +29,14 @@ android {
         val hceSecret = (project.findProperty("WATCH_HCE_SECRET") as String?)
             ?: "dev-watch-hce-secret"
         buildConfigField("String", "WATCH_HCE_SECRET", "\"$hceSecret\"")
+
+        // Optional TLS SPKI pin for the school API. When set, OkHttp will pin
+        // the server's leaf cert (or its issuer) to this SHA-256 SPKI hash.
+        // Format: "sha256/<base64>". Pass at build time, e.g.:
+        //   ./gradlew assembleRelease -PKOBEAI_API_PIN="sha256/abc...="
+        // If empty, the app falls back to system-CA trust without pinning.
+        val apiPin = (project.findProperty("KOBEAI_API_PIN") as String?) ?: ""
+        buildConfigField("String", "KOBEAI_API_PIN", "\"$apiPin\"")
     }
 
     signingConfigs {
@@ -55,6 +63,19 @@ android {
             isMinifyEnabled = false
             applicationIdSuffix = ".debug"
         }
+    }
+
+    // Refuse to produce a release APK with the dev HCE secret baked in.
+    afterEvaluate {
+        tasks.matching { it.name.startsWith("assembleRelease") || it.name.startsWith("bundleRelease") }
+            .configureEach {
+                doFirst {
+                    val secret = (project.findProperty("WATCH_HCE_SECRET") as String?)
+                    require(!secret.isNullOrBlank() && secret != "dev-watch-hce-secret") {
+                        "Refusing to build release: pass -PWATCH_HCE_SECRET=<random hex> matching the school server's WATCH_HCE_SECRET."
+                    }
+                }
+            }
     }
 
     buildFeatures {
@@ -115,6 +136,7 @@ dependencies {
     kapt("androidx.room:room-compiler:2.6.0")
 
     implementation("androidx.datastore:datastore-preferences:1.0.0")
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
