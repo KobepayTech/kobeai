@@ -72,10 +72,6 @@ class PreferencesManager @Inject constructor(
     val adsEnabled: Flow<Boolean> = dataStore.data.map { it[ADS_ENABLED] ?: true }
     val setupCompleted: Flow<Boolean> = dataStore.data.map { it[SETUP_COMPLETED] ?: false }
 
-    fun adsEnabledBlocking(): Boolean = runBlocking {
-        dataStore.data.map { it[ADS_ENABLED] ?: true }.firstOrNull() ?: true
-    }
-
     fun getAuthToken(): String? = secretPrefs.getString(SK_AUTH_TOKEN, null)
 
     fun getStudentId(): String? = secretPrefs.getString(SK_STUDENT_ID, null)
@@ -127,17 +123,6 @@ class PreferencesManager @Inject constructor(
 
     suspend fun setSetupCompleted(value: Boolean) {
         dataStore.edit { it[SETUP_COMPLETED] = value }
-    }
-
-    suspend fun clearCredentials() {
-        secretPrefs.edit()
-            .remove(SK_AUTH_TOKEN)
-            .remove(SK_STUDENT_ID)
-            .apply()
-        dataStore.edit {
-            it.remove(IS_LOGGED_IN)
-            it.remove(STUDENT_NAME)
-        }
     }
 }
 
