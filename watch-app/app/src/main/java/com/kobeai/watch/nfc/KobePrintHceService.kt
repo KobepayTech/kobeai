@@ -15,8 +15,13 @@ import javax.inject.Inject
  * HCE service that responds to a tap from the school printer's NFC reader
  * (the Raspberry Pi tap-box). Emits a signed payload identifying the student.
  *
- * Wire format (UTF-8): `<student_id>\t<watch_session_id>\t<nonce>\t<hmac_hex>`
- * where `hmac_hex` = HMAC-SHA256(WATCH_HCE_SECRET, "${student_id}|${session_id}|${nonce}").
+ * Wire format (UTF-8): `<student_id>\t<watch_session_id>\t<nonce>\t<ts_ms>\t<hmac_hex>`
+ * where `hmac_hex` = HMAC-SHA256(WATCH_HCE_SECRET,
+ *                                "${student_id}|${session_id}|${nonce}|${ts_ms}").
+ *
+ * `ts_ms` is the watch's `System.currentTimeMillis()` at sign time. The server
+ * rejects payloads older than 60s so a captured tap can't be replayed long
+ * after the student has walked away from the printer.
  *
  * The Pi tap-box parses this and POSTs it to /api/v1/print/pair, where the
  * server re-computes the HMAC and creates a 60s pairing the watch can poll.
@@ -59,14 +64,22 @@ class KobePrintHceService : HostApduService() {
     // -----------------------------------------------------------------------
 
     private fun buildPayload(): String? {
+        // Refuse to emit anything if the APK was built without the school's
+        // real WATCH_HCE_SECRET — otherwise a release APK would happily sign
+        // payloads with the well-known dev key.
+        if (BuildConfig.WATCH_HCE_SECRET == DEV_WATCH_HCE_SECRET && !BuildConfig.DEBUG) {
+            Timber.e("HCE secret is the dev default in a non-debug build; refusing to emit")
+            return null
+        }
         val studentId = prefs.getStudentId() ?: return null
         // We use the device id as a stable per-watch session id. In a stricter
         // design this would rotate per login.
         val sessionId = prefs.getDeviceId()
         val nonce = newNonceHex()
-        val msg = "$studentId|$sessionId|$nonce"
+        val tsMs = System.currentTimeMillis()
+        val msg = "$studentId|$sessionId|$nonce|$tsMs"
         val sig = hmacSha256Hex(BuildConfig.WATCH_HCE_SECRET, msg)
-        return "$studentId\t$sessionId\t$nonce\t$sig"
+        return "$studentId\t$sessionId\t$nonce\t$tsMs\t$sig"
     }
 
     private fun newNonceHex(): String {
@@ -98,5 +111,9 @@ class KobePrintHceService : HostApduService() {
         private val SW_FILE_NOT_FOUND = byteArrayOf(0x6A.toByte(), 0x82.toByte())
         private val SW_INS_NOT_SUPPORTED = byteArrayOf(0x6D.toByte(), 0x00.toByte())
         private val SW_UNKNOWN = byteArrayOf(0x6F.toByte(), 0x00.toByte())
+        // Mirror of the gradle default in app/build.gradle.kts. A release APK
+        // built without -PWATCH_HCE_SECRET= will carry this value and must
+        // refuse to emit signed payloads.
+        private const val DEV_WATCH_HCE_SECRET = "dev-watch-hce-secret"
     }
 }

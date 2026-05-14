@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Production network security policy:
+    - HTTPS only (cleartext blocked at app level too via usesCleartextTraffic="false").
+    - Trust only system CAs; user-installed CAs are ignored, defeating
+      MITM via a parent-installed root certificate on the watch.
+
+  Debug builds keep user CAs enabled so engineers can use a local proxy
+  (Charles, mitmproxy) when troubleshooting. The release build never trusts them.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+    <debug-overrides>
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </debug-overrides>
+</network-security-config>

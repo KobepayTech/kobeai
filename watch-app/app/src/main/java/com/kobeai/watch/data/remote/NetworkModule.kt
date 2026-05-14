@@ -7,6 +7,8 @@ import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
+import okhttp3.CertificatePinner
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
@@ -40,13 +42,40 @@ object NetworkModule {
             chain.proceed(request)
         }
 
-        return OkHttpClient.Builder()
+        // Belt-and-braces enforcement of HTTPS in addition to
+        // network_security_config.xml. If something programmatically replaces
+        // the base URL with http:// (e.g. parent-app dev override), we still
+        // refuse to make the request rather than leak a bearer token.
+        val httpsOnlyInterceptor = Interceptor { chain ->
+            val req = chain.request()
+            if (!BuildConfig.DEBUG && !req.url.isHttps) {
+                throw java.io.IOException("refusing cleartext request to ${req.url}")
+            }
+            chain.proceed(req)
+        }
+
+        val builder = OkHttpClient.Builder()
             .addInterceptor(logging)
             .addInterceptor(authInterceptor)
+            .addInterceptor(httpsOnlyInterceptor)
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
-            .build()
+
+        // Optional SPKI pin for the school's API. Operators that want
+        // MITM-resistance ship the APK with -PKOBEAI_API_PIN=sha256/...; if
+        // unset we fall back to system-CA trust (which network_security_config
+        // restricts to non-user CAs in release).
+        val pin = BuildConfig.KOBEAI_API_PIN
+        if (pin.isNotBlank()) {
+            val host = prefsManager.getServerUrl().toHttpUrlOrNull()?.host
+            if (host != null) {
+                builder.certificatePinner(
+                    CertificatePinner.Builder().add(host, pin).build()
+                )
+            }
+        }
+        return builder.build()
     }
 
     @Provides

@@ -202,16 +202,26 @@ def _select_apdu() -> bytes:
 
 
 def parse_watch_payload(blob: bytes) -> dict:
-    """Watch returns: student_id\\twatch_session_id\\tnonce\\tsignature"""
+    """Watch returns: student_id\\twatch_session_id\\tnonce\\tts_ms\\tsignature
+
+    The ``ts_ms`` field was added so the server can reject NFC payloads
+    captured and replayed minutes later. Older watch builds (4 fields) are
+    rejected here rather than silently downgrading auth.
+    """
     text = blob.decode("utf-8", errors="replace").strip()
     parts = text.split("\t")
-    if len(parts) != 4:
+    if len(parts) != 5:
         raise ValueError(f"unexpected payload (got {len(parts)} fields): {text!r}")
+    try:
+        ts_ms = int(parts[3])
+    except ValueError as e:
+        raise ValueError(f"invalid ts_ms in payload: {parts[3]!r}") from e
     return {
         "student_id": parts[0],
         "watch_session_id": parts[1],
         "nonce": parts[2],
-        "signature": parts[3],
+        "ts_ms": ts_ms,
+        "signature": parts[4],
     }
 
 

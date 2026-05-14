@@ -5,6 +5,7 @@ import { eq, and, inArray } from "drizzle-orm";
 import { getPrintStore, type Pairing, type PrintJob } from "../lib/print-store";
 import { ObjectStorageService, ObjectNotFoundError } from "../lib/objectStorage";
 import { requireAuth } from "../lib/auth";
+import { rateLimit } from "../lib/rate-limit";
 import { listDocumentsForStudent } from "../lib/student-documents";
 import { recordPrintJob } from "../lib/usage-counter";
 import { Readable } from "node:stream";
@@ -14,8 +15,22 @@ const router: IRouter = Router();
 const PAIRING_TTL_MS = 60_000;
 const JOB_TTL_MS = 5 * 60_000;
 const NONCE_TTL_MS = 5 * 60_000;
-const TAP_BOX_SECRET = process.env["TAP_BOX_SECRET"] ?? "dev-tap-box-secret";
-const WATCH_HCE_SECRET = process.env["WATCH_HCE_SECRET"] ?? "dev-watch-hce-secret";
+// Bound on how stale a watch-signed HCE payload can be when the tap-box
+// presents it to /v1/print/pair. Replays beyond this window are rejected even
+// if the nonce hasn't been seen.
+const HCE_PAYLOAD_MAX_AGE_MS = 60_000;
+const NODE_ENV = process.env["NODE_ENV"] ?? "development";
+const ALLOW_DEV_SECRETS = NODE_ENV === "development" || NODE_ENV === "test";
+const RAW_TAP_BOX_SECRET = process.env["TAP_BOX_SECRET"];
+const RAW_WATCH_HCE_SECRET = process.env["WATCH_HCE_SECRET"];
+if (!RAW_TAP_BOX_SECRET && !ALLOW_DEV_SECRETS) {
+  throw new Error("TAP_BOX_SECRET must be set in non-development environments");
+}
+if (!RAW_WATCH_HCE_SECRET && !ALLOW_DEV_SECRETS) {
+  throw new Error("WATCH_HCE_SECRET must be set in non-development environments");
+}
+const TAP_BOX_SECRET = RAW_TAP_BOX_SECRET ?? "dev-tap-box-secret";
+const WATCH_HCE_SECRET = RAW_WATCH_HCE_SECRET ?? "dev-watch-hce-secret";
 
 const store = getPrintStore();
 const objStore = new ObjectStorageService();
@@ -29,28 +44,59 @@ function randId(prefix: string): string {
   return `${prefix}_${crypto.randomBytes(8).toString("hex")}`;
 }
 
+const TAP_BOX_SECRET_BUF = Buffer.from(TAP_BOX_SECRET, "utf8");
+
 /** Tap-box → server auth: shared secret in `x-tap-box-secret` header. */
 function requireTapBox(req: Request, res: Response, next: NextFunction): void {
   const provided = req.header("x-tap-box-secret");
-  if (!provided || provided !== TAP_BOX_SECRET) {
+  const providedBuf = provided ? Buffer.from(provided, "utf8") : null;
+  const ok =
+    !!providedBuf &&
+    providedBuf.length === TAP_BOX_SECRET_BUF.length &&
+    crypto.timingSafeEqual(providedBuf, TAP_BOX_SECRET_BUF);
+  if (!ok) {
     res.status(401).json({ error: "tap-box auth failed" });
     return;
   }
   next();
 }
 
-function verifyWatchPayload(payload: {
+type WatchPayload = {
   student_id: string;
   watch_session_id: string;
   nonce: string;
+  ts_ms: number;
   signature: string;
-}): boolean {
+};
+
+type WatchPayloadVerdict =
+  | { ok: true }
+  | { ok: false; reason: "bad_signature" | "stale" | "future" | "malformed" };
+
+function verifyWatchPayload(payload: WatchPayload, nowMs: number): WatchPayloadVerdict {
+  if (
+    typeof payload.student_id !== "string" ||
+    typeof payload.watch_session_id !== "string" ||
+    typeof payload.nonce !== "string" ||
+    typeof payload.signature !== "string" ||
+    !Number.isFinite(payload.ts_ms)
+  ) {
+    return { ok: false, reason: "malformed" };
+  }
   const mac = crypto
     .createHmac("sha256", WATCH_HCE_SECRET)
-    .update(`${payload.student_id}|${payload.watch_session_id}|${payload.nonce}`)
+    .update(
+      `${payload.student_id}|${payload.watch_session_id}|${payload.nonce}|${payload.ts_ms}`,
+    )
     .digest("hex");
-  if (mac.length !== payload.signature.length) return false;
-  return crypto.timingSafeEqual(Buffer.from(mac), Buffer.from(payload.signature));
+  if (mac.length !== payload.signature.length) return { ok: false, reason: "bad_signature" };
+  const sigOk = crypto.timingSafeEqual(Buffer.from(mac), Buffer.from(payload.signature));
+  if (!sigOk) return { ok: false, reason: "bad_signature" };
+  const age = nowMs - payload.ts_ms;
+  if (age > HCE_PAYLOAD_MAX_AGE_MS) return { ok: false, reason: "stale" };
+  // Permit a small forward skew (10s) to absorb watch/server clock drift.
+  if (age < -10_000) return { ok: false, reason: "future" };
+  return { ok: true };
 }
 
 /**
@@ -94,7 +140,11 @@ async function findDocumentForStudent(studentCode: string, documentId: string) {
 // Routes
 // ---------------------------------------------------------------------------
 
-router.post("/v1/print/pair", requireTapBox, async (req, res) => {
+// Cap pair attempts per source IP. Tap-box is on a school LAN; legitimate
+// taps are 1/sec at most. Anything higher is a guessing attack on student_ids.
+const pairLimiter = rateLimit({ windowMs: 60_000, max: 60, name: "print-pair" });
+
+router.post("/v1/print/pair", pairLimiter, requireTapBox, async (req, res) => {
   const { tap_box_id, printer_id, watch_payload } = req.body ?? {};
   if (!tap_box_id || !printer_id || !watch_payload) {
     res.status(400).json({ error: "missing fields" });
@@ -104,23 +154,32 @@ router.post("/v1/print/pair", requireTapBox, async (req, res) => {
     res.status(404).json({ error: "unknown printer" });
     return;
   }
-  if (!verifyWatchPayload(watch_payload)) {
-    res.status(401).json({ error: "invalid watch signature" });
+  // Watch may send ts_ms as a string (JSON safe-int avoidance). Coerce here so
+  // the downstream HMAC math always sees a number.
+  const wp: WatchPayload = {
+    student_id: String(watch_payload.student_id ?? ""),
+    watch_session_id: String(watch_payload.watch_session_id ?? ""),
+    nonce: String(watch_payload.nonce ?? ""),
+    ts_ms: Number(watch_payload.ts_ms ?? watch_payload.tsMs ?? NaN),
+    signature: String(watch_payload.signature ?? ""),
+  };
+  const now = Date.now();
+  const verdict = verifyWatchPayload(wp, now);
+  if (!verdict.ok) {
+    res.status(401).json({ error: `invalid watch payload: ${verdict.reason}` });
     return;
   }
 
-  const nonceKey = `${watch_payload.student_id}:${watch_payload.nonce}`;
+  const nonceKey = `${wp.student_id}:${wp.nonce}`;
   const fresh = await store.checkAndStoreNonce(nonceKey, NONCE_TTL_MS);
   if (!fresh) {
     res.status(409).json({ error: "replayed nonce" });
     return;
   }
-
-  const now = Date.now();
   const pairing: Pairing = {
     id: randId("pair"),
-    student_id: watch_payload.student_id,
-    watch_session_id: watch_payload.watch_session_id,
+    student_id: wp.student_id,
+    watch_session_id: wp.watch_session_id,
     printer_id,
     tap_box_id,
     created_at: now,

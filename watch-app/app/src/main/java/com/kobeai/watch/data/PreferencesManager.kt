@@ -1,6 +1,7 @@
 package com.kobeai.watch.data
 
 import android.content.Context
+import android.content.SharedPreferences
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
@@ -8,10 +9,12 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
 import com.kobeai.watch.BuildConfig
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.runBlocking
 import javax.inject.Inject
@@ -26,24 +29,35 @@ class PreferencesManager @Inject constructor(
 
     private val dataStore = context.dataStore
 
+    // AES256_GCM-backed prefs file for credentials and any stable identifier
+    // that lets the API server recognise this watch. Kept separate from the
+    // plain DataStore so a casual file dump (or backup) doesn't yield tokens.
+    private val secretPrefs: SharedPreferences by lazy {
+        val masterKey = MasterKey.Builder(context)
+            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+            .build()
+        EncryptedSharedPreferences.create(
+            context,
+            "kobeai_secrets",
+            masterKey,
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+        )
+    }
+
     companion object {
         private val IS_LOGGED_IN = booleanPreferencesKey("is_logged_in")
-        private val AUTH_TOKEN = stringPreferencesKey("auth_token")
-        private val STUDENT_ID = stringPreferencesKey("student_id")
         private val STUDENT_NAME = stringPreferencesKey("student_name")
         private val WALLET_BALANCE = intPreferencesKey("wallet_balance")
         private val SERVER_URL = stringPreferencesKey("server_url")
-        private val DEVICE_ID = stringPreferencesKey("device_id")
-        // Audio response (TTS) on/off — gated by parent app preference but
-        // also locally toggled from ChatScreen so kids can mute mid-class.
         private val AUDIO_ENABLED = booleanPreferencesKey("audio_enabled")
-        // Hardware keyboard input on/off — when off, ChatScreen falls back to
-        // the on-screen RemoteInput picker so a watch with no paired keyboard
-        // is still usable.
         private val KEYBOARD_ENABLED = booleanPreferencesKey("keyboard_enabled")
-        // True once the per-student first-time setup wizard has run
-        // (Bluetooth pairing + earbuds + keyboard test).
         private val SETUP_COMPLETED = booleanPreferencesKey("setup_completed")
+
+        // Keys living in EncryptedSharedPreferences.
+        private const val SK_AUTH_TOKEN = "auth_token"
+        private const val SK_STUDENT_ID = "student_id"
+        private const val SK_DEVICE_ID = "device_id"
     }
 
     val isLoggedIn: Flow<Boolean> = dataStore.data.map { it[IS_LOGGED_IN] ?: false }
@@ -53,24 +67,20 @@ class PreferencesManager @Inject constructor(
     val keyboardEnabled: Flow<Boolean> = dataStore.data.map { it[KEYBOARD_ENABLED] ?: true }
     val setupCompleted: Flow<Boolean> = dataStore.data.map { it[SETUP_COMPLETED] ?: false }
 
-    fun getAuthToken(): String? = runBlocking {
-        dataStore.data.map { it[AUTH_TOKEN] }.first()
-    }
+    fun getAuthToken(): String? = secretPrefs.getString(SK_AUTH_TOKEN, null)
 
-    fun getStudentId(): String? = runBlocking {
-        dataStore.data.map { it[STUDENT_ID] }.first()
-    }
+    fun getStudentId(): String? = secretPrefs.getString(SK_STUDENT_ID, null)
 
     fun getServerUrl(): String = runBlocking {
-        dataStore.data.map { it[SERVER_URL] }.first() ?: BuildConfig.DEFAULT_API_BASE
+        dataStore.data.map { it[SERVER_URL] }.firstOrNull() ?: BuildConfig.DEFAULT_API_BASE
     }
 
-    fun getDeviceId(): String = runBlocking {
-        dataStore.data.map { it[DEVICE_ID] }.first() ?: run {
-            val id = java.util.UUID.randomUUID().toString()
-            setDeviceId(id)
-            id
-        }
+    fun getDeviceId(): String {
+        val existing = secretPrefs.getString(SK_DEVICE_ID, null)
+        if (existing != null) return existing
+        val id = java.util.UUID.randomUUID().toString()
+        secretPrefs.edit().putString(SK_DEVICE_ID, id).apply()
+        return id
     }
 
     suspend fun setLoggedIn(value: Boolean) {
@@ -78,14 +88,12 @@ class PreferencesManager @Inject constructor(
     }
 
     suspend fun setAuthToken(token: String) {
-        dataStore.edit { it[AUTH_TOKEN] = token }
+        secretPrefs.edit().putString(SK_AUTH_TOKEN, token).apply()
     }
 
     suspend fun setStudentInfo(id: String, name: String) {
-        dataStore.edit {
-            it[STUDENT_ID] = id
-            it[STUDENT_NAME] = name
-        }
+        secretPrefs.edit().putString(SK_STUDENT_ID, id).apply()
+        dataStore.edit { it[STUDENT_NAME] = name }
     }
 
     suspend fun setWalletBalance(balance: Int) {
@@ -108,7 +116,15 @@ class PreferencesManager @Inject constructor(
         dataStore.edit { it[SETUP_COMPLETED] = value }
     }
 
-    private fun setDeviceId(id: String) = runBlocking {
-        dataStore.edit { it[DEVICE_ID] = id }
+    suspend fun clearCredentials() {
+        secretPrefs.edit()
+            .remove(SK_AUTH_TOKEN)
+            .remove(SK_STUDENT_ID)
+            .apply()
+        dataStore.edit {
+            it.remove(IS_LOGGED_IN)
+            it.remove(STUDENT_NAME)
+        }
     }
 }
+
