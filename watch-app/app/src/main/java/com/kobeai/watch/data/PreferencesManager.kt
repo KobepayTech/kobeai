@@ -52,6 +52,10 @@ class PreferencesManager @Inject constructor(
         private val SERVER_URL = stringPreferencesKey("server_url")
         private val AUDIO_ENABLED = booleanPreferencesKey("audio_enabled")
         private val KEYBOARD_ENABLED = booleanPreferencesKey("keyboard_enabled")
+        // Parent-controlled ad opt-out, mirrored from /v1/watch/settings on
+        // launch/resume. Defaults true so the UI matches the existing
+        // behaviour for watches that haven't synced yet.
+        private val ADS_ENABLED = booleanPreferencesKey("ads_enabled")
         private val SETUP_COMPLETED = booleanPreferencesKey("setup_completed")
 
         // Keys living in EncryptedSharedPreferences.
@@ -65,7 +69,12 @@ class PreferencesManager @Inject constructor(
     val walletBalance: Flow<Int> = dataStore.data.map { it[WALLET_BALANCE] ?: 0 }
     val audioEnabled: Flow<Boolean> = dataStore.data.map { it[AUDIO_ENABLED] ?: true }
     val keyboardEnabled: Flow<Boolean> = dataStore.data.map { it[KEYBOARD_ENABLED] ?: true }
+    val adsEnabled: Flow<Boolean> = dataStore.data.map { it[ADS_ENABLED] ?: true }
     val setupCompleted: Flow<Boolean> = dataStore.data.map { it[SETUP_COMPLETED] ?: false }
+
+    fun adsEnabledBlocking(): Boolean = runBlocking {
+        dataStore.data.map { it[ADS_ENABLED] ?: true }.firstOrNull() ?: true
+    }
 
     fun getAuthToken(): String? = secretPrefs.getString(SK_AUTH_TOKEN, null)
 
@@ -110,6 +119,10 @@ class PreferencesManager @Inject constructor(
 
     suspend fun setKeyboardEnabled(value: Boolean) {
         dataStore.edit { it[KEYBOARD_ENABLED] = value }
+    }
+
+    suspend fun setAdsEnabled(value: Boolean) {
+        dataStore.edit { it[ADS_ENABLED] = value }
     }
 
     suspend fun setSetupCompleted(value: Boolean) {

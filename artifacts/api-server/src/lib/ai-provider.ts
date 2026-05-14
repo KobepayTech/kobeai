@@ -49,8 +49,50 @@ function ollamaConfig(): { baseUrl: string; model: string; timeoutMs: number } {
   };
 }
 
+// Cap concurrent Ollama generations so a thundering herd of /watch/ask calls
+// can't exhaust the on-prem GPU. Excess callers wait briefly for a slot, then
+// fall back to canned answers via the `Slot` semaphore's timeout path.
+const OLLAMA_MAX_CONCURRENCY = Math.max(
+  1,
+  Number(process.env["OLLAMA_MAX_CONCURRENCY"] ?? 2),
+);
+const OLLAMA_QUEUE_WAIT_MS = Math.max(
+  0,
+  Number(process.env["OLLAMA_QUEUE_WAIT_MS"] ?? 2_000),
+);
+let inFlight = 0;
+const waiters: Array<{ resolve: () => void; timer: NodeJS.Timeout }> = [];
+async function acquireSlot(): Promise<boolean> {
+  if (inFlight < OLLAMA_MAX_CONCURRENCY) {
+    inFlight += 1;
+    return true;
+  }
+  return new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => {
+      const idx = waiters.findIndex((w) => w.timer === timer);
+      if (idx >= 0) waiters.splice(idx, 1);
+      resolve(false);
+    }, OLLAMA_QUEUE_WAIT_MS);
+    waiters.push({
+      resolve: () => {
+        clearTimeout(timer);
+        inFlight += 1;
+        resolve(true);
+      },
+      timer,
+    });
+  });
+}
+function releaseSlot(): void {
+  inFlight -= 1;
+  const next = waiters.shift();
+  if (next) next.resolve();
+}
+
 async function askOllama(question: string, systemOverride?: string): Promise<AskResult> {
   const { baseUrl, model, timeoutMs } = ollamaConfig();
+  const got = await acquireSlot();
+  if (!got) throw new Error("ollama_busy");
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -78,6 +120,7 @@ async function askOllama(question: string, systemOverride?: string): Promise<Ask
     return { answer, model, provider: "ollama" };
   } finally {
     clearTimeout(timer);
+    releaseSlot();
   }
 }
 

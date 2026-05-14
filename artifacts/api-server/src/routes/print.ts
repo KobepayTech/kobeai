@@ -8,6 +8,7 @@ import { requireAuth } from "../lib/auth";
 import { rateLimit } from "../lib/rate-limit";
 import { listDocumentsForStudent } from "../lib/student-documents";
 import { recordPrintJob } from "../lib/usage-counter";
+import { getActiveWatchHceSecret } from "../lib/watch-secret";
 import { Readable } from "node:stream";
 
 const router: IRouter = Router();
@@ -22,15 +23,14 @@ const HCE_PAYLOAD_MAX_AGE_MS = 60_000;
 const NODE_ENV = process.env["NODE_ENV"] ?? "development";
 const ALLOW_DEV_SECRETS = NODE_ENV === "development" || NODE_ENV === "test";
 const RAW_TAP_BOX_SECRET = process.env["TAP_BOX_SECRET"];
-const RAW_WATCH_HCE_SECRET = process.env["WATCH_HCE_SECRET"];
 if (!RAW_TAP_BOX_SECRET && !ALLOW_DEV_SECRETS) {
   throw new Error("TAP_BOX_SECRET must be set in non-development environments");
 }
-if (!RAW_WATCH_HCE_SECRET && !ALLOW_DEV_SECRETS) {
-  throw new Error("WATCH_HCE_SECRET must be set in non-development environments");
-}
+// WATCH_HCE_SECRET resolution is now per-tenant via getActiveWatchHceSecret()
+// — see lib/watch-secret.ts. The env-var fallback is still honoured for
+// legacy deploys; non-dev environments without either configured will throw
+// when /v1/print/pair tries to verify.
 const TAP_BOX_SECRET = RAW_TAP_BOX_SECRET ?? "dev-tap-box-secret";
-const WATCH_HCE_SECRET = RAW_WATCH_HCE_SECRET ?? "dev-watch-hce-secret";
 
 const store = getPrintStore();
 const objStore = new ObjectStorageService();
@@ -73,7 +73,7 @@ type WatchPayloadVerdict =
   | { ok: true }
   | { ok: false; reason: "bad_signature" | "stale" | "future" | "malformed" };
 
-function verifyWatchPayload(payload: WatchPayload, nowMs: number): WatchPayloadVerdict {
+async function verifyWatchPayload(payload: WatchPayload, nowMs: number): Promise<WatchPayloadVerdict> {
   if (
     typeof payload.student_id !== "string" ||
     typeof payload.watch_session_id !== "string" ||
@@ -83,8 +83,9 @@ function verifyWatchPayload(payload: WatchPayload, nowMs: number): WatchPayloadV
   ) {
     return { ok: false, reason: "malformed" };
   }
+  const { secret } = await getActiveWatchHceSecret();
   const mac = crypto
-    .createHmac("sha256", WATCH_HCE_SECRET)
+    .createHmac("sha256", secret)
     .update(
       `${payload.student_id}|${payload.watch_session_id}|${payload.nonce}|${payload.ts_ms}`,
     )
@@ -164,7 +165,7 @@ router.post("/v1/print/pair", pairLimiter, requireTapBox, async (req, res) => {
     signature: String(watch_payload.signature ?? ""),
   };
   const now = Date.now();
-  const verdict = verifyWatchPayload(wp, now);
+  const verdict = await verifyWatchPayload(wp, now);
   if (!verdict.ok) {
     res.status(401).json({ error: `invalid watch payload: ${verdict.reason}` });
     return;
@@ -247,8 +248,9 @@ router.post("/v1/print/submit", requireStudent, async (req, res) => {
     res.status(403).json({ error: "pairing belongs to another student" });
     return;
   }
+  const { secret: hceSecret } = await getActiveWatchHceSecret();
   const expected = crypto
-    .createHmac("sha256", WATCH_HCE_SECRET)
+    .createHmac("sha256", hceSecret)
     .update(`${pairing_id}|${document_id}`)
     .digest("hex");
   if (
@@ -355,7 +357,12 @@ router.get("/v1/print/jobs/:id/document", requireTapBox, async (req, res) => {
       res.status(404).json({ error: "document bytes missing in storage" });
       return;
     }
-    throw err;
+    req.log?.error({ err }, "failed to fetch document bytes for tap-box");
+    if (!res.headersSent) {
+      res.status(502).json({ error: "object_storage_unavailable" });
+    } else {
+      res.end();
+    }
   }
 });
 

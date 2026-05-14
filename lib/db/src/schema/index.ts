@@ -109,6 +109,10 @@ export const studentSettingsTable = pgTable("student_settings", {
   student_code: text("student_code").primaryKey(),
   audio_enabled: boolean("audio_enabled").notNull().default(true),
   keyboard_enabled: boolean("keyboard_enabled").notNull().default(true),
+  // Parent-controlled. When false the watch suppresses the AdHomeTile and
+  // AdInterstitialScreen. The build-time BuildConfig.ENABLE_ADS flag is the
+  // operator-level off-switch; this is the per-family runtime override.
+  ads_enabled: boolean("ads_enabled").notNull().default(true),
   updated_at: timestamp("updated_at").defaultNow().notNull(),
 });
 export type StudentSettings = typeof studentSettingsTable.$inferSelect;
@@ -156,6 +160,13 @@ export const tenantsTable = pgTable(
     contact_phone: text("contact_phone"),
     active: boolean("active").notNull().default(true),
     students_cap: integer("students_cap").notNull().default(500),
+    // 32-byte hex secret used to verify watch HCE payloads for this school.
+    // When null, the api-server falls back to the WATCH_HCE_SECRET env var
+    // (legacy single-tenant deploys). Rotated via the admin secret-rotate
+    // endpoint; rotation requires re-building the watch APK for this school
+    // with the new value passed as `-PWATCH_HCE_SECRET=...`.
+    watch_hce_secret: text("watch_hce_secret"),
+    watch_hce_secret_rotated_at: timestamp("watch_hce_secret_rotated_at"),
     last_sync_at: timestamp("last_sync_at"),
     last_sync_ip: text("last_sync_ip"),
     created_at: timestamp("created_at").defaultNow().notNull(),

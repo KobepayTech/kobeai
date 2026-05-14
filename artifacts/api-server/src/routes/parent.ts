@@ -288,6 +288,7 @@ router.get("/v1/parent/child/:childId/settings", async (req, res) => {
     student_code: child.student_code,
     audio_enabled: row?.audio_enabled ?? true,
     keyboard_enabled: row?.keyboard_enabled ?? true,
+    ads_enabled: row?.ads_enabled ?? true,
   });
 });
 
@@ -301,7 +302,8 @@ router.patch("/v1/parent/child/:childId/settings", async (req, res) => {
   const audio = typeof body.audio_enabled === "boolean" ? body.audio_enabled : undefined;
   const keyboard =
     typeof body.keyboard_enabled === "boolean" ? body.keyboard_enabled : undefined;
-  if (audio === undefined && keyboard === undefined) {
+  const ads = typeof body.ads_enabled === "boolean" ? body.ads_enabled : undefined;
+  if (audio === undefined && keyboard === undefined && ads === undefined) {
     return res.status(400).json({ error: "no_changes" });
   }
   // Upsert: insert with the provided values (defaulting the missing one to
@@ -313,12 +315,14 @@ router.patch("/v1/parent/child/:childId/settings", async (req, res) => {
       student_code: studentCode,
       audio_enabled: audio ?? true,
       keyboard_enabled: keyboard ?? true,
+      ads_enabled: ads ?? true,
     })
     .onConflictDoUpdate({
       target: studentSettingsTable.student_code,
       set: {
         ...(audio !== undefined ? { audio_enabled: audio } : {}),
         ...(keyboard !== undefined ? { keyboard_enabled: keyboard } : {}),
+        ...(ads !== undefined ? { ads_enabled: ads } : {}),
         updated_at: new Date(),
       },
     });
@@ -332,6 +336,7 @@ router.patch("/v1/parent/child/:childId/settings", async (req, res) => {
     student_code: studentCode,
     audio_enabled: row.audio_enabled,
     keyboard_enabled: row.keyboard_enabled,
+    ads_enabled: row.ads_enabled,
   });
 });
 
