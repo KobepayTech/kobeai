@@ -1,8 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    Scope intentionally narrow: this is a kid's wearable, not a managed
+    enterprise device. We need lock-task to run kiosk mode and force-lock for
+    classroom focus, but NEVER request wipe-data — a buggy or malicious code
+    path could otherwise factory-reset the watch with no user prompt when the
+    app is provisioned as device-owner.
+-->
 <device-admin xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-policies>
         <force-lock />
-        <wipe-data />
         <disable-camera />
         <set-lock-task-packages />
     </uses-policies>

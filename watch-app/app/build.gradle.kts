@@ -37,14 +37,40 @@ android {
         // If empty, the app falls back to system-CA trust without pinning.
         val apiPin = (project.findProperty("KOBEAI_API_PIN") as String?) ?: ""
         buildConfigField("String", "KOBEAI_API_PIN", "\"$apiPin\"")
+
+        // Build-time switch for the ad surface. Schools that don't want any
+        // ads on student watches can build with `-PENABLE_ADS=false` and the
+        // home tile + interstitial become no-ops without touching server
+        // settings. Default true so existing deployments don't change.
+        val enableAds = (project.findProperty("ENABLE_ADS") as String?) ?: "true"
+        buildConfigField("boolean", "ENABLE_ADS", enableAds)
     }
 
-    signingConfigs {
-        create("release") {
-            storeFile = file("keystore/kobeai-release-key.jks")
-            storePassword = "kobeai2024"
-            keyAlias = "kobeai"
-            keyPassword = "kobeai2024"
+    // Release signing reads from keystore.properties at the project root (or
+    // CI env vars), never from source. The properties file and the .jks are
+    // gitignored. Skipped when the file is absent so debug builds keep
+    // working without signing material.
+    val keystorePropsFile = rootProject.file("keystore.properties")
+    val keystoreProps = java.util.Properties().apply {
+        if (keystorePropsFile.exists()) keystorePropsFile.inputStream().use { load(it) }
+    }
+    val signingReady = keystorePropsFile.exists() ||
+        listOf("KOBEAI_KEYSTORE_FILE", "KOBEAI_KEYSTORE_PASSWORD",
+               "KOBEAI_KEY_ALIAS", "KOBEAI_KEY_PASSWORD").all { System.getenv(it) != null }
+    if (signingReady) {
+        signingConfigs {
+            create("release") {
+                storeFile = file(
+                    keystoreProps.getProperty("storeFile")
+                        ?: System.getenv("KOBEAI_KEYSTORE_FILE")
+                )
+                storePassword = keystoreProps.getProperty("storePassword")
+                    ?: System.getenv("KOBEAI_KEYSTORE_PASSWORD")
+                keyAlias = keystoreProps.getProperty("keyAlias")
+                    ?: System.getenv("KOBEAI_KEY_ALIAS")
+                keyPassword = keystoreProps.getProperty("keyPassword")
+                    ?: System.getenv("KOBEAI_KEY_PASSWORD")
+            }
         }
     }
 
@@ -56,8 +82,9 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            // Uncomment after creating the keystore in app/keystore/
-            // signingConfig = signingConfigs.getByName("release")
+            if (signingReady) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
         debug {
             isMinifyEnabled = false

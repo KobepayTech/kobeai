@@ -355,7 +355,12 @@ router.get("/v1/print/jobs/:id/document", requireTapBox, async (req, res) => {
       res.status(404).json({ error: "document bytes missing in storage" });
       return;
     }
-    throw err;
+    req.log?.error({ err }, "failed to fetch document bytes for tap-box");
+    if (!res.headersSent) {
+      res.status(502).json({ error: "object_storage_unavailable" });
+    } else {
+      res.end();
+    }
   }
 });
 

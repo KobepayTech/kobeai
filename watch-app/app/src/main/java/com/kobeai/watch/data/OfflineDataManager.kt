@@ -47,7 +47,13 @@ class OfflineDataManager @Inject constructor(
         )
         val queue = getQueue().toMutableList()
         queue.add(offline)
-        saveQueue(queue)
+        // Cap the queue so a long offline period doesn't fill watch storage.
+        // Drop oldest entries first — recent questions are likelier to still
+        // matter to the student when connectivity returns.
+        val trimmed = if (queue.size > MAX_QUEUE_SIZE) {
+            queue.takeLast(MAX_QUEUE_SIZE)
+        } else queue
+        saveQueue(trimmed)
     }
 
     suspend fun getPendingCount(): Int = getQueue().size
@@ -84,5 +90,9 @@ class OfflineDataManager @Inject constructor(
 
     private suspend fun saveQueue(queue: List<OfflineQuestion>) {
         dataStore.edit { it[queueKey] = gson.toJson(queue) }
+    }
+
+    companion object {
+        private const val MAX_QUEUE_SIZE = 100
     }
 }

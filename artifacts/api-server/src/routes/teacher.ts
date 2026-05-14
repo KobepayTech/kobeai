@@ -35,22 +35,46 @@ router.get("/v1/teacher/dashboard/stats", (_req, res) => {
 
 router.get("/v1/teacher/students", async (req, res) => {
   const { grade, search } = req.query;
-  const rows = await db.select().from(usersTable).where(eq(usersTable.role, "student"));
-  let students = rows.map((s, i) => ({
+  const limit = Math.min(200, Math.max(1, Number(req.query["limit"] ?? 50)));
+  const offset = Math.max(0, Number(req.query["offset"] ?? 0));
+
+  const filters = [eq(usersTable.role, "student")];
+  if (typeof grade === "string" && grade.length > 0) {
+    filters.push(eq(usersTable.grade, grade));
+  }
+  if (typeof search === "string" && search.length > 0) {
+    const like = `%${search.toLowerCase()}%`;
+    filters.push(
+      or(
+        sql`lower(${usersTable.name}) like ${like}`,
+        sql`lower(${usersTable.student_code}) like ${like}`,
+      )!,
+    );
+  }
+  const where = filters.length === 1 ? filters[0] : and(...filters);
+
+  const [{ count }] = await db
+    .select({ count: sql<number>`cast(count(*) as int)` })
+    .from(usersTable)
+    .where(where);
+  const rows = await db
+    .select()
+    .from(usersTable)
+    .where(where)
+    .orderBy(usersTable.id)
+    .limit(limit)
+    .offset(offset);
+
+  const students = rows.map((s, i) => ({
     id: String(s.id),
     student_id: s.student_code ?? `S${s.id}`,
     name: s.name,
     grade: s.grade ?? "Form 1",
-    points: 1000 + i * 100,
+    points: 1000 + (offset + i) * 100,
     status: "active",
     last_active: new Date().toISOString(),
   }));
-  if (typeof grade === "string") students = students.filter((s) => s.grade === grade);
-  if (typeof search === "string") {
-    const q = search.toLowerCase();
-    students = students.filter((s) => s.name.toLowerCase().includes(q) || s.student_id.toLowerCase().includes(q));
-  }
-  res.json({ students, total: students.length });
+  res.json({ students, total: count, limit, offset });
 });
 
 router.get("/v1/teacher/attendance", async (_req, res) => {

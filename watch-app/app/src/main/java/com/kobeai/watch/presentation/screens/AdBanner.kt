@@ -34,6 +34,7 @@ import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.Scaffold
 import androidx.wear.compose.material.Text
 import androidx.wear.compose.material.TimeText
+import com.kobeai.watch.BuildConfig
 import com.kobeai.watch.data.remote.AdEventRequest
 import com.kobeai.watch.data.remote.AdPayload
 import com.kobeai.watch.data.remote.ApiService
@@ -60,6 +61,12 @@ class AdViewModel @Inject constructor(private val api: ApiService) : ViewModel()
     fun load(placement: String) {
         if (loaded) return
         loaded = true
+        // Honour the build-time opt-out. Schools that disabled ads at build
+        // time get a no-op load — no impression tracked, no network call.
+        if (!BuildConfig.ENABLE_ADS) {
+            ad = null
+            return
+        }
         viewModelScope.launch {
             try {
                 val res = api.getAd(placement)

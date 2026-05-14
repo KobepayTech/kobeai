@@ -8,6 +8,8 @@ if (!RAW_SECRET && NODE_ENV !== "development" && NODE_ENV !== "test") {
 }
 const JWT_SECRET = RAW_SECRET ?? "dev-jwt-secret-do-not-use-in-prod";
 const JWT_TTL = "12h";
+const JWT_ISSUER = process.env["JWT_ISSUER"] ?? "kobeai-school-server";
+const JWT_AUDIENCE = process.env["JWT_AUDIENCE"] ?? "kobeai-clients";
 
 export type Principal = {
   sub: string; // string user id (or "dev:<developer_id>" for developers)
@@ -33,12 +35,20 @@ export function requireDeveloper() {
 }
 
 export function signToken(p: Omit<Principal, "sub">): string {
-  return jwt.sign({ ...p, sub: String(p.user_id) }, JWT_SECRET, { expiresIn: JWT_TTL });
+  return jwt.sign({ ...p, sub: String(p.user_id) }, JWT_SECRET, {
+    expiresIn: JWT_TTL,
+    issuer: JWT_ISSUER,
+    audience: JWT_AUDIENCE,
+  });
 }
 
 export function verifyToken(token: string): Principal | null {
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as Principal;
+    const decoded = jwt.verify(token, JWT_SECRET, {
+      issuer: JWT_ISSUER,
+      audience: JWT_AUDIENCE,
+      algorithms: ["HS256"],
+    }) as Principal;
     return decoded;
   } catch {
     return null;

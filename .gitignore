@@ -47,3 +47,9 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# Android signing material — never commit these
+watch-app/app/keystore/
+*.jks
+*.keystore
+keystore.properties

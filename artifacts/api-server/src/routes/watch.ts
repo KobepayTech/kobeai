@@ -7,6 +7,7 @@ import { requireAuth } from "../lib/auth";
 import { requireActiveSubscription } from "../lib/central-sync";
 import { recordAiQuery } from "../lib/usage-counter";
 import { drainPendingGrants } from "../lib/kp";
+import { rateLimit } from "../lib/rate-limit";
 
 const router = Router();
 
@@ -79,18 +80,40 @@ router.get("/v1/watch/subscription", async (req, res) => {
     expires_at: row.expires_at,
     days_until_expiry: days,
     monthly_price_tsh: row.monthly_price_tsh,
-    parent_phone: row.parent_phone,
+    parent_phone: maskPhone(row.parent_phone),
     severity,
     message,
   });
 });
+
+/**
+ * Mask all but the last 2 digits of a phone number. The watch is shared in
+ * classrooms; we don't want a glance at a peer's screen to leak the parent's
+ * full number. Returns null if the input is empty.
+ */
+function maskPhone(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const digits = raw.replace(/\D/g, "");
+  if (digits.length <= 2) return raw;
+  const tail = digits.slice(-2);
+  return `${"•".repeat(Math.max(3, digits.length - 2))} ${tail}`;
+}
 
 // Premium endpoints — gated by per-student subscription. The middleware always
 // sets `x-subscription-status` so the watch app can show a banner; it only
 // hard-blocks (HTTP 402) when ENFORCE_SUBSCRIPTIONS=true.
 const subGate = requireActiveSubscription();
 
-router.post("/v1/watch/ask", subGate, async (req, res) => {
+// Per-student throttle for /watch/ask. The Ollama tutor takes seconds and a
+// rapid-fire student would hog the on-prem GPU; cap at 30 questions/min.
+const askLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 30,
+  name: "watch-ask",
+  keyGenerator: (req) => req.auth?.student_id ?? req.ip ?? "unknown",
+});
+
+router.post("/v1/watch/ask", subGate, askLimiter, async (req, res) => {
   const parsed = AskQuestionBody.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Invalid request" });

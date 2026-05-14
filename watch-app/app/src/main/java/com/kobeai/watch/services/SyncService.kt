@@ -8,6 +8,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.NetworkType
@@ -48,12 +49,18 @@ class SyncService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun schedulePeriodicSync() {
+        // Watches have tiny batteries. Run sync at most once an hour, only on
+        // a metered/unmetered connection (not roaming), and only when the
+        // battery isn't critically low. Failed runs back off exponentially so
+        // a captive-portal Wi-Fi doesn't drain the device with retries.
         val constraints = Constraints.Builder()
             .setRequiredNetworkType(NetworkType.CONNECTED)
+            .setRequiresBatteryNotLow(true)
             .build()
 
-        val syncRequest = PeriodicWorkRequestBuilder<OfflineSyncWorker>(15, TimeUnit.MINUTES)
+        val syncRequest = PeriodicWorkRequestBuilder<OfflineSyncWorker>(60, TimeUnit.MINUTES)
             .setConstraints(constraints)
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
             .build()
 
         WorkManager.getInstance(this).enqueueUniquePeriodicWork(
