@@ -287,6 +287,7 @@ data class LeaderboardEntry(
 data class WatchSettingsResponse(
     val audio_enabled: Boolean,
     val keyboard_enabled: Boolean,
+    val ads_enabled: Boolean = true,
 )
 
 // --- Request / response models -------------------------------------------------

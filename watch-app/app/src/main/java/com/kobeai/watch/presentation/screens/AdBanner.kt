@@ -35,6 +35,7 @@ import androidx.wear.compose.material.Scaffold
 import androidx.wear.compose.material.Text
 import androidx.wear.compose.material.TimeText
 import com.kobeai.watch.BuildConfig
+import com.kobeai.watch.data.PreferencesManager
 import com.kobeai.watch.data.remote.AdEventRequest
 import com.kobeai.watch.data.remote.AdPayload
 import com.kobeai.watch.data.remote.ApiService
@@ -51,7 +52,10 @@ import javax.inject.Inject
  * (banner format) and the mini-app interstitial (interstitial format).
  */
 @HiltViewModel
-class AdViewModel @Inject constructor(private val api: ApiService) : ViewModel() {
+class AdViewModel @Inject constructor(
+    private val api: ApiService,
+    private val prefs: PreferencesManager,
+) : ViewModel() {
     var ad by mutableStateOf<AdPayload?>(null)
         private set
     var loaded by mutableStateOf(false)
@@ -61,9 +65,13 @@ class AdViewModel @Inject constructor(private val api: ApiService) : ViewModel()
     fun load(placement: String) {
         if (loaded) return
         loaded = true
-        // Honour the build-time opt-out. Schools that disabled ads at build
-        // time get a no-op load — no impression tracked, no network call.
-        if (!BuildConfig.ENABLE_ADS) {
+        // Two opt-outs gate this code path:
+        //   - BuildConfig.ENABLE_ADS: operator-level, baked into the APK
+        //   - prefs.adsEnabledBlocking(): parent-level, synced from
+        //     /v1/watch/settings.ads_enabled
+        // Either one being false means no impression is tracked and no
+        // network call is made.
+        if (!BuildConfig.ENABLE_ADS || !prefs.adsEnabledBlocking()) {
             ad = null
             return
         }

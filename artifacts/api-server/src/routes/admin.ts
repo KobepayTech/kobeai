@@ -1,6 +1,10 @@
 import { Router, type IRouter } from "express";
 import { askAI, getAiHealth } from "../lib/ai-provider";
 import { requireAuth } from "../lib/auth";
+import {
+  describeWatchHceSecret,
+  rotateWatchHceSecret,
+} from "../lib/watch-secret";
 
 const router: IRouter = Router();
 
@@ -8,6 +12,10 @@ const router: IRouter = Router();
 // /v1/admin/stats endpoint stays open to preserve the school-server admin
 // CLI workflow.
 const adminAuth = requireAuth(["admin", "teacher"]);
+
+// Rotating the HCE secret invalidates every existing watch APK for this
+// school until they're rebuilt, so restrict to actual admins.
+const adminOnly = requireAuth(["admin", "super_admin"]);
 
 const startedAt = Date.now();
 
@@ -97,6 +105,38 @@ router.post("/v1/admin/ai/test", adminAuth, async (req, res) => {
     ...result,
     latency_ms: Date.now() - startedAt,
   });
+});
+
+/**
+ * GET /api/v1/admin/watch-hce-secret
+ * Returns metadata about the current watch HCE secret WITHOUT revealing it.
+ * Use the fingerprint to confirm a freshly-rotated value made it onto the
+ * server before re-building APKs.
+ */
+router.get("/v1/admin/watch-hce-secret", adminOnly, async (_req, res) => {
+  res.json(await describeWatchHceSecret());
+});
+
+/**
+ * POST /api/v1/admin/watch-hce-secret/rotate
+ * Generates a new 32-byte hex secret, stores it on the tenant row, and
+ * returns the plaintext ONCE so the operator can pass it to the next watch
+ * APK build via `-PWATCH_HCE_SECRET=...`. Existing watches continue to fail
+ * /v1/print/pair with HTTP 401 ("bad_signature") until they're updated.
+ */
+router.post("/v1/admin/watch-hce-secret/rotate", adminOnly, async (_req, res) => {
+  try {
+    const { secret, tenant_id, rotated_at } = await rotateWatchHceSecret();
+    res.json({
+      secret,
+      tenant_id,
+      rotated_at: rotated_at.toISOString(),
+      warning: "Store this value now — it is not retrievable again. Rebuild the watch APK with -PWATCH_HCE_SECRET=<value>.",
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: "rotate_failed", detail: msg });
+  }
 });
 
 export default router;

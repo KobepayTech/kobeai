@@ -166,6 +166,7 @@ fun ChatScreen(
                 val s = vm.api.getWatchSettings("Bearer $token")
                 vm.prefs.setAudioEnabled(s.audio_enabled)
                 vm.prefs.setKeyboardEnabled(s.keyboard_enabled)
+                vm.prefs.setAdsEnabled(s.ads_enabled)
             }
         } catch (_: Exception) { /* offline / token expired — ignore */ }
     }

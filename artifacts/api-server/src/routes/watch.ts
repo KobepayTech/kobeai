@@ -172,6 +172,7 @@ router.get("/v1/watch/settings", async (req, res) => {
   res.json({
     audio_enabled: row?.audio_enabled ?? true,
     keyboard_enabled: row?.keyboard_enabled ?? true,
+    ads_enabled: row?.ads_enabled ?? true,
   });
 });
 
