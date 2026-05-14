@@ -44,6 +44,7 @@ import com.kobeai.watch.presentation.theme.MutedText
 import com.kobeai.watch.presentation.theme.Navy
 import com.kobeai.watch.presentation.theme.Primary
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -65,17 +66,21 @@ class AdViewModel @Inject constructor(
     fun load(placement: String) {
         if (loaded) return
         loaded = true
-        // Two opt-outs gate this code path:
-        //   - BuildConfig.ENABLE_ADS: operator-level, baked into the APK
-        //   - prefs.adsEnabledBlocking(): parent-level, synced from
-        //     /v1/watch/settings.ads_enabled
-        // Either one being false means no impression is tracked and no
-        // network call is made.
-        if (!BuildConfig.ENABLE_ADS || !prefs.adsEnabledBlocking()) {
+        // Build-time switch: schools that shipped APKs with -PENABLE_ADS=false
+        // never reach the network. Short-circuit here on the calling thread so
+        // we don't even spawn a coroutine.
+        if (!BuildConfig.ENABLE_ADS) {
             ad = null
             return
         }
         viewModelScope.launch {
+            // Runtime parent toggle (mirrored from /v1/watch/settings). Read
+            // inside the coroutine so we don't block the UI thread on DataStore.
+            val parentAllows = prefs.adsEnabled.firstOrNull() ?: true
+            if (!parentAllows) {
+                ad = null
+                return@launch
+            }
             try {
                 val res = api.getAd(placement)
                 ad = res.ad

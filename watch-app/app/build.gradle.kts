@@ -92,19 +92,6 @@ android {
         }
     }
 
-    // Refuse to produce a release APK with the dev HCE secret baked in.
-    afterEvaluate {
-        tasks.matching { it.name.startsWith("assembleRelease") || it.name.startsWith("bundleRelease") }
-            .configureEach {
-                doFirst {
-                    val secret = (project.findProperty("WATCH_HCE_SECRET") as String?)
-                    require(!secret.isNullOrBlank() && secret != "dev-watch-hce-secret") {
-                        "Refusing to build release: pass -PWATCH_HCE_SECRET=<random hex> matching the school server's WATCH_HCE_SECRET."
-                    }
-                }
-            }
-    }
-
     buildFeatures {
         compose = true
         buildConfig = true
@@ -121,6 +108,21 @@ android {
 
     kotlinOptions {
         jvmTarget = "17"
+    }
+}
+
+// Refuse to produce a release APK with the dev HCE secret baked in. Lives at
+// the project scope (not inside `android {}`) so `tasks` resolves cleanly.
+afterEvaluate {
+    tasks.matching {
+        it.name.startsWith("assembleRelease") || it.name.startsWith("bundleRelease")
+    }.configureEach {
+        doFirst {
+            val secret = (project.findProperty("WATCH_HCE_SECRET") as String?)
+            require(!secret.isNullOrBlank() && secret != "dev-watch-hce-secret") {
+                "Refusing to build release: pass -PWATCH_HCE_SECRET=<random hex> matching the school server's WATCH_HCE_SECRET."
+            }
+        }
     }
 }
 
