@@ -7,6 +7,8 @@ import quizzesRouter from "./quizzes";
 import walletRouter from "./wallet";
 import watchRouter from "./watch";
 import watchCompatRouter from "./watch-compat";
+import attendanceRouter from "./attendance";
+import tabletRouter from "./tablet";
 import parentRouter from "./parent";
 import parentPushRouter from "./parent-push";
 import adminRouter from "./admin";
@@ -34,6 +36,8 @@ router.use(walletRouter);
 // watchRouter's path-prefix `requireAuth` middleware would block it.
 router.use(watchCompatRouter);
 router.use(watchRouter);
+router.use(attendanceRouter);
+router.use(tabletRouter);
 router.use(parentRouter);
 router.use(parentPushRouter);
 router.use(adminRouter);
