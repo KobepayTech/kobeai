@@ -2,12 +2,10 @@ name: Watch App (Wear OS)
 
 on:
   push:
-    branches: [main]
     paths:
       - "watch-app/**"
       - ".github/workflows/watch-app.yml"
   pull_request:
-    branches: [main]
     paths:
       - "watch-app/**"
       - ".github/workflows/watch-app.yml"
