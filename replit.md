@@ -140,3 +140,212 @@ accepted by the ads-server's admin endpoints.
 - **Kotlin / Jetpack Compose**: Technologies for Wear OS watch app development.
 - **`x-tap-box-secret`**: Custom authentication mechanism for tap-box endpoints.
 - **JWT**: JSON Web Tokens for authentication.
+
+# Planned KobeAI Distributed Runtime
+
+This section records the agreed direction for extending KobeAI beyond a single Ollama host. The goal is to keep KobeAI's own application-level AI router in control while using proven open-source infrastructure for two lower-level jobs: distributing inference across spare computers and isolating agent execution.
+
+## NVIDIA Personal AI Router (PAIR)
+
+PAIR is software, not special NVIDIA server hardware. It is installed on participating computers on the same trusted local network and exposes inference endpoints that applications can use while PAIR decides which eligible machine serves each independent request.
+
+### Role in KobeAI
+
+KobeAI should **not** replace its model/intent router with PAIR. The responsibilities are different:
+
+- **KobeAI AI Router** decides *what* should answer: everyday assistant, reasoning model, coding model, vision model, retrieval flow, deterministic tool, or agent.
+- **PAIR** decides *where a selected model request should physically run* among paired machines that are online, have a compatible inference engine running, have the requested model available, and have suitable current capacity.
+- **Ollama / LM Studio** remain the actual local inference engines underneath PAIR.
+
+Proposed request path:
+
+```text
+Watch / Teacher Dashboard / School TV / API client
+                    |
+                    v
+              KobeAI AI Router
+          +---------+----------+
+          |                    |
+    deterministic tool      LLM request
+                               |
+                               v
+                         PAIR adapter
+                               |
+                 +-------------+-------------+
+                 |             |             |
+              School PC     Office PC     Spare PC
+              Ollama        Ollama        LM Studio
+```
+
+### Integration approach
+
+Do not vendor or copy the whole PAIR project into KobeAI. Add a provider/adapter so KobeAI can talk to the Ollama-compatible or OpenAI-compatible proxy endpoint exposed by PAIR. This keeps PAIR independently upgradable and allows one-machine KobeAI deployments to continue working without a cluster.
+
+Proposed provider order:
+
+```text
+KobeAI Router
+  -> PAIR when configured and healthy
+  -> direct local Ollama fallback
+  -> optional remote/server fallback when policy permits
+```
+
+Suggested configuration contract for the future implementation:
+
+- `AI_PROVIDER=pair|ollama|...`
+- `PAIR_BASE_URL` — configured PAIR proxy endpoint; no hard-coded port until implementation verifies the deployed PAIR version.
+- Existing `OLLAMA_BASE_URL`, `OLLAMA_MODEL`, and timeout settings remain valid as the direct-local fallback.
+- Health/status output should expose PAIR reachability, connected node count, model availability, selected provider, latency, and fallback reason without leaking private node details to students.
+
+### Important PAIR limitation
+
+PAIR distributes **independent inference requests**. It does not combine multiple GPUs into one larger logical GPU, pool VRAM, shard one model across several machines, or split one in-flight request across nodes. A model must fit on a single eligible machine. Multiple machines primarily improve concurrency, throughput, resilience, and utilization of otherwise idle compute.
+
+### Storage and package-size implications
+
+PAIR itself is small compared with AI model weights (installer/package size varies by operating system and release and is in the hundreds-of-megabytes class rather than multi-GB model size). Model files remain managed by the inference engines and can consume several GB each. KobeAI deployment planning must therefore separate:
+
+1. KobeAI application size.
+2. PAIR software size.
+3. Ollama/LM Studio engine size.
+4. AI model weight storage, which is normally the dominant disk requirement.
+
+A node only needs to store models it is expected to serve; the same model may be replicated to several nodes when load-sharing or failover is wanted.
+
+### Deployment modes
+
+- **Single machine**: KobeAI -> direct Ollama; PAIR optional.
+- **Small school cluster**: PAIR on the school server plus one or more spare RTX/AI-capable PCs on the LAN.
+- **Headless school server**: use PAIR's headless/terminal runtime rather than requiring its desktop UI.
+- **Mixed machines**: treat each node according to what its installed inference engine and memory can actually support; PAIR presence alone does not guarantee that a specific model will run on that machine.
+
+## Tencent Cloud CubeSandbox (Cube Sandbox)
+
+The Tencent project discussed as "CubeBox" is recorded here using its official open-source project name, **CubeSandbox / Cube Sandbox**. Its job is different from PAIR: it provides fast, hardware-isolated execution environments for AI agents and tool-running workloads.
+
+### Role in KobeAI
+
+CubeSandbox becomes the **agent execution layer**, not the model inference layer. When the KobeAI router decides an agent must execute code, manipulate temporary files, run a browser/tool workflow, or perform another untrusted/generated operation, KobeAI should create or reuse an isolated CubeSandbox environment and execute that work there.
+
+```text
+                    KobeAI AI Router
+                    /             \
+                   /               \
+          Model inference        Agent/tool task
+                |                     |
+              PAIR              CubeSandbox API
+                |                     |
+        Ollama / LM Studio        MicroVM sandbox
+                                      |
+                               code / tools / files
+```
+
+### Why it fits KobeAI
+
+- Hardware-isolated MicroVMs give generated code a stronger security boundary than running it directly in the KobeAI API process.
+- CubeSandbox is designed for rapid sandbox startup and high concurrency.
+- Snapshot/clone/rollback capabilities can support long-running school agents, repeatable tool environments, and recovery after a failed action.
+- E2B-compatible APIs make it possible to keep the KobeAI-facing sandbox adapter relatively portable.
+- Network/egress policy should be used so school agents only reach approved services and cannot freely expose secrets or scan the LAN.
+- Persistent school records, student profiles, credentials, and primary databases must remain outside disposable sandboxes. Sandboxes receive only the minimum scoped data required for a task.
+
+### Size clarification
+
+CubeSandbox's published sub-5-MB figure refers to **memory overhead per sandbox instance**, not the total installation size. A deployment also includes control-plane/runtime components, guest images/templates, storage, and any tools installed inside sandbox images. Capacity planning must not treat "<5 MB" as the software's install footprint.
+
+### Host/deployment assumptions
+
+CubeSandbox is primarily a Linux virtualization workload using KVM/RustVMM-style MicroVM infrastructure; production planning must verify KVM/PVM support on the intended school-server hardware or cloud/VPS environment. Newer releases also include broader deployment and architecture support, but KobeAI should gate the feature behind a host capability check rather than assume every Windows classroom PC can run the sandbox stack directly.
+
+## Combined KobeAI Architecture
+
+PAIR and CubeSandbox are complementary and should sit beneath KobeAI rather than replace KobeAI's own orchestration logic.
+
+```text
+Students / Teachers / Parents / School Displays / APIs
+                        |
+                        v
+                  KobeAI Gateway
+                        |
+                        v
+                  KobeAI AI Router
+        +---------------+----------------+
+        |               |                |
+  deterministic       inference       agent/tool
+      tools              |                |
+                         v                v
+                       PAIR          CubeSandbox
+                         |                |
+              +----------+------+     isolated
+              |          |      |      MicroVM
+           PC/node    PC/node PC/node     |
+           Ollama     Ollama  LM Studio   tools
+```
+
+The router remains responsible for intent classification, model selection, retrieval/tool decisions, safety policy, authentication, tenant boundaries, caching, and whether a request should stay local or use an approved remote fallback. PAIR handles physical inference placement. CubeSandbox handles isolated execution.
+
+## KobeAI Router Evolution
+
+The longer-term router should support the following behavior without forcing every request through the most expensive model:
+
+1. Classify the request and use deterministic code/tools when an LLM is unnecessary.
+2. Route normal conversation and tutoring to a fast everyday model.
+3. Route difficult reasoning to a reasoning model only when needed.
+4. Route programming tasks to a coder model.
+5. Route image/document understanding to a vision-capable model.
+6. Run retrieval only for requests that actually need school/library context.
+7. Execute independent tool or sub-agent work in parallel when safe.
+8. Stream tokens/results to clients rather than waiting for the entire response.
+9. Keep frequently used local models warm/resident where practical.
+10. Cache safe repeatable outputs and retrieval results.
+11. Record per-stage latency so the School AI page can show whether delays come from routing, queueing, model inference, retrieval, or tools.
+12. Use direct local Ollama when PAIR is absent; use PAIR automatically when a configured healthy cluster is available.
+13. Use remote/server inference only according to explicit school policy and only when local execution cannot satisfy the request.
+
+## Reliability and Security Rules
+
+- A PAIR outage must not make single-node KobeAI unusable; direct Ollama fallback remains available.
+- A CubeSandbox outage should disable only sandbox-dependent agent actions, not normal tutoring/chat.
+- Do not send student data to arbitrary spare nodes outside the trusted school cluster.
+- Pairing/cluster membership is an admin operation and should not be exposed to students.
+- Agent sandboxes receive short-lived scoped credentials rather than permanent database/API secrets.
+- All agent tool actions should be auditable with tenant, user, task, sandbox, start/end time, result, and error metadata.
+- Apply resource limits and timeouts so one agent cannot consume the entire school server.
+- Apply egress allowlists for agent workloads.
+- Keep human approval gates for actions that are financially consequential, destructive, externally publishing, or otherwise high impact.
+
+## Implementation Plan
+
+### Phase 1 — Provider abstraction
+- Refactor the current Ollama-only `askAI()` path behind a typed provider interface.
+- Preserve the existing Ollama provider and health check.
+- Add model capability metadata (chat, reasoning, code, vision, embeddings/retrieval).
+
+### Phase 2 — PAIR adapter
+- Add a PAIR provider using its compatible proxy API rather than embedding the PAIR source tree.
+- Add health/fallback logic and School AI admin diagnostics.
+- Test one-node, two-node, node-offline, missing-model, and overloaded-node scenarios.
+- Confirm streaming behavior end-to-end from PAIR through Express to the watch/dashboard clients.
+
+### Phase 3 — Router v2
+- Add intent/capability routing, parallel tool execution, caching, latency telemetry, and model-warmth awareness.
+- Avoid a second LLM pass when a deterministic router/tool result is sufficient.
+
+### Phase 4 — CubeSandbox adapter
+- Introduce a typed sandbox service interface.
+- Start with code execution and temporary-file workflows.
+- Add strict CPU/RAM/time/network limits and audit logs.
+- Keep persistent student/school data outside sandbox filesystems.
+
+### Phase 5 — Admin UX
+- Extend the Teacher/School AI status page to show provider health, PAIR cluster capacity, available models, queue/load indicators, sandbox capacity, recent failures, and fallback state.
+- Provide remediation actions to admins without exposing infrastructure controls to students.
+
+### Phase 6 — Packaging
+- Keep PAIR and CubeSandbox as independently versioned runtime dependencies/services rather than copying their source into the KobeAI application bundle.
+- The installer may offer them as optional components based on host capability and deployment mode.
+- Model downloads remain separate from the main application package so the core installer does not grow by many GB unnecessarily.
+
+## Licensing / Dependency Policy
+
+Both projects are open-source projects suitable for evaluation as external dependencies. Before shipping a KobeAI commercial installer that bundles or redistributes either project, pin reviewed versions, retain all required licenses/notices, review third-party notices, and perform security/license review as part of the release process. The preferred architecture is loose integration through documented local APIs, which reduces coupling and makes upgrades/rollback easier.
