@@ -1,0 +1,4 @@
+[submodule "services/kobevoice"]
+	path = services/kobevoice
+	url = https://github.com/KobepayTech/kobevoice.git
+	branch = claude/pipecat-integration-83g5ih
