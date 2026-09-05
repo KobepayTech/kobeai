@@ -7,6 +7,7 @@ import quizzesRouter from "./quizzes";
 import walletRouter from "./wallet";
 import watchRouter from "./watch";
 import watchCompatRouter from "./watch-compat";
+import voiceOpenAiModelsRouter from "./voice-openai-models";
 import voiceRouter from "./voice";
 import attendanceRouter from "./attendance";
 import tabletRouter from "./tablet";
@@ -37,6 +38,9 @@ router.use(walletRouter);
 // watchRouter's path-prefix `requireAuth` middleware would block it.
 router.use(watchCompatRouter);
 router.use(watchRouter);
+// The OpenAI model-list route is mounted first because LiveKit may call
+// models.list() while prewarming its LLM client before any chat completion.
+router.use(voiceOpenAiModelsRouter);
 router.use(voiceRouter);
 router.use(attendanceRouter);
 router.use(tabletRouter);
