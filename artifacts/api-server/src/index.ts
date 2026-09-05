@@ -5,6 +5,7 @@ import { seedCentralDemo } from "./lib/seed-central";
 import { seedStationeryDemo } from "./lib/seed-stationery";
 import { seedMiniApps } from "./lib/seed-miniapps";
 import { startCentralSync } from "./lib/central-sync";
+import { startPresenceMonitor } from "./lib/presence-monitor";
 import { startDailyDigest } from "./routes/parent-push";
 
 const rawPort = process.env["PORT"];
@@ -60,4 +61,5 @@ app.listen(port, async (err) => {
 
   startCentralSync();
   startDailyDigest();
+  startPresenceMonitor();
 });
