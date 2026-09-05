@@ -98,8 +98,54 @@ services:
       AI_PROVIDER: ${AI_PROVIDER:-canned}
       OLLAMA_BASE_URL: http://ollama:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-mistral:7b}
+      KOBEVISION_SHARED_SECRET: ${KOBEVISION_SHARED_SECRET}
+      SCHOOL_TIMEZONE: ${SCHOOL_TIMEZONE:-Africa/Dar_es_Salaam}
+      PRESENCE_CHECKPOINT_MINUTES: ${PRESENCE_CHECKPOINT_MINUTES:-30}
+      PRESENCE_MATCH_THRESHOLD: ${PRESENCE_MATCH_THRESHOLD:-0.86}
+      PRESENCE_EXPECTED_ZONE_LOOKBACK_MINUTES: ${PRESENCE_EXPECTED_ZONE_LOOKBACK_MINUTES:-10}
+      PRESENCE_CAMPUS_SEARCH_LOOKBACK_MINUTES: ${PRESENCE_CAMPUS_SEARCH_LOOKBACK_MINUTES:-30}
     ports:
       - "8000:8000"
+    networks: [kobeai]
+
+  # Local face detection + recognition. Model weights are intentionally not
+  # bundled: mount a properly licensed InsightFace-compatible model pack under
+  # ./data/vision/insightface/models/<VISION_MODEL_PACK>.
+  vision:
+    build:
+      context: ../../services/kobevision
+      dockerfile: Dockerfile
+    image: kobeai/vision:latest
+    container_name: kobeai-vision
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      KOBEAI_BASE_URL: http://backend:8000
+      KOBEVISION_SHARED_SECRET: ${KOBEVISION_SHARED_SECRET}
+      VISION_TEMPLATE_KEY: ${VISION_TEMPLATE_KEY}
+      VISION_MODEL_PACK: ${VISION_MODEL_PACK:-antelopev2}
+      VISION_MODEL_ROOT: /state/insightface
+      VISION_TEMPLATE_STORE: /state/templates.enc
+      VISION_EXECUTION_PROVIDER: ${VISION_EXECUTION_PROVIDER:-CPUExecutionProvider}
+      VISION_MATCH_THRESHOLD: ${VISION_FACE_MATCH_THRESHOLD:-0.60}
+      VISION_DETECTION_THRESHOLD: ${VISION_DETECTION_THRESHOLD:-0.60}
+      VISION_CAMERA_SAMPLE_FPS: ${VISION_CAMERA_SAMPLE_FPS:-1.0}
+      VISION_EVENT_DEDUP_SECONDS: ${VISION_EVENT_DEDUP_SECONDS:-15}
+      VISION_CAMERAS_JSON: ${VISION_CAMERAS_JSON:-[]}
+    volumes:
+      - ./data/vision:/state
+    ports:
+      - "8090:8090"
+    # For NVIDIA inference, set VISION_EXECUTION_PROVIDER=CUDAExecutionProvider
+    # and enable the device reservation below on hosts with NVIDIA Container Toolkit.
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
     networks: [kobeai]
 
   teacher:
