@@ -6,9 +6,9 @@ Pinned upstream source:
 
 - Repository: `KobepayTech/kobevoice`
 - Branch: `claude/pipecat-integration-83g5ih`
-- Commit: `852f8d06ad6d46eb4d2ac92916d23ff1b605cf3b`
+- Commit: `4758f163ffcd7bde5e9dc1b24b606b11369cf8e0`
 
-The upstream `main` branch currently contains only a minimal README, so KobeAI pins the latest functional voice-platform branch rather than the empty main branch.
+The upstream `main` branch currently contains only a minimal README, so KobeAI pins the functional voice-platform branch rather than the empty main branch.
 
 Clone KobeAI with its voice service:
 
@@ -38,7 +38,7 @@ KobeVoice is a real-time voice-agent/call-center stack built around LiveKit Agen
 - A Next.js supervisor dashboard foundation.
 - Local/self-hosted deployment through Docker Compose.
 
-KobeVoice should be the **voice/media layer** for KobeAI, not a second AI brain or a second school database.
+KobeVoice is the **voice/media layer** for KobeAI, not a second AI brain or a second school database.
 
 ## Target architecture
 
@@ -137,38 +137,37 @@ KobeVoice handles the speech session; KobeAI executes the authenticated school a
 
 Voice makes KobeAI useful when students do not have phones/computers. A classroom can use one computer, one TV, microphones and speakers while KobeAI remains available to the whole room.
 
-## Integration contract to implement
+## Implemented voice gateway
 
-KobeVoice should call a dedicated authenticated KobeAI voice gateway instead of directly calling its own LLM for school sessions.
-
-Recommended contract:
+KobeAI now has a dedicated authenticated voice gateway:
 
 ```text
 POST /api/v1/voice/session
 POST /api/v1/voice/turn
 POST /api/v1/voice/tool-result
 POST /api/v1/voice/session/:id/end
+GET  /api/v1/voice/health
 ```
 
-A voice turn should carry at minimum:
+A voice turn carries session identity, transcript text, language/channel context and an optional trace ID. The response includes answer text, language, human-approval/transfer flags, provider/model metadata and latency.
 
-- tenant/school identity;
-- authenticated user or room identity;
-- session ID;
-- transcript text;
-- language;
-- channel (`watch`, `classroom`, `phone`, `reception`, `teacher`);
-- optional class/student context only when permitted;
-- request timestamp and trace ID.
+For the LiveKit agent, KobeAI also exposes an OpenAI-compatible bridge:
 
-The response should contain:
+```text
+POST /api/v1/voice/openai/chat/completions
+```
 
-- answer text;
-- language;
-- optional tool/action result;
-- whether human approval is required;
-- whether the session should transfer to a human;
-- trace/provider/model metadata for admin diagnostics.
+The KobeVoice agent uses this bridge whenever `KOBEAI_BASE_URL` is configured. That means its LLM stage no longer needs to call Ollama directly for school deployments: LiveKit sends the transcript/conversation to KobeAI, and KobeAI decides how the answer is produced.
+
+Authentication uses the same long random shared secret on both sides:
+
+```text
+KobeAI API: KOBEVOICE_SHARED_SECRET=<secret>
+KobeVoice:  KOBEAI_VOICE_SECRET=<same-secret>
+KobeVoice:  KOBEAI_BASE_URL=http://<kobeai-api-host>:<port>
+```
+
+First-party KobeAI clients can also use normal KobeAI JWT authentication on the native voice endpoints.
 
 ## Local AI mode
 
@@ -183,6 +182,8 @@ Media     -> self-hosted LiveKit
 
 This keeps most classroom audio and inference on school-controlled infrastructure. Telephony still requires a carrier/SIP connection when real phone numbers are used.
 
+The current KobeAI `askAI()` provider returns a complete answer before the OpenAI bridge emits SSE, so the bridge is protocol-compatible but not yet true token streaming. Router v2 should make inference streaming end-to-end.
+
 ## Swahili
 
 KobeVoice's selected functional branch already supports configuring Swahili for the local speech stack. KobeAI should preserve detected/requested language across the whole turn so STT, router prompts and TTS do not disagree about language.
@@ -191,8 +192,9 @@ The LLM's Swahili quality must be tested separately from TTS pronunciation. A fl
 
 ## Security and privacy rules
 
-- Never expose the current trust-only tenant header model to the public internet; replace it with signed service/user authentication before production.
+- Never expose the current trust-only tenant header model to the public internet; use the KobeAI voice service credential/JWT boundary for this integration.
 - Audio recording must be opt-in/authorized according to the deployment policy; real-time voice does not require retaining every recording.
+- Raw audio is not stored by the KobeAI voice gateway; KobeVoice performs STT and sends text.
 - Student identity/context should be attached only when needed and authorized.
 - Classroom ambient listening needs clear teacher/admin controls and visible listening state.
 - Voice cloning requires explicit permission from the voice owner.
@@ -205,12 +207,12 @@ The LLM's Swahili quality must be tested separately from TTS pronunciation. A fl
 
 1. Initialize the submodule and run KobeVoice locally.
 2. Run its local LiveKit/STT/TTS stack and measure English + Swahili latency.
-3. Add the KobeAI `/api/v1/voice/*` gateway.
-4. Change the school-oriented KobeVoice agent to use KobeAI Router instead of its own direct Ollama call.
+3. **Done:** KobeAI `/api/v1/voice/*` authenticated gateway.
+4. **Done:** KobeVoice LLM can route through the KobeAI OpenAI-compatible bridge via `KOBEAI_BASE_URL`.
 5. Add watch/browser/classroom LiveKit clients.
 6. Connect PAIR behind the KobeAI Router for distributed LLM inference.
 7. Add CubeSandbox only for tool/agent actions that need isolated execution.
 8. Add SIP/GSM telephony after the local voice loop is stable.
-9. Replace temporary tenant authentication and configure jurisdiction-appropriate consent/calling rules before public calling.
+9. Configure jurisdiction-appropriate consent/calling rules before public calling.
 
-The immediate milestone should be a local end-to-end school voice loop: **microphone -> STT -> KobeAI Router -> TTS -> speaker**, with no telephony dependency.
+The immediate deployment test is a local end-to-end school voice loop: **microphone -> STT -> KobeAI Router -> TTS -> speaker**, with no telephony dependency.
