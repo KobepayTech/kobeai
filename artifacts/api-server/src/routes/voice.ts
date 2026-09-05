@@ -85,17 +85,24 @@ function secureEqual(a: string, b: string): boolean {
   return left.length === right.length && timingSafeEqual(left, right);
 }
 
-function bearerPrincipal(req: Request): Principal | null {
+function bearerToken(req: Request): string | null {
   const header = req.header("authorization") ?? req.header("Authorization");
   if (!header || !header.toLowerCase().startsWith("bearer ")) return null;
-  return verifyToken(header.slice(7).trim());
+  return header.slice(7).trim() || null;
+}
+
+function bearerPrincipal(req: Request): Principal | null {
+  const token = bearerToken(req);
+  return token ? verifyToken(token) : null;
 }
 
 /**
  * Voice requests can be authenticated in either of two ways:
  *
- * 1. KobeVoice service-to-service calls use x-kobevoice-secret. An optional
- *    bearer token may also be forwarded so the session carries the real user.
+ * 1. KobeVoice service-to-service calls use x-kobevoice-secret. For standard
+ *    OpenAI-compatible clients the same configured secret is also accepted as
+ *    a Bearer API key. An optional real KobeAI JWT may be forwarded on the
+ *    x-kobeai-user-authorization header in a later gateway/reverse-proxy layer.
  * 2. First-party KobeAI clients may call the gateway directly with a normal
  *    KobeAI bearer token.
  *
@@ -104,13 +111,19 @@ function bearerPrincipal(req: Request): Principal | null {
 function requireVoiceAuth(req: Request, res: Response, next: NextFunction): void {
   const configuredSecret = process.env["KOBEVOICE_SHARED_SECRET"];
   const suppliedSecret = req.header("x-kobevoice-secret");
+  const token = bearerToken(req);
   const principal = bearerPrincipal(req);
 
-  if (
+  const validHeaderSecret = Boolean(
     configuredSecret &&
-    suppliedSecret &&
-    secureEqual(configuredSecret, suppliedSecret)
-  ) {
+      suppliedSecret &&
+      secureEqual(configuredSecret, suppliedSecret),
+  );
+  const validBearerServiceSecret = Boolean(
+    configuredSecret && token && secureEqual(configuredSecret, token),
+  );
+
+  if (validHeaderSecret || validBearerServiceSecret) {
     if (principal) req.auth = principal;
     next();
     return;
@@ -125,7 +138,7 @@ function requireVoiceAuth(req: Request, res: Response, next: NextFunction): void
   res.status(401).json({
     error: "voice_auth_required",
     message:
-      "Use a KobeAI bearer token or the configured x-kobevoice-secret service credential.",
+      "Use a KobeAI bearer token or the configured KobeVoice service credential.",
   });
 }
 
@@ -202,6 +215,60 @@ function requestsHumanTransfer(transcript: string): boolean {
   );
 }
 
+function openAiContentText(content: unknown): string {
+  if (typeof content === "string") return content.trim();
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((part) => {
+      if (!part || typeof part !== "object") return "";
+      const rec = part as Record<string, unknown>;
+      if (
+        (rec["type"] === "text" || rec["type"] === "input_text") &&
+        typeof rec["text"] === "string"
+      ) {
+        return rec["text"].trim();
+      }
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function openAiPrompt(messages: unknown): {
+  prompt: string;
+  system: string | undefined;
+} | null {
+  if (!Array.isArray(messages) || messages.length === 0) return null;
+
+  const normalized = messages.slice(-24).flatMap((message) => {
+    if (!message || typeof message !== "object") return [];
+    const rec = message as Record<string, unknown>;
+    const role = typeof rec["role"] === "string" ? rec["role"] : "user";
+    const text = openAiContentText(rec["content"]);
+    return text ? [{ role, text }] : [];
+  });
+
+  const systemParts = normalized
+    .filter((m) => m.role === "system" || m.role === "developer")
+    .map((m) => m.text);
+  const dialogue = normalized
+    .filter((m) => m.role !== "system" && m.role !== "developer")
+    .map((m) => `${m.role}: ${m.text}`)
+    .join("\n")
+    .slice(-12_000);
+
+  if (!dialogue) return null;
+
+  const voiceSafety =
+    "You are answering through KobeVoice. Reply in plain text suitable for speech. " +
+    "Do not claim that a protected school record or external action changed unless a connected KobeAI tool explicitly confirmed it.";
+
+  return {
+    prompt: dialogue,
+    system: [...systemParts, voiceSafety].filter(Boolean).join("\n\n") || undefined,
+  };
+}
+
 const voiceTurnLimiter = rateLimit({
   windowMs: 60_000,
   max: Math.max(1, Number(process.env["VOICE_MAX_TURNS_PER_MINUTE"] ?? 60)),
@@ -210,7 +277,119 @@ const voiceTurnLimiter = rateLimit({
     safeText(req.body?.session_id, 100) ?? req.ip ?? "unknown",
 });
 
+const openAiVoiceLimiter = rateLimit({
+  windowMs: 60_000,
+  max: Math.max(1, Number(process.env["VOICE_MAX_TURNS_PER_MINUTE"] ?? 60)),
+  name: "voice-openai",
+});
+
 router.use("/v1/voice", requireVoiceAuth);
+
+/**
+ * OpenAI-compatible bridge for LiveKit/KobeVoice. This deliberately sits under
+ * the authenticated voice namespace rather than exposing a general public
+ * OpenAI clone. Streaming is SSE-compatible; the current KobeAI provider is
+ * non-streaming, so the answer is emitted as one content chunk for now.
+ */
+router.post(
+  "/v1/voice/openai/chat/completions",
+  openAiVoiceLimiter,
+  async (req, res) => {
+    const parsed = openAiPrompt(req.body?.messages);
+    if (!parsed) {
+      res.status(400).json({
+        error: {
+          message: "messages must contain at least one text message",
+          type: "invalid_request_error",
+        },
+      });
+      return;
+    }
+
+    const completionId = `chatcmpl_${randomUUID()}`;
+    const created = Math.floor(Date.now() / 1000);
+    const requestedModel =
+      optionalText(req.body?.model, 200) ?? "kobeai-router";
+
+    try {
+      recordAiQuery();
+      const result = await askAI(parsed.prompt, parsed.system);
+      const responseModel = result.model || requestedModel;
+
+      res.setHeader("X-KobeAI-Provider", result.provider);
+      res.setHeader("X-KobeAI-Model", responseModel);
+
+      if (req.body?.stream === true) {
+        res.status(200);
+        res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+        res.setHeader("Cache-Control", "no-cache, no-transform");
+        res.setHeader("Connection", "keep-alive");
+        res.flushHeaders();
+
+        const first = {
+          id: completionId,
+          object: "chat.completion.chunk",
+          created,
+          model: responseModel,
+          choices: [
+            {
+              index: 0,
+              delta: { role: "assistant", content: result.answer },
+              finish_reason: null,
+            },
+          ],
+        };
+        const done = {
+          id: completionId,
+          object: "chat.completion.chunk",
+          created,
+          model: responseModel,
+          choices: [
+            {
+              index: 0,
+              delta: {},
+              finish_reason: "stop",
+            },
+          ],
+        };
+        res.write(`data: ${JSON.stringify(first)}\n\n`);
+        res.write(`data: ${JSON.stringify(done)}\n\n`);
+        res.end("data: [DONE]\n\n");
+        return;
+      }
+
+      res.json({
+        id: completionId,
+        object: "chat.completion",
+        created,
+        model: responseModel,
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: result.answer },
+            finish_reason: "stop",
+          },
+        ],
+        usage: {
+          prompt_tokens: 0,
+          completion_tokens: 0,
+          total_tokens: 0,
+        },
+      });
+    } catch (err) {
+      logger.error(
+        { err: err instanceof Error ? err.message : String(err) },
+        "KobeVoice OpenAI bridge failed",
+      );
+      res.status(502).json({
+        error: {
+          message: "KobeAI router failed to answer the voice request",
+          type: "server_error",
+        },
+      });
+    }
+  },
+);
 
 /**
  * POST /v1/voice/session
