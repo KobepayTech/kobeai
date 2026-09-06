@@ -27,6 +27,7 @@ import centralStationeryRouter from "./central-stationery";
 import developerRouter from "./developer";
 import storeRouter from "./store";
 import moderationRouter from "./moderation";
+import learningProfileRouter from "./learning-profile";
 
 const router: IRouter = Router();
 
@@ -62,5 +63,6 @@ router.use(centralStationeryRouter);
 router.use(developerRouter);
 router.use(storeRouter);
 router.use(moderationRouter);
+router.use(learningProfileRouter);
 
 export default router;

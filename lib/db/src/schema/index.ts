@@ -117,6 +117,43 @@ export const studentSettingsTable = pgTable("student_settings", {
 });
 export type StudentSettings = typeof studentSettingsTable.$inferSelect;
 
+/**
+ * Aggregated learning profile per student — the "brain" surface for the K9
+ * school-AI experience. Values are AI-suggested but every field can be
+ * overridden or cleared by a teacher via the /v1/staff/learning-profile
+ * endpoints. The nightly rollup writes to `computed_*` shadow fields and the
+ * teacher's overrides live in `override_*` fields; the served view merges
+ * them, giving human corrections precedence.
+ *
+ * We deliberately keep the schema flat + JSONB-y instead of exploding every
+ * signal into its own table — this is a slowly-changing summary, not an
+ * event log. The upstream events (attendance, quizzes, questions) already
+ * live in their own tables and remain the source of truth.
+ */
+export const studentLearningProfileTable = pgTable("student_learning_profile", {
+  student_code: text("student_code").primaryKey(),
+  student_user_id: integer("student_user_id").references(() => usersTable.id, {
+    onDelete: "cascade",
+  }),
+  // Static / low-cadence facts. Birthday drives K9 birthday automation.
+  birthday: text("birthday"), // "MM-DD" — year-agnostic for classroom celebrations
+  // Rolled-up learning signals (nightly cron). `topics_*` are string arrays.
+  computed_topics_strong: jsonb("computed_topics_strong").notNull().default(sql`'[]'::jsonb`),
+  computed_topics_weak: jsonb("computed_topics_weak").notNull().default(sql`'[]'::jsonb`),
+  computed_questions_asked_count: integer("computed_questions_asked_count").notNull().default(0),
+  computed_achievements: jsonb("computed_achievements").notNull().default(sql`'[]'::jsonb`),
+  computed_attendance_rate: integer("computed_attendance_rate"), // 0-100
+  // Teacher overrides — the merged view prefers these when non-null.
+  override_topics_strong: jsonb("override_topics_strong"),
+  override_topics_weak: jsonb("override_topics_weak"),
+  override_achievements: jsonb("override_achievements"),
+  override_notes: text("override_notes"),
+  updated_by: integer("updated_by"), // teacher user id of the last edit
+  computed_at: timestamp("computed_at"),
+  updated_at: timestamp("updated_at").defaultNow().notNull(),
+});
+export type StudentLearningProfile = typeof studentLearningProfileTable.$inferSelect;
+
 export const printJobsTable = pgTable("print_jobs", {
   id: serial("id").primaryKey(),
   job_ref: text("job_ref").notNull().unique(),
