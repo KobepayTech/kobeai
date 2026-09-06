@@ -99,6 +99,7 @@ services:
       OLLAMA_BASE_URL: http://ollama:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-mistral:7b}
       KOBEVISION_SHARED_SECRET: ${KOBEVISION_SHARED_SECRET}
+      K9_SHARED_SECRET: ${K9_SHARED_SECRET}
       SCHOOL_TIMEZONE: ${SCHOOL_TIMEZONE:-Africa/Dar_es_Salaam}
       PRESENCE_CHECKPOINT_MINUTES: ${PRESENCE_CHECKPOINT_MINUTES:-30}
       PRESENCE_MATCH_THRESHOLD: ${PRESENCE_MATCH_THRESHOLD:-0.86}
@@ -147,6 +148,43 @@ services:
     #           count: 1
     #           capabilities: [gpu]
     networks: [kobeai]
+
+  # K-9 sees the physical school LAN and discovers/fingerprints cameras, DVRs,
+  # NVRs and other devices. Host networking is required for ARP/ping discovery.
+  # The dashboard stays loopback-only because it exposes host-level audit tools.
+  k9:
+    build:
+      context: ../../services/k9-network
+      dockerfile: Dockerfile
+    image: kobeai/k9:latest
+    container_name: kobeai-k9
+    restart: unless-stopped
+    network_mode: host
+    command: ["--web", "--bind", "127.0.0.1", "--no-open"]
+    volumes:
+      - ./data/k9:/data
+
+  # Periodically runs K-9's machine-readable scanner and syncs the resulting LAN
+  # inventory into the authenticated KobeAI admin API. It does not run K-9's
+  # password-testing or other active audit tiers automatically.
+  k9-sync:
+    build:
+      context: ../..
+      dockerfile: services/k9-bridge/Dockerfile
+    image: kobeai/k9-sync:latest
+    container_name: kobeai-k9-sync
+    restart: unless-stopped
+    depends_on:
+      - backend
+    network_mode: host
+    environment:
+      KOBEAI_BASE_URL: http://127.0.0.1:8000
+      K9_SHARED_SECRET: ${K9_SHARED_SECRET}
+      K9_NETWORK: ${K9_NETWORK:-}
+      K9_SCAN_MODE: ${K9_SCAN_MODE:-quick}
+      K9_SYNC_INTERVAL_SECONDS: ${K9_SYNC_INTERVAL_SECONDS:-300}
+    volumes:
+      - ./data/k9-sync:/data
 
   teacher:
     build:
