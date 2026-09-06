@@ -6,6 +6,7 @@ import { Layout } from "@/components/layout";
 import { Card } from "@/components/ui/card";
 import { RenewalBanner } from "@/components/renewal-banner";
 import { AdBanner } from "@/components/ad-banner";
+import { SchoolDayCard } from "@/components/school-day";
 import { Star, TrendingUp, ArrowRight, UserPlus, Package } from "lucide-react";
 
 export default function Dashboard() {
@@ -99,13 +100,15 @@ export default function Dashboard() {
                   <p className="text-sm text-gray-500">Wallet Balance</p>
                   <p className="text-lg font-bold text-gray-900">TSh {child.balance.toLocaleString()}</p>
                 </div>
-                <button 
+                <button
                   onClick={() => setLocation('/wallet')}
                   className="w-10 h-10 bg-white rounded-full flex items-center justify-center text-primary shadow-sm hover:bg-primary hover:text-white transition-colors"
                 >
                   <ArrowRight className="w-5 h-5" />
                 </button>
               </div>
+
+              <SchoolDayCard childId={child.id} />
             </Card>
           ))
         )}

@@ -9,8 +9,10 @@ import {
   usersTable,
 } from "@workspace/db";
 import { eq, inArray, desc } from "drizzle-orm";
+import { pool } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 import { listDocumentsForStudent } from "../lib/student-documents";
+import { ensurePresenceTables, presenceConfig } from "../lib/presence-monitor";
 
 const router = Router();
 
@@ -266,6 +268,177 @@ router.get("/v1/parent/child/:childId/print-history", async (req, res) => {
       created_at: (r.created_at as Date).toISOString(),
       completed_at: r.completed_at ? (r.completed_at as Date).toISOString() : null,
     })),
+  });
+});
+
+/**
+ * GET /v1/parent/child/:childId/school-day
+ * Parent-friendly summary of today: arrival + departure gate sightings, and
+ * a per-lesson list showing whether each period is accounted for. Backed by
+ * student_presence_events (raw sightings) and presence_checkpoint_results
+ * (timetable-aware decisions from the 30-minute checkpoints).
+ *
+ * Deliberately does NOT expose live camera positions — the design keeps
+ * parents on summaries, not surveillance.
+ */
+router.get("/v1/parent/child/:childId/school-day", async (req, res) => {
+  const parentId = parentIdOr401(req, res);
+  if (parentId == null) return;
+  const child = await resolveOwnedChild(parentId, String(req.params["childId"]));
+  if (!child) {
+    res.status(404).json({ error: "Child not found" });
+    return;
+  }
+  await ensurePresenceTables();
+  const tz = presenceConfig.schoolTimezone;
+
+  // Arrival = first sighting today. Departure = last sighting today, but only
+  // if the school day has "ended" from this student's perspective (last
+  // timetable period is over). We compute both in one round-trip.
+  const bookends = await pool.query(
+    `WITH today_events AS (
+       SELECT e.captured_at, e.camera_id, z.name AS zone_name, z.zone_type
+       FROM student_presence_events e
+       LEFT JOIN campus_zones z ON z.id = e.zone_id
+       WHERE e.student_code = $1
+         AND (e.captured_at AT TIME ZONE $2)::date = (NOW() AT TIME ZONE $2)::date
+     )
+     SELECT
+       (SELECT row_to_json(t.*) FROM (
+          SELECT captured_at, camera_id, zone_name, zone_type
+          FROM today_events ORDER BY captured_at ASC LIMIT 1
+        ) t) AS arrival,
+       (SELECT row_to_json(t.*) FROM (
+          SELECT captured_at, camera_id, zone_name, zone_type
+          FROM today_events ORDER BY captured_at DESC LIMIT 1
+        ) t) AS departure_candidate,
+       (SELECT COUNT(*)::int FROM today_events) AS sightings_today`,
+    [child.student_code, tz],
+  );
+  const arrival = bookends.rows[0]?.arrival ?? null;
+  const departureCandidate = bookends.rows[0]?.departure_candidate ?? null;
+  const sightings_today: number = bookends.rows[0]?.sightings_today ?? 0;
+
+  // Only surface a "departure" once the school day is actually over for this
+  // student — otherwise a mid-day corridor sighting looks like they left.
+  const dayEndInfo = await pool.query(
+    `SELECT COALESCE(MAX(tp.end_minute), 0)::int AS last_end_minute
+     FROM timetable_periods tp
+     INNER JOIN class_memberships cm ON cm.class_id = tp.class_id
+     INNER JOIN users u ON u.id = cm.student_id
+     WHERE u.student_code = $1
+       AND tp.day_of_week = EXTRACT(ISODOW FROM (NOW() AT TIME ZONE $2))::int`,
+    [child.student_code, tz],
+  );
+  const lastEndMinute: number = dayEndInfo.rows[0]?.last_end_minute ?? 0;
+  const nowMinutes = await pool.query(
+    `SELECT (EXTRACT(HOUR FROM (NOW() AT TIME ZONE $1)) * 60
+             + EXTRACT(MINUTE FROM (NOW() AT TIME ZONE $1)))::int AS m`,
+    [tz],
+  );
+  const nowMinuteOfDay: number = nowMinutes.rows[0]?.m ?? 0;
+  const dayIsOver = lastEndMinute > 0 && nowMinuteOfDay >= lastEndMinute;
+  const departure = dayIsOver ? departureCandidate : null;
+
+  // Per-lesson accounted-for. Left-join today's periods against the most
+  // recent checkpoint result for each (period_id) for this student — a period
+  // that hasn't had a checkpoint yet returns status=null (pending).
+  const lessons = await pool.query(
+    `WITH todays_periods AS (
+       SELECT tp.id AS period_id, tp.subject, tp.start_minute, tp.end_minute,
+              c.name AS class_name, tp.room
+       FROM timetable_periods tp
+       INNER JOIN classes c ON c.id = tp.class_id
+       INNER JOIN class_memberships cm ON cm.class_id = tp.class_id
+       INNER JOIN users u ON u.id = cm.student_id
+       WHERE u.student_code = $1
+         AND tp.day_of_week = EXTRACT(ISODOW FROM (NOW() AT TIME ZONE $2))::int
+     ),
+     latest_result AS (
+       SELECT DISTINCT ON (r.period_id) r.period_id, r.status,
+              r.actual_seen_at, ez.name AS expected_zone_name,
+              az.name AS actual_zone_name
+       FROM presence_checkpoint_results r
+       INNER JOIN presence_checkpoints cp ON cp.id = r.checkpoint_id
+       LEFT JOIN campus_zones ez ON ez.id = r.expected_zone_id
+       LEFT JOIN campus_zones az ON az.id = r.actual_zone_id
+       WHERE r.student_code = $1
+         AND cp.school_date = (NOW() AT TIME ZONE $2)::date
+       ORDER BY r.period_id, cp.run_at DESC
+     )
+     SELECT tp.period_id, tp.subject, tp.class_name, tp.room,
+            tp.start_minute, tp.end_minute,
+            lr.status, lr.actual_seen_at,
+            lr.expected_zone_name, lr.actual_zone_name
+     FROM todays_periods tp
+     LEFT JOIN latest_result lr ON lr.period_id = tp.period_id
+     ORDER BY tp.start_minute`,
+    [child.student_code, tz],
+  );
+
+  type LessonRow = {
+    period_id: number;
+    subject: string;
+    class_name: string;
+    room: string | null;
+    start_minute: number;
+    end_minute: number;
+    status: string | null;
+    actual_seen_at: string | null;
+    expected_zone_name: string | null;
+    actual_zone_name: string | null;
+  };
+  const lessonRows = lessons.rows as LessonRow[];
+
+  const accountedFor = lessonRows.filter(
+    (l) => l.status === "on_schedule" || l.status === "low_confidence" || l.status === "wrong_location",
+  ).length;
+  const coverageIssues = lessonRows.filter((l) => l.status === "insufficient_camera_coverage").length;
+  const notSeen = lessonRows.filter((l) => l.status === "not_seen").length;
+  const pending = lessonRows.filter((l) => l.status === null).length;
+
+  res.json({
+    student_code: child.student_code,
+    student_name: child.name,
+    school_date: bookends.rows[0]
+      ? (new Date().toLocaleDateString("en-CA", { timeZone: tz }))
+      : null,
+    arrival: arrival
+      ? {
+          at: arrival.captured_at,
+          zone_name: arrival.zone_name ?? arrival.zone_type ?? null,
+          camera_id: arrival.camera_id,
+        }
+      : null,
+    departure: departure
+      ? {
+          at: departure.captured_at,
+          zone_name: departure.zone_name ?? departure.zone_type ?? null,
+          camera_id: departure.camera_id,
+        }
+      : null,
+    lessons: lessonRows.map((l) => ({
+      period_id: l.period_id,
+      subject: l.subject,
+      class_name: l.class_name,
+      room: l.room,
+      start_minute: l.start_minute,
+      end_minute: l.end_minute,
+      status: l.status,
+      seen_at: l.actual_seen_at,
+      expected_zone_name: l.expected_zone_name,
+      seen_zone_name: l.actual_zone_name,
+      pending: l.status === null,
+    })),
+    summary: {
+      total_periods_today: lessonRows.length,
+      accounted_for: accountedFor,
+      pending,
+      not_seen: notSeen,
+      camera_coverage_issues: coverageIssues,
+      sightings_today,
+      day_is_over: dayIsOver,
+    },
   });
 });
 
