@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=K-9
+GenericName=Network Device Scanner
+Comment=See every device on the network you're on and flag cameras, mics & unknown devices
+Exec=/home/nyfe/K-9/k9-run.sh
+Icon=/home/nyfe/K-9/assets/K-9-logo.png
+Terminal=true
+Categories=Network;Security;System;
+Keywords=network;scanner;devices;camera;security;wifi;lan;
+StartupNotify=true

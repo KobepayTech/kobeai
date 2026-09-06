@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "k9"
+version = "1.0.0"
+description = "Zero-dependency, pure-Python LAN scanner — find every device on your network and flag the ones to look at twice."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Nyfe" }]
+keywords = [
+  "network-scanner", "lan-scanner", "network-security", "network-discovery",
+  "device-discovery", "iot-security", "homelab", "security-tools",
+]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: MacOS :: MacOS X",
+  "Operating System :: Microsoft :: Windows",
+  "Environment :: Console",
+  "Environment :: Web Environment",
+  "Topic :: System :: Networking :: Monitoring",
+  "Topic :: Security",
+]
+
+[project.urls]
+Homepage = "https://github.com/nyfeblade/K-9"
+Repository = "https://github.com/nyfeblade/K-9"
+Issues = "https://github.com/nyfeblade/K-9/issues"
+
+# This is what creates the `k9` command on your PATH after `pipx install .`
+[project.scripts]
+k9 = "k9.cli:main"
+
+[tool.setuptools]
+packages = ["k9"]
+py-modules = []                  # the root k9.py is the no-install launcher, NOT a packaged module
+
+[tool.setuptools.package-data]
+k9 = ["data/*"]                  # bundled offline OUI database
