@@ -253,9 +253,12 @@ export function startLearningProfileScheduler(): void {
   if (schedulerStarted) return;
   schedulerStarted = true;
 
-  ensureLearningProfileTables().catch((err) =>
-    logger.error({ err }, "learning-profile tables initialization failed"),
-  );
+  ensureLearningProfileTables()
+    .then(() => ensureBirthdayCelebrationsTable())
+    // Seed today's birthday celebrations at startup so a server that came
+    // up after midnight still surfaces them without waiting for the timer.
+    .then(() => ensureTodaysBirthdayCelebrations())
+    .catch((err) => logger.error({ err }, "learning-profile init failed"));
 
   const scheduleNext = () => {
     schedulerTimer = setTimeout(async () => {
@@ -264,9 +267,14 @@ export function startLearningProfileScheduler(): void {
         logger.info(outcome, "learning-profile nightly rollup completed");
       } catch (err) {
         logger.error({ err }, "learning-profile nightly rollup failed");
-      } finally {
-        scheduleNext();
       }
+      try {
+        const seeded = await ensureTodaysBirthdayCelebrations();
+        logger.info({ seeded }, "birthday celebrations seeded");
+      } catch (err) {
+        logger.error({ err }, "birthday celebrations seed failed");
+      }
+      scheduleNext();
     }, ROLLUP_INTERVAL_MS);
     schedulerTimer.unref();
   };
@@ -305,4 +313,179 @@ export async function studentsWithBirthdayToday(): Promise<
     student_name: r.student_name,
     birthday: r.birthday,
   }));
+}
+
+// ---------------------------------------------------------------------------
+// Birthday celebrations lifecycle
+// ---------------------------------------------------------------------------
+
+let celebrationsReady: Promise<void> | null = null;
+
+export function ensureBirthdayCelebrationsTable(): Promise<void> {
+  if (!celebrationsReady) {
+    celebrationsReady = (async () => {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS birthday_celebrations (
+          id BIGSERIAL PRIMARY KEY,
+          student_code TEXT NOT NULL,
+          celebration_date TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending',
+          approved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          approved_at TIMESTAMPTZ,
+          played_at TIMESTAMPTZ,
+          played_by_kiosk TEXT,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `);
+      await pool.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS birthday_celebrations_student_date_uk
+          ON birthday_celebrations (student_code, celebration_date)
+      `);
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS birthday_celebrations_date_idx
+          ON birthday_celebrations (celebration_date)
+      `);
+    })().catch((err) => {
+      celebrationsReady = null;
+      throw err;
+    });
+  }
+  return celebrationsReady;
+}
+
+async function schoolToday(): Promise<string> {
+  const row = await pool.query(
+    `SELECT TO_CHAR((NOW() AT TIME ZONE $1)::date, 'YYYY-MM-DD') AS d`,
+    [presenceConfig.schoolTimezone],
+  );
+  return row.rows[0].d as string;
+}
+
+/**
+ * Seed pending birthday_celebration rows for every student whose birthday
+ * matches today. Idempotent (unique on student_code + celebration_date).
+ */
+export async function ensureTodaysBirthdayCelebrations(): Promise<number> {
+  await ensureLearningProfileTables();
+  await ensureBirthdayCelebrationsTable();
+  const today = await schoolToday();
+  const birthdays = await studentsWithBirthdayToday();
+  let inserted = 0;
+  for (const b of birthdays) {
+    const result = await pool.query(
+      `INSERT INTO birthday_celebrations (student_code, celebration_date, status)
+       VALUES ($1, $2, 'pending')
+       ON CONFLICT (student_code, celebration_date) DO NOTHING
+       RETURNING id`,
+      [b.student_code, today],
+    );
+    if (result.rows.length > 0) inserted += 1;
+  }
+  if (inserted > 0) {
+    logger.info({ inserted, today }, "seeded pending birthday celebrations");
+  }
+  return inserted;
+}
+
+export type CelebrationRow = {
+  id: number;
+  student_code: string;
+  student_name: string | null;
+  birthday: string;
+  celebration_date: string;
+  status: "pending" | "approved" | "dismissed" | "played";
+  approved_at: string | null;
+  played_at: string | null;
+  played_by_kiosk: string | null;
+};
+
+export async function listTodaysCelebrations(): Promise<CelebrationRow[]> {
+  await ensureBirthdayCelebrationsTable();
+  const today = await schoolToday();
+  const rows = await pool.query(
+    `SELECT bc.id, bc.student_code, bc.celebration_date, bc.status,
+            bc.approved_at, bc.played_at, bc.played_by_kiosk,
+            u.name AS student_name, lp.birthday
+     FROM birthday_celebrations bc
+     LEFT JOIN users u ON u.student_code = bc.student_code
+     LEFT JOIN student_learning_profile lp ON lp.student_code = bc.student_code
+     WHERE bc.celebration_date = $1
+     ORDER BY u.name`,
+    [today],
+  );
+  return rows.rows.map((r) => ({
+    id: Number(r.id),
+    student_code: r.student_code,
+    student_name: r.student_name ?? null,
+    birthday: r.birthday ?? "",
+    celebration_date: r.celebration_date,
+    status: r.status,
+    approved_at: r.approved_at ? new Date(r.approved_at).toISOString() : null,
+    played_at: r.played_at ? new Date(r.played_at).toISOString() : null,
+    played_by_kiosk: r.played_by_kiosk ?? null,
+  }));
+}
+
+export async function setCelebrationStatus(args: {
+  studentCode: string;
+  newStatus: "approved" | "dismissed";
+  approvedByUserId: number | null;
+}): Promise<CelebrationRow | null> {
+  await ensureBirthdayCelebrationsTable();
+  const today = await schoolToday();
+  const result = await pool.query(
+    `UPDATE birthday_celebrations
+     SET status = $3,
+         approved_by = CASE WHEN $3 = 'approved' THEN $4 ELSE approved_by END,
+         approved_at = CASE WHEN $3 = 'approved' THEN NOW() ELSE approved_at END
+     WHERE student_code = $1 AND celebration_date = $2
+     RETURNING id`,
+    [args.studentCode, today, args.newStatus, args.approvedByUserId],
+  );
+  if (result.rows.length === 0) return null;
+  const list = await listTodaysCelebrations();
+  return list.find((c) => c.student_code === args.studentCode) ?? null;
+}
+
+/**
+ * Claim the next approved-but-unplayed celebration for a classroom kiosk.
+ * Uses SELECT ... FOR UPDATE SKIP LOCKED so two kiosks polling at once
+ * can't both claim the same celebration. Returns null when there's nothing
+ * pending for this school-day.
+ */
+export async function claimPendingCelebrationForKiosk(kioskId: string): Promise<CelebrationRow | null> {
+  await ensureBirthdayCelebrationsTable();
+  const today = await schoolToday();
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const picked = await client.query(
+      `SELECT id, student_code
+       FROM birthday_celebrations
+       WHERE celebration_date = $1 AND status = 'approved'
+       ORDER BY approved_at ASC
+       FOR UPDATE SKIP LOCKED
+       LIMIT 1`,
+      [today],
+    );
+    if (picked.rows.length === 0) {
+      await client.query("COMMIT");
+      return null;
+    }
+    const id: number = picked.rows[0].id;
+    await client.query(
+      `UPDATE birthday_celebrations
+       SET status = 'played', played_at = NOW(), played_by_kiosk = $2
+       WHERE id = $1`,
+      [id, kioskId],
+    );
+    await client.query("COMMIT");
+    const list = await listTodaysCelebrations();
+    return list.find((c) => c.id === id) ?? null;
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw err;
+  } finally {
+    client.release();
+  }
 }

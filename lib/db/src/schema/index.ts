@@ -154,6 +154,39 @@ export const studentLearningProfileTable = pgTable("student_learning_profile", {
 });
 export type StudentLearningProfile = typeof studentLearningProfileTable.$inferSelect;
 
+/**
+ * One row per (student, calendar day) when a birthday is detected. Seeded
+ * by the daily birthday-ensure job. Teachers approve or dismiss; when
+ * approved, the classroom kiosk polls `/v1/classroom/celebrations/pending`
+ * and marks it as `played` once the celebration has been shown.
+ */
+export const birthdayCelebrationsTable = pgTable(
+  "birthday_celebrations",
+  {
+    id: serial("id").primaryKey(),
+    student_code: text("student_code").notNull(),
+    // Calendar date the celebration is FOR — in the school timezone.
+    celebration_date: text("celebration_date").notNull(), // "YYYY-MM-DD"
+    status: text("status").notNull().default("pending"), // pending | approved | dismissed | played
+    approved_by: integer("approved_by").references(() => usersTable.id, {
+      onDelete: "set null",
+    }),
+    approved_at: timestamp("approved_at"),
+    played_at: timestamp("played_at"),
+    // Which classroom TV played it, when the kiosk claims a celebration.
+    played_by_kiosk: text("played_by_kiosk"),
+    created_at: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    student_date_uk: uniqueIndex("birthday_celebrations_student_date_uk").on(
+      t.student_code,
+      t.celebration_date,
+    ),
+    date_idx: index("birthday_celebrations_date_idx").on(t.celebration_date),
+  }),
+);
+export type BirthdayCelebration = typeof birthdayCelebrationsTable.$inferSelect;
+
 export const printJobsTable = pgTable("print_jobs", {
   id: serial("id").primaryKey(),
   job_ref: text("job_ref").notNull().unique(),

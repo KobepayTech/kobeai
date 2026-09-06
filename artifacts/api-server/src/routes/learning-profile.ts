@@ -1,13 +1,18 @@
+import { timingSafeEqual } from "node:crypto";
+import type { NextFunction, Request, Response } from "express";
 import { Router } from "express";
 import { pool } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 import {
+  claimPendingCelebrationForKiosk,
   ensureLearningProfileTables,
+  ensureTodaysBirthdayCelebrations,
   getMergedProfile,
+  listTodaysCelebrations,
   mergeProfile,
   rollupAllStudents,
   rollupStudent,
-  studentsWithBirthdayToday,
+  setCelebrationStatus,
 } from "../lib/learning-profile";
 
 const router = Router();
@@ -195,12 +200,93 @@ router.post("/v1/staff/learning-profile/rollup", requireStaff, async (req, res) 
 
 /**
  * GET /v1/staff/learning-profile/birthdays/today
- * Feeds the K9 birthday-automation surface: which students should get a
- * classroom-TV celebration today.
+ * Returns today's birthdays with their pending / approved / dismissed /
+ * played celebration state. Re-runs the ensure step so a server that came
+ * up mid-day still shows fresh rows.
  */
 router.get("/v1/staff/learning-profile/birthdays/today", requireStaff, async (_req, res) => {
-  const birthdays = await studentsWithBirthdayToday();
-  res.json({ birthdays });
+  await ensureTodaysBirthdayCelebrations();
+  const celebrations = await listTodaysCelebrations();
+  res.json({ celebrations });
+});
+
+router.post(
+  "/v1/staff/learning-profile/birthdays/:studentCode/approve",
+  requireStaff,
+  async (req, res) => {
+    const studentCode = cleanText(req.params.studentCode, 100);
+    if (!studentCode) {
+      res.status(400).json({ error: "student_code required" });
+      return;
+    }
+    // Ensure a row exists first (server might have missed the daily seed).
+    await ensureTodaysBirthdayCelebrations();
+    const updated = await setCelebrationStatus({
+      studentCode,
+      newStatus: "approved",
+      approvedByUserId: req.auth?.user_id ?? null,
+    });
+    if (!updated) {
+      res.status(404).json({ error: "no_celebration_for_today" });
+      return;
+    }
+    res.json({ celebration: updated });
+  },
+);
+
+router.post(
+  "/v1/staff/learning-profile/birthdays/:studentCode/dismiss",
+  requireStaff,
+  async (req, res) => {
+    const studentCode = cleanText(req.params.studentCode, 100);
+    if (!studentCode) {
+      res.status(400).json({ error: "student_code required" });
+      return;
+    }
+    await ensureTodaysBirthdayCelebrations();
+    const updated = await setCelebrationStatus({
+      studentCode,
+      newStatus: "dismissed",
+      approvedByUserId: req.auth?.user_id ?? null,
+    });
+    if (!updated) {
+      res.status(404).json({ error: "no_celebration_for_today" });
+      return;
+    }
+    res.json({ celebration: updated });
+  },
+);
+
+/**
+ * GET /v1/classroom/celebrations/next
+ * Called by the classroom TV kiosk. Authenticates with a shared secret
+ * (CLASSROOM_KIOSK_SECRET) OR a teacher/admin JWT. Atomically claims the
+ * next approved-but-unplayed celebration for today so two kiosks won't
+ * both play the same one. Returns 204 when the queue is empty.
+ */
+function requireKioskOrStaff(req: Request, res: Response, next: NextFunction): void {
+  const secret = process.env["CLASSROOM_KIOSK_SECRET"];
+  const provided = req.header("x-classroom-kiosk-secret");
+  if (secret && provided) {
+    const a = Buffer.from(secret);
+    const b = Buffer.from(provided);
+    if (a.length === b.length && timingSafeEqual(a, b)) {
+      next();
+      return;
+    }
+  }
+  return requireStaff(req, res, next);
+}
+
+router.get("/v1/classroom/celebrations/next", requireKioskOrStaff, async (req, res) => {
+  const kioskId = cleanText(req.header("x-classroom-kiosk-id") ?? req.query["kiosk_id"], 100)
+    ?? "unknown-kiosk";
+  const claimed = await claimPendingCelebrationForKiosk(kioskId);
+  if (!claimed) {
+    res.status(204).end();
+    return;
+  }
+  res.json({ celebration: claimed });
 });
 
 export default router;

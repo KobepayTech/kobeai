@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Users, Target, Activity, Clock, Trophy } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts";
+import { BirthdayCard } from "@/components/birthday-card";
 
 export default function Dashboard() {
   const { data: stats, isLoading: statsLoading } = useGetTeacherDashboardStats();
@@ -25,6 +26,8 @@ export default function Dashboard() {
         <h1 className="text-3xl font-bold tracking-tight">Overview</h1>
         <p className="text-muted-foreground mt-1">Monitor student engagement and platform activity.</p>
       </div>
+
+      <BirthdayCard />
 
       {statsLoading ? (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
