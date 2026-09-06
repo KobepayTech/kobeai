@@ -78,7 +78,9 @@ The Teacher Dashboard surfaces both at **School AI** in the sidebar.
 
 ## Repository layout
 
-This is a pnpm-workspace monorepo.
+This is one pnpm-workspace monorepo. K-9 and KobeVoice are committed directly
+inside KobeAI as normal directories; there are no Git submodules and a normal
+`git clone` contains the complete source tree.
 
 ```
 artifacts/
@@ -90,6 +92,11 @@ lib/
   db/                  Drizzle schema (users, classes, documents, …)
   api-spec/            OpenAPI source of truth
   api-client-react/    Generated react-query hooks (Orval)
+services/
+  k9-network/          Full vendored K-9 LAN/camera discovery source
+  k9-bridge/           K-9 → KobeAI inventory sync bridge
+  kobevision/          Local camera/face-analysis service
+  kobevoice/           Full vendored KobeVoice/LiveKit voice-agent source
 watch-app/             Wear OS app (Kotlin / Jetpack Compose)
 tap-box/               Raspberry Pi tap-box daemon (Python)
 deploy/
@@ -165,4 +172,5 @@ systemd unit. See `tap-box/README.md` for the full BOM and setup.
 
 ## License
 
-Proprietary — KobepayTech, all rights reserved.
+Proprietary — KobepayTech, all rights reserved, except vendored third-party
+components that retain the licenses included in their own directories.
