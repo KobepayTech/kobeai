@@ -76,6 +76,10 @@ function deviceKey(device: Record<string, unknown>): string | null {
   return ip ? `ip:${ip}` : null;
 }
 
+function routeParam(value: string | string[] | undefined): string {
+  return Array.isArray(value) ? value[0] ?? "" : value ?? "";
+}
+
 function ensureTables(): Promise<void> {
   if (!tablesReady) {
     tablesReady = (async () => {
@@ -268,7 +272,7 @@ router.get("/v1/network-discovery/summary", requireStaff, async (_req, res) => {
  */
 router.post("/v1/network-discovery/devices/:deviceKey/claim-camera", requireStaff, async (req, res) => {
   await ensureTables();
-  const key = decodeURIComponent(req.params.deviceKey);
+  const key = decodeURIComponent(routeParam(req.params.deviceKey));
   const cameraId = text(req.body?.camera_id ?? req.body?.cameraId, 160);
   const zoneCode = text(req.body?.zone_code ?? req.body?.zoneCode, 100);
   const requestedName = text(req.body?.name, 160);
@@ -333,7 +337,7 @@ router.post("/v1/network-discovery/devices/:deviceKey/claim-camera", requireStaf
 
 router.post("/v1/network-discovery/devices/:deviceKey/trust", requireStaff, async (req, res) => {
   await ensureTables();
-  const key = decodeURIComponent(req.params.deviceKey);
+  const key = decodeURIComponent(routeParam(req.params.deviceKey));
   const trusted = req.body?.trusted !== false;
   const result = await pool.query(
     `UPDATE network_devices SET trusted = $2, updated_at = NOW() WHERE device_key = $1 RETURNING *`,
