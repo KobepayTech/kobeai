@@ -1,11 +1,12 @@
 import { useAuth } from "@/lib/auth";
 import { Link, useLocation } from "wouter";
-import { 
-  LayoutDashboard, 
-  Users, 
-  CalendarCheck, 
+import {
+  LayoutDashboard,
+  Users,
+  CalendarCheck,
   Camera,
-  BookOpenCheck, 
+  CircleAlert,
+  BookOpenCheck,
   Wallet,
   FileText,
   Cpu,
@@ -30,6 +31,7 @@ const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/students", label: "Students", icon: Users },
   { href: "/attendance", label: "Attendance", icon: CalendarCheck },
+  { href: "/attendance-exceptions", label: "Attendance Exceptions", icon: CircleAlert },
   { href: "/camera-network", label: "Camera Network", icon: Camera },
   { href: "/quizzes", label: "Quizzes", icon: BookOpenCheck },
   { href: "/timetable", label: "Timetable", icon: CalendarClock },

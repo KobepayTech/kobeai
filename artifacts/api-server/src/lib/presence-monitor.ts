@@ -25,7 +25,12 @@ export type PresenceResultStatus =
   | "not_seen"
   | "low_confidence"
   | "no_timetable"
-  | "configuration_missing";
+  | "configuration_missing"
+  // The expected zone exists in the timetable but we have no viable camera
+  // evidence: either no enabled cameras cover it, or the cameras that do
+  // cover it haven't produced any events (from anyone) in the lookback
+  // window. The student is NOT at fault; the exception belongs to IT/ops.
+  | "insufficient_camera_coverage";
 
 export type PresenceEventInput = {
   studentCode: string;
@@ -233,7 +238,7 @@ export function ensurePresenceTables(): Promise<void> {
           actual_camera_id TEXT,
           actual_seen_at TIMESTAMPTZ,
           confidence NUMERIC(6, 5),
-          status TEXT NOT NULL CHECK (status IN ('on_schedule', 'wrong_location', 'not_seen', 'low_confidence', 'no_timetable', 'configuration_missing')),
+          status TEXT NOT NULL CHECK (status IN ('on_schedule', 'wrong_location', 'not_seen', 'low_confidence', 'no_timetable', 'configuration_missing', 'insufficient_camera_coverage')),
           requires_review BOOLEAN NOT NULL DEFAULT FALSE,
           review_status TEXT NOT NULL DEFAULT 'open' CHECK (review_status IN ('open', 'confirmed', 'dismissed')),
           reviewed_by INTEGER,
@@ -246,6 +251,35 @@ export function ensurePresenceTables(): Promise<void> {
       await pool.query(`
         CREATE INDEX IF NOT EXISTS presence_checkpoint_results_review_idx
           ON presence_checkpoint_results (requires_review, review_status, created_at DESC)
+      `);
+
+      // Migration: earlier deploys had the status CHECK without
+      // 'insufficient_camera_coverage'. Rebuild the constraint idempotently.
+      await pool.query(`
+        DO $$
+        DECLARE
+          conname TEXT;
+        BEGIN
+          SELECT c.conname INTO conname
+          FROM pg_constraint c
+          JOIN pg_class t ON t.oid = c.conrelid
+          WHERE t.relname = 'presence_checkpoint_results'
+            AND c.contype = 'c'
+            AND pg_get_constraintdef(c.oid) LIKE '%status%'
+            AND pg_get_constraintdef(c.oid) NOT LIKE '%insufficient_camera_coverage%';
+          IF conname IS NOT NULL THEN
+            EXECUTE format(
+              'ALTER TABLE presence_checkpoint_results DROP CONSTRAINT %I',
+              conname
+            );
+            ALTER TABLE presence_checkpoint_results
+              ADD CONSTRAINT presence_checkpoint_results_status_check
+              CHECK (status IN (
+                'on_schedule', 'wrong_location', 'not_seen', 'low_confidence',
+                'no_timetable', 'configuration_missing', 'insufficient_camera_coverage'
+              ));
+          END IF;
+        END $$;
       `);
     })().catch((err) => {
       tablesReady = null;
@@ -395,6 +429,41 @@ async function latestPresence(studentCode: string, lookbackMinutes: number): Pro
   return (rows.rows[0] as PresenceRow | undefined) ?? null;
 }
 
+type ZoneCoverage = {
+  enabledCameraCount: number;
+  /** Enabled cameras that produced ANY event (any student) inside the lookback. */
+  activeCameraCount: number;
+};
+
+/**
+ * Ask whether the expected zone actually has viable camera coverage right now.
+ * We say a zone has coverage when at least one enabled camera assigned to it
+ * has produced any student-presence event within the campus search window.
+ * If nothing at all was captured, we assume the stream is offline / mis-plugged
+ * / camera broken, and refuse to blame the student.
+ */
+async function zoneCoverage(zone: ZoneRow | null, lookbackMinutes: number): Promise<ZoneCoverage> {
+  if (!zone) return { enabledCameraCount: 0, activeCameraCount: 0 };
+  const rows = await pool.query(
+    `SELECT
+       COUNT(*) FILTER (WHERE c.enabled)::int AS enabled_count,
+       COUNT(DISTINCT recent.camera_id)::int AS active_count
+     FROM campus_cameras c
+     LEFT JOIN (
+       SELECT DISTINCT camera_id
+       FROM student_presence_events
+       WHERE captured_at >= NOW() - ($2::text || ' minutes')::interval
+     ) recent ON recent.camera_id = c.camera_id AND c.enabled
+     WHERE c.zone_id = $1`,
+    [zone.id, lookbackMinutes],
+  );
+  const row = rows.rows[0] ?? {};
+  return {
+    enabledCameraCount: Number(row.enabled_count ?? 0),
+    activeCameraCount: Number(row.active_count ?? 0),
+  };
+}
+
 async function latestPresenceInExpectedZone(
   studentCode: string,
   expectedZoneType: string,
@@ -431,6 +500,7 @@ async function latestPresenceInExpectedZone(
 function classifyPresence(args: {
   expectedZoneType: string;
   expectedZone: ZoneRow | null;
+  expectedZoneCoverage: ZoneCoverage;
   expectedHit: PresenceRow | null;
   campusHit: PresenceRow | null;
 }): {
@@ -457,6 +527,27 @@ function classifyPresence(args: {
   }
 
   if (!args.campusHit) {
+    // Before we blame the student, verify the expected zone actually has a
+    // working camera. If not, this is a coverage exception (IT problem), not
+    // a "student is missing" exception.
+    if (args.expectedZone) {
+      if (args.expectedZoneCoverage.enabledCameraCount === 0) {
+        return {
+          status: "insufficient_camera_coverage",
+          requiresReview: true,
+          actual: null,
+          reason: `Expected zone ${args.expectedZone.name} has no enabled camera assigned; the student can't be checked in automatically.`,
+        };
+      }
+      if (args.expectedZoneCoverage.activeCameraCount === 0) {
+        return {
+          status: "insufficient_camera_coverage",
+          requiresReview: true,
+          actual: null,
+          reason: `Expected zone ${args.expectedZone.name} has enabled cameras but none of them produced any events during the lookback window; the stream is likely down.`,
+        };
+      }
+    }
     return {
       status: "not_seen",
       requiresReview: true,
@@ -541,6 +632,12 @@ export async function runPresenceCheckpoint(options?: {
     }
 
     const results: unknown[] = [];
+    // Coverage is per-zone, not per-student — cache within a checkpoint so
+    // 40 students in the same classroom share one COUNT query.
+    const coverageCache = new Map<number, ZoneCoverage>();
+    const NO_COVERAGE: ZoneCoverage = { enabledCameraCount: 0, activeCameraCount: 0 };
+    let coverageIssues = 0;
+
     for (const period of periods) {
       const students = await studentsForClass(period.class_id);
       for (const student of students) {
@@ -552,6 +649,16 @@ export async function runPresenceCheckpoint(options?: {
           rule.fallbackZoneType,
         );
         const expected = await expectedZone(period, expectedZoneType);
+        let coverage = NO_COVERAGE;
+        if (expected) {
+          const cached = coverageCache.get(expected.id);
+          if (cached) {
+            coverage = cached;
+          } else {
+            coverage = await zoneCoverage(expected, CAMPUS_SEARCH_LOOKBACK_MINUTES);
+            coverageCache.set(expected.id, coverage);
+          }
+        }
         const expectedHit = await latestPresenceInExpectedZone(
           student.student_code,
           expectedZoneType,
@@ -561,6 +668,7 @@ export async function runPresenceCheckpoint(options?: {
         const classification = classifyPresence({
           expectedZoneType,
           expectedZone: expected,
+          expectedZoneCoverage: coverage,
           expectedHit,
           campusHit,
         });
@@ -568,6 +676,7 @@ export async function runPresenceCheckpoint(options?: {
         if (classification.status === "on_schedule") onSchedule += 1;
         if (classification.requiresReview) flagged += 1;
         if (classification.status === "not_seen") notSeen += 1;
+        if (classification.status === "insufficient_camera_coverage") coverageIssues += 1;
 
         const inserted = await pool.query(
           `INSERT INTO presence_checkpoint_results (
@@ -633,6 +742,7 @@ export async function runPresenceCheckpoint(options?: {
       on_schedule: onSchedule,
       flagged,
       not_seen: notSeen,
+      camera_coverage_issues: coverageIssues,
       active_periods: periods.length,
       timezone: SCHOOL_TIMEZONE,
       checkpoint_interval_minutes: CHECKPOINT_INTERVAL_MINUTES,
