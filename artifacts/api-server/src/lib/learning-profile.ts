@@ -146,9 +146,50 @@ export async function rollupStudent(studentCode: string): Promise<LearningProfil
     (r) => `${r.title} — ${r.score}%`,
   );
 
-  // 3. Questions asked count: /v1/watch/ask calls aren't persisted anywhere
-  //    with student attribution today. Leave as 0 until that surface lands.
-  const questionsAsked = 0;
+  // 3. Questions asked count comes from classroom_discussion_insights when
+  //    a question is attributed to this student with enough confidence.
+  //    /v1/watch/ask calls still aren't persisted per-student — that's the
+  //    other feeder we'd add later.
+  let questionsAsked = 0;
+  try {
+    const q = await pool.query(
+      `SELECT COUNT(*)::int AS n
+       FROM classroom_discussion_insights
+       WHERE student_code = $1 AND insight_type = 'question'`,
+      [studentCode],
+    );
+    questionsAsked = Number(q.rows[0]?.n ?? 0);
+  } catch (err) {
+    logger.warn(
+      { err: err instanceof Error ? err.message : String(err), studentCode },
+      "learning-profile: questions_asked skipped (classroom_discussion_insights not initialized yet)",
+    );
+  }
+
+  // 3b. Also fold "misunderstanding" insights into topics_weak. If a subject
+  //     already appears via quiz averages we leave it; otherwise a repeated
+  //     student-attributed misunderstanding is a strong weak-topic signal.
+  try {
+    const weakFromInsights = await pool.query(
+      `SELECT subject, COUNT(*)::int AS n
+       FROM classroom_discussion_insights
+       WHERE student_code = $1
+         AND insight_type = 'misunderstanding'
+         AND subject IS NOT NULL
+       GROUP BY subject
+       HAVING COUNT(*) >= 2`,
+      [studentCode],
+    );
+    for (const row of weakFromInsights.rows) {
+      if (!topicsWeak.includes(row.subject)) topicsWeak.push(row.subject);
+    }
+    topicsWeak.sort();
+  } catch (err) {
+    logger.warn(
+      { err: err instanceof Error ? err.message : String(err), studentCode },
+      "learning-profile: misunderstanding-insights skipped",
+    );
+  }
 
   // 4. Attendance rate: last N days of presence_checkpoint_results, treating
   //    on_schedule / low_confidence / wrong_location (student was seen

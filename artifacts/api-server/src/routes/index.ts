@@ -28,6 +28,7 @@ import developerRouter from "./developer";
 import storeRouter from "./store";
 import moderationRouter from "./moderation";
 import learningProfileRouter from "./learning-profile";
+import classroomInsightsRouter from "./classroom-insights";
 
 const router: IRouter = Router();
 
@@ -64,5 +65,6 @@ router.use(developerRouter);
 router.use(storeRouter);
 router.use(moderationRouter);
 router.use(learningProfileRouter);
+router.use(classroomInsightsRouter);
 
 export default router;

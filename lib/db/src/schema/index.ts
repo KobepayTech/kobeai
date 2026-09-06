@@ -187,6 +187,46 @@ export const birthdayCelebrationsTable = pgTable(
 );
 export type BirthdayCelebration = typeof birthdayCelebrationsTable.$inferSelect;
 
+/**
+ * Captured signals from classroom microphone sessions. The voice gateway
+ * (services/kobevoice + routes/voice.ts) posts a batch of parsed insights
+ * here at the end of each listening window. student_code is nullable —
+ * when speaker attribution isn't reliable, the insight stays class-level
+ * ("Several Form 2A students struggled with acceleration").
+ *
+ * These are inputs to the learning-profile rollup and to the classroom
+ * TV client. They are NEVER used to change grades or discipline students
+ * automatically — teachers see them, teachers act on them.
+ */
+export const classroomDiscussionInsightsTable = pgTable(
+  "classroom_discussion_insights",
+  {
+    id: serial("id").primaryKey(),
+    class_id: integer("class_id").references(() => classesTable.id, {
+      onDelete: "set null",
+    }),
+    student_code: text("student_code"),
+    subject: text("subject"),
+    period_id: integer("period_id"),
+    // "question" | "answer" | "misunderstanding" | "theme"
+    insight_type: text("insight_type").notNull(),
+    text: text("text").notNull(),
+    // 0..1 speaker-attribution confidence; > threshold means we're willing
+    // to store this at student level rather than class level.
+    attribution_confidence: integer("attribution_confidence"),
+    source_kiosk: text("source_kiosk"),
+    captured_at: timestamp("captured_at").notNull().defaultNow(),
+    created_at: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    class_time_idx: index("classroom_insights_class_time_idx").on(t.class_id, t.captured_at),
+    student_time_idx: index("classroom_insights_student_time_idx").on(t.student_code, t.captured_at),
+    subject_idx: index("classroom_insights_subject_idx").on(t.subject),
+  }),
+);
+export type ClassroomDiscussionInsight =
+  typeof classroomDiscussionInsightsTable.$inferSelect;
+
 export const printJobsTable = pgTable("print_jobs", {
   id: serial("id").primaryKey(),
   job_ref: text("job_ref").notNull().unique(),
