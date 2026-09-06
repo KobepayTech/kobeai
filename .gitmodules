@@ -2,3 +2,7 @@
 	path = services/kobevoice
 	url = https://github.com/KobepayTech/kobevoice.git
 	branch = claude/pipecat-integration-83g5ih
+[submodule "services/k9-network"]
+	path = services/k9-network
+	url = https://github.com/nyfeblade/K-9.git
+	branch = main
