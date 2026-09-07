@@ -4,6 +4,7 @@ import { Users, Target, Activity, Clock, Trophy } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts";
 import { BirthdayCard } from "@/components/birthday-card";
+import { LivePresenceCard } from "@/components/live-presence-card";
 
 export default function Dashboard() {
   const { data: stats, isLoading: statsLoading } = useGetTeacherDashboardStats();
@@ -27,6 +28,7 @@ export default function Dashboard() {
         <p className="text-muted-foreground mt-1">Monitor student engagement and platform activity.</p>
       </div>
 
+      <LivePresenceCard />
       <BirthdayCard />
 
       {statsLoading ? (

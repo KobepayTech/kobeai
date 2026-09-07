@@ -206,6 +206,39 @@ export function ensurePresenceTables(): Promise<void> {
           ON student_presence_events (camera_id, captured_at DESC)
       `);
 
+      // Continuous presence: one row per student, updated in place by
+      // recordPresenceEvent. This is the fast-path source of truth for
+      // "where is student X right now"; the 30-min presence_checkpoint_results
+      // is the historical audit log. See docs/K9_ARCHITECTURE.md.
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS current_student_presence (
+          student_code TEXT PRIMARY KEY,
+          camera_id TEXT NOT NULL,
+          zone_id BIGINT REFERENCES campus_zones(id) ON DELETE SET NULL,
+          zone_name TEXT,
+          zone_type TEXT,
+          confidence NUMERIC(6, 5) NOT NULL,
+          face_quality NUMERIC(6, 5),
+          model_version TEXT,
+          -- Denormalised timetable expectation at last check-in, so the
+          -- mismatch view can be filtered without re-joining timetable rows.
+          expected_zone_id BIGINT REFERENCES campus_zones(id) ON DELETE SET NULL,
+          expected_zone_type TEXT,
+          mismatch_status TEXT NOT NULL DEFAULT 'unknown',
+          seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `);
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS current_student_presence_seen_idx
+          ON current_student_presence (seen_at DESC)
+      `);
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS current_student_presence_mismatch_idx
+          ON current_student_presence (mismatch_status)
+          WHERE mismatch_status NOT IN ('on_schedule', 'unknown')
+      `);
+
       await pool.query(`
         CREATE TABLE IF NOT EXISTS presence_checkpoints (
           id BIGSERIAL PRIMARY KEY,
@@ -299,12 +332,19 @@ export async function recordPresenceEvent(input: PresenceEventInput) {
   }
 
   const camera = await pool.query(
-    `SELECT camera_id, zone_id, enabled FROM campus_cameras WHERE camera_id = $1 LIMIT 1`,
+    `SELECT c.camera_id, c.zone_id, c.enabled,
+            z.name AS zone_name, z.zone_type
+     FROM campus_cameras c
+     LEFT JOIN campus_zones z ON z.id = c.zone_id
+     WHERE c.camera_id = $1
+     LIMIT 1`,
     [cameraId],
   );
   if (!camera.rows[0]) throw new Error("camera_not_registered");
   if (!camera.rows[0].enabled) throw new Error("camera_disabled");
+  const cameraRow = camera.rows[0];
 
+  // 1. Append-only event log (unchanged — audit + rollup source).
   const result = await pool.query(
     `INSERT INTO student_presence_events (
        student_code, camera_id, zone_id, confidence, face_quality, track_id,
@@ -315,7 +355,7 @@ export async function recordPresenceEvent(input: PresenceEventInput) {
     [
       studentCode,
       cameraId,
-      camera.rows[0].zone_id ?? null,
+      cameraRow.zone_id ?? null,
       input.confidence,
       input.faceQuality ?? null,
       cleanText(input.trackId, 160),
@@ -324,7 +364,132 @@ export async function recordPresenceEvent(input: PresenceEventInput) {
       JSON.stringify(input.metadata ?? {}),
     ],
   );
+
+  // 2. Continuous-presence row (the fast-path source of truth). Best-effort:
+  //    a failure to compute the live mismatch never breaks event ingestion.
+  try {
+    const live = await computeLiveMismatch(studentCode, cameraRow.zone_id ?? null, cameraRow.zone_type ?? null);
+    await pool.query(
+      `INSERT INTO current_student_presence (
+         student_code, camera_id, zone_id, zone_name, zone_type,
+         confidence, face_quality, model_version,
+         expected_zone_id, expected_zone_type, mismatch_status,
+         seen_at, updated_at
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+                 COALESCE($12::timestamptz, NOW()), NOW())
+       ON CONFLICT (student_code) DO UPDATE SET
+         camera_id = EXCLUDED.camera_id,
+         zone_id = EXCLUDED.zone_id,
+         zone_name = EXCLUDED.zone_name,
+         zone_type = EXCLUDED.zone_type,
+         confidence = EXCLUDED.confidence,
+         face_quality = EXCLUDED.face_quality,
+         model_version = EXCLUDED.model_version,
+         expected_zone_id = EXCLUDED.expected_zone_id,
+         expected_zone_type = EXCLUDED.expected_zone_type,
+         mismatch_status = EXCLUDED.mismatch_status,
+         seen_at = EXCLUDED.seen_at,
+         updated_at = NOW()`,
+      [
+        studentCode,
+        cameraId,
+        cameraRow.zone_id ?? null,
+        cameraRow.zone_name ?? null,
+        cameraRow.zone_type ?? null,
+        input.confidence,
+        input.faceQuality ?? null,
+        cleanText(input.modelVersion, 160),
+        live.expectedZoneId,
+        live.expectedZoneType,
+        live.status,
+        input.capturedAt ?? null,
+      ],
+    );
+  } catch (err) {
+    logger.warn(
+      { err: err instanceof Error ? err.message : String(err), studentCode },
+      "current_student_presence upsert skipped",
+    );
+  }
+
   return result.rows[0];
+}
+
+/**
+ * Compare where the student was just seen against where the timetable says
+ * they should be, without going through the full 30-min reconciliation.
+ * Returns the mismatch status stored on current_student_presence so
+ * /v1/presence/live/mismatches can serve the fast-path teacher dashboard.
+ */
+async function computeLiveMismatch(
+  studentCode: string,
+  actualZoneId: number | null,
+  actualZoneType: string | null,
+): Promise<{
+  status:
+    | "on_schedule"
+    | "wrong_location"
+    | "no_timetable"
+    | "configuration_missing"
+    | "unknown";
+  expectedZoneId: number | null;
+  expectedZoneType: string | null;
+}> {
+  const clock = schoolClock(new Date());
+  const periodRows = await pool.query(
+    `SELECT tp.id AS period_id, tp.class_id, tp.subject, tp.room
+     FROM timetable_periods tp
+     INNER JOIN class_memberships cm ON cm.class_id = tp.class_id
+     INNER JOIN users u ON u.id = cm.student_id
+     WHERE u.student_code = $1
+       AND tp.day_of_week = $2
+       AND tp.start_minute <= $3
+       AND tp.end_minute > $3
+     ORDER BY tp.start_minute
+     LIMIT 1`,
+    [studentCode, clock.isoDay, clock.minuteOfDay],
+  );
+  const period = periodRows.rows[0];
+  if (!period) {
+    return { status: "no_timetable", expectedZoneId: null, expectedZoneType: null };
+  }
+  const rule = await subjectRule(studentCode, period.subject);
+  const expectedType = defaultExpectedZoneType(
+    period.subject,
+    rule.takesSubject,
+    rule.fallbackZoneType,
+  );
+  const expected = await expectedZone(
+    { period_id: period.period_id, class_id: period.class_id, class_name: "", subject: period.subject, room: period.room },
+    expectedType,
+  );
+  if (!expected) {
+    return {
+      status: "configuration_missing",
+      expectedZoneId: null,
+      expectedZoneType: expectedType,
+    };
+  }
+  if (actualZoneId && actualZoneId === expected.id) {
+    return {
+      status: "on_schedule",
+      expectedZoneId: expected.id,
+      expectedZoneType: expectedType,
+    };
+  }
+  if (!actualZoneId && actualZoneType === expectedType) {
+    // Generic-type zone hit (e.g. "library" period, seen at a library camera).
+    return {
+      status: "on_schedule",
+      expectedZoneId: expected.id,
+      expectedZoneType: expectedType,
+    };
+  }
+  return {
+    status: "wrong_location",
+    expectedZoneId: expected.id,
+    expectedZoneType: expectedType,
+  };
 }
 
 async function currentPeriods(clock: SchoolClock): Promise<CurrentPeriod[]> {
