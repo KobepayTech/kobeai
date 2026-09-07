@@ -82,7 +82,7 @@ class AdViewModel @Inject constructor(
                 return@launch
             }
             try {
-                val res = api.getAd(placement)
+                val res = api.getAd(placement = placement)
                 ad = res.ad
                 ad?.let {
                     if (!impressionTracked) {
@@ -106,7 +106,7 @@ class AdViewModel @Inject constructor(
 }
 
 /**
- * Compact tile shown inline on the watch home menu. Returns nothing if no
+ * Compact tile shown inline on the tablet home menu. Returns nothing if no
  * ad is currently being served.
  */
 @Composable
