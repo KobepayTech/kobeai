@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -23,9 +25,9 @@ android {
         buildConfigField("String", "DEFAULT_API_BASE", "\"$apiBase\"")
 
         // Shared HMAC secret used to sign the HCE payload sent to the school
-        // tap-box. Must match WATCH_HCE_SECRET on the API server. Override at
-        // build time:
-        //   ./gradlew assembleRelease -PWATCH_HCE_SECRET=<random-32-bytes-hex>
+        // tap-box. The property/env name is kept for backwards compatibility
+        // with existing school-server deployments even though the client is
+        // now an Android tablet app.
         val hceSecret = (project.findProperty("WATCH_HCE_SECRET") as String?)
             ?: "dev-watch-hce-secret"
         buildConfigField("String", "WATCH_HCE_SECRET", "\"$hceSecret\"")
@@ -39,7 +41,7 @@ android {
         buildConfigField("String", "KOBEAI_API_PIN", "\"$apiPin\"")
 
         // Build-time switch for the ad surface. Schools that don't want any
-        // ads on student watches can build with `-PENABLE_ADS=false` and the
+        // ads on student tablets can build with `-PENABLE_ADS=false` and the
         // home tile + interstitial become no-ops without touching server
         // settings. Default true so existing deployments don't change.
         val enableAds = (project.findProperty("ENABLE_ADS") as String?) ?: "true"
@@ -51,7 +53,7 @@ android {
     // gitignored. Skipped when the file is absent so debug builds keep
     // working without signing material.
     val keystorePropsFile = rootProject.file("keystore.properties")
-    val keystoreProps = java.util.Properties().apply {
+    val keystoreProps = Properties().apply {
         if (keystorePropsFile.exists()) keystorePropsFile.inputStream().use { load(it) }
     }
     val signingReady = keystorePropsFile.exists() ||
@@ -128,9 +130,13 @@ afterEvaluate {
 
 dependencies {
     implementation("androidx.core:core-ktx:1.12.0")
+
+    // The current UI layer still uses several Wear Compose primitives. They
+    // are retained temporarily so the tablet build stays source-compatible
+    // while screens are migrated to adaptive Material 3 layouts. The app is
+    // no longer device-filtered as Wear OS in AndroidManifest.xml.
     implementation("androidx.wear:wear:1.3.0")
     implementation("androidx.wear:wear-input:1.2.0-alpha02")
-
     implementation("androidx.wear.compose:compose-material:1.3.0")
     implementation("androidx.wear.compose:compose-foundation:1.3.0")
     implementation("androidx.wear.compose:compose-navigation:1.3.0")
@@ -139,6 +145,7 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.runtime:runtime-livedata")
+    implementation("androidx.compose.material3:material3")
     implementation("androidx.activity:activity-compose:1.8.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.7.0")
