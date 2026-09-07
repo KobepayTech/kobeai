@@ -13,14 +13,20 @@
     <uses-permission android:name="android.permission.BIND_DEVICE_ADMIN" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
-    <!-- Bluetooth: required so the system Bluetooth settings deep-link
-         resolves and so paired earbuds + keyboards can route audio/input
-         to our process (Android 12+ requires runtime grant for CONNECT). -->
     <uses-permission android:name="android.permission.BLUETOOTH" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
-    <uses-feature android:name="android.hardware.type.watch" />
+    <!-- Tablet target. The Wear OS hardware requirement was intentionally
+         removed so the APK installs on standard Android tablets. -->
+    <supports-screens
+        android:smallScreens="false"
+        android:normalScreens="false"
+        android:largeScreens="true"
+        android:xlargeScreens="true"
+        android:anyDensity="true" />
+
+    <uses-feature android:name="android.hardware.touchscreen" android:required="true" />
     <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
     <uses-feature android:name="android.hardware.wifi" android:required="true" />
     <uses-feature android:name="android.hardware.nfc" android:required="false" />
@@ -30,7 +36,7 @@
         android:name=".KobeAIApplication"
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
-        android:label="KobeAI"
+        android:label="KobeAI Tablet"
         android:theme="@android:style/Theme.DeviceDefault"
         android:hardwareAccelerated="true"
         android:persistent="true"
@@ -43,7 +49,8 @@
             android:exported="true"
             android:launchMode="singleInstance"
             android:lockTaskMode="if_whitelisted"
-            android:screenOrientation="portrait"
+            android:screenOrientation="landscape"
+            android:resizeableActivity="true"
             android:showWhenLocked="true"
             android:turnScreenOn="true">
             <intent-filter>
