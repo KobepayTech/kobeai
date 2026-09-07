@@ -26,7 +26,6 @@ import androidx.wear.compose.material.Button
 import androidx.wear.compose.material.Card
 import androidx.wear.compose.material.CircularProgressIndicator
 import androidx.wear.compose.material.MaterialTheme
-import androidx.wear.compose.material.PositionIndicator
 import androidx.wear.compose.material.Scaffold
 import androidx.wear.compose.material.Text
 import androidx.wear.compose.material.TimeText
@@ -79,8 +78,7 @@ fun QuizScreen(
     val currentQuestion = questions[currentIndex]
 
     Scaffold(
-        timeText = { TimeText() },
-        positionIndicator = { PositionIndicator() }
+        timeText = { TimeText() }
     ) {
         Column(modifier = Modifier.fillMaxSize().padding(8.dp)) {
             Text(
