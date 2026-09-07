@@ -29,6 +29,7 @@ import storeRouter from "./store";
 import moderationRouter from "./moderation";
 import learningProfileRouter from "./learning-profile";
 import classroomInsightsRouter from "./classroom-insights";
+import magazineRouter from "./magazine";
 
 const router: IRouter = Router();
 
@@ -66,5 +67,6 @@ router.use(storeRouter);
 router.use(moderationRouter);
 router.use(learningProfileRouter);
 router.use(classroomInsightsRouter);
+router.use(magazineRouter);
 
 export default router;

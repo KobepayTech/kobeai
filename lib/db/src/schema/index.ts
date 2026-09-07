@@ -227,6 +227,37 @@ export const classroomDiscussionInsightsTable = pgTable(
 export type ClassroomDiscussionInsight =
   typeof classroomDiscussionInsightsTable.$inferSelect;
 
+/**
+ * One row per generated magazine edition. `edition_type = "school"` is the
+ * whole-school newsletter (student_code IS NULL); `edition_type = "student"`
+ * is the personalised per-child version (student_code set). `week_start`
+ * anchors to the ISO Monday in the school TZ so re-runs during the same
+ * week update the same row.
+ */
+export const magazineEditionsTable = pgTable(
+  "magazine_editions",
+  {
+    id: serial("id").primaryKey(),
+    edition_type: text("edition_type").notNull(), // "school" | "student"
+    student_code: text("student_code"),
+    week_start: text("week_start").notNull(), // "YYYY-MM-DD" (Monday)
+    // Structured content — arrays of sections the UI can render.
+    content: jsonb("content").notNull().default(sql`'{}'::jsonb`),
+    generated_at: timestamp("generated_at").notNull().defaultNow(),
+    generated_by: integer("generated_by"),
+  },
+  (t) => ({
+    type_week_uk: uniqueIndex("magazine_editions_type_week_student_uk").on(
+      t.edition_type,
+      t.week_start,
+      t.student_code,
+    ),
+    week_idx: index("magazine_editions_week_idx").on(t.week_start),
+    student_idx: index("magazine_editions_student_idx").on(t.student_code, t.week_start),
+  }),
+);
+export type MagazineEdition = typeof magazineEditionsTable.$inferSelect;
+
 export const printJobsTable = pgTable("print_jobs", {
   id: serial("id").primaryKey(),
   job_ref: text("job_ref").notNull().unique(),

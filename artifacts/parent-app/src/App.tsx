@@ -16,6 +16,7 @@ import WatchSettings from "@/pages/watch-settings";
 import NotificationsPage from "@/pages/notifications";
 import AddChildPage from "@/pages/add-child";
 import StationeryPage from "@/pages/stationery";
+import MagazinePage from "@/pages/magazine";
 import { InstallPrompt } from "@/components/install-prompt";
 
 const queryClient = new QueryClient({
@@ -43,6 +44,7 @@ function Router() {
       <Route path="/profile/notifications" component={NotificationsPage} />
       <Route path="/add-child" component={AddChildPage} />
       <Route path="/stationery" component={StationeryPage} />
+      <Route path="/magazine/:childId" component={MagazinePage} />
       <Route component={NotFound} />
     </Switch>
   );
