@@ -12,5 +12,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "KobeAIWatch"
+rootProject.name = "KobeAITablet"
 include(":app")
