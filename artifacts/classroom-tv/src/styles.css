@@ -1,0 +1,251 @@
+:root {
+  --brand-green: #00A86B;
+  --brand-navy: #1A1A2E;
+  --brand-accent: #f4a261;
+  --brand-bg: #0e0e14;
+  --brand-fg: #f4f5f7;
+  --brand-muted: rgba(244, 245, 247, 0.65);
+  --brand-dim: rgba(244, 245, 247, 0.35);
+  --brand-card: rgba(255, 255, 255, 0.06);
+  --brand-card-border: rgba(255, 255, 255, 0.12);
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--brand-bg);
+  color: var(--brand-fg);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+.tv {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  padding: 3.5vh 4vw;
+  box-sizing: border-box;
+  gap: 3vh;
+}
+
+.tv-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.tv-brand {
+  font-size: 2.4vw;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--brand-green);
+}
+
+.tv-clock {
+  font-size: 3.2vw;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.tv-date {
+  font-size: 1.4vw;
+  color: var(--brand-muted);
+  margin-top: 0.4vw;
+  text-align: right;
+}
+
+.tv-main {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 3vw;
+  min-height: 0;
+}
+
+.tv-now {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.tv-now-label {
+  font-size: 1.4vw;
+  color: var(--brand-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  font-weight: 600;
+  margin-bottom: 1.2vw;
+}
+
+.tv-now-subject {
+  font-size: 6.5vw;
+  font-weight: 800;
+  line-height: 1.05;
+  letter-spacing: -0.03em;
+  color: var(--brand-fg);
+  margin: 0;
+}
+
+.tv-now-class {
+  font-size: 2vw;
+  color: var(--brand-green);
+  margin-top: 1.2vw;
+}
+
+.tv-now-time {
+  font-size: 1.4vw;
+  color: var(--brand-muted);
+  margin-top: 0.6vw;
+}
+
+.tv-schedule {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 1vw;
+}
+
+.tv-schedule-title {
+  font-size: 1.3vw;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: var(--brand-muted);
+  font-weight: 600;
+  margin-bottom: 0.5vw;
+}
+
+.tv-schedule-item {
+  display: flex;
+  align-items: baseline;
+  gap: 1vw;
+  padding: 1vw;
+  background: var(--brand-card);
+  border: 1px solid var(--brand-card-border);
+  border-radius: 0.8vw;
+}
+
+.tv-schedule-item.past {
+  opacity: 0.35;
+}
+
+.tv-schedule-item.now {
+  background: rgba(0, 168, 107, 0.14);
+  border-color: rgba(0, 168, 107, 0.5);
+}
+
+.tv-schedule-time {
+  font-variant-numeric: tabular-nums;
+  font-size: 1.3vw;
+  color: var(--brand-muted);
+  min-width: 6vw;
+}
+
+.tv-schedule-subject {
+  font-size: 1.5vw;
+  font-weight: 600;
+}
+
+.tv-schedule-empty {
+  color: var(--brand-dim);
+  font-size: 1.2vw;
+  padding: 1vw;
+}
+
+.tv-footer {
+  display: flex;
+  justify-content: space-between;
+  font-size: 1vw;
+  color: var(--brand-dim);
+}
+
+.tv-footer .dot {
+  display: inline-block;
+  width: 0.8vw;
+  height: 0.8vw;
+  border-radius: 50%;
+  margin-right: 0.4vw;
+  vertical-align: middle;
+}
+
+.tv-footer .ok { background: var(--brand-green); }
+.tv-footer .bad { background: #ef476f; }
+
+/* --- Birthday overlay --- */
+.tv-celebration {
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(1200px circle at 30% 20%, rgba(244, 162, 97, 0.6), transparent 50%),
+              radial-gradient(1200px circle at 80% 80%, rgba(0, 168, 107, 0.6), transparent 50%),
+              #1a1a2e;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  text-align: center;
+  animation: cel-fade 0.5s ease;
+  z-index: 1000;
+}
+
+@keyframes cel-fade {
+  from { opacity: 0; transform: scale(1.05); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.tv-celebration h1 {
+  font-size: 12vw;
+  font-weight: 800;
+  margin: 0;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  text-shadow: 0 0.4vw 2vw rgba(0, 0, 0, 0.4);
+}
+
+.tv-celebration .name {
+  font-size: 7vw;
+  color: var(--brand-accent);
+  margin-top: 2vw;
+  font-weight: 700;
+}
+
+.tv-celebration .hint {
+  font-size: 1.4vw;
+  color: rgba(255, 255, 255, 0.6);
+  margin-top: 3vw;
+}
+
+/* --- Setup screen --- */
+.tv-setup {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 2vh;
+  padding: 4vw;
+  text-align: center;
+}
+
+.tv-setup h1 {
+  font-size: 4vw;
+  color: var(--brand-green);
+  margin: 0;
+}
+
+.tv-setup p {
+  color: var(--brand-muted);
+  font-size: 1.2vw;
+  max-width: 60vw;
+}
+
+.tv-setup code {
+  background: var(--brand-card);
+  border: 1px solid var(--brand-card-border);
+  padding: 0.4vw 0.8vw;
+  border-radius: 0.4vw;
+  font-family: "SF Mono", Menlo, monospace;
+  font-size: 1vw;
+}
