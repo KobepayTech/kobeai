@@ -30,6 +30,7 @@ import moderationRouter from "./moderation";
 import learningProfileRouter from "./learning-profile";
 import classroomInsightsRouter from "./classroom-insights";
 import magazineRouter from "./magazine";
+import visionQueueRouter from "./vision-queue";
 
 const router: IRouter = Router();
 
@@ -68,5 +69,6 @@ router.use(moderationRouter);
 router.use(learningProfileRouter);
 router.use(classroomInsightsRouter);
 router.use(magazineRouter);
+router.use(visionQueueRouter);
 
 export default router;

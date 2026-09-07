@@ -1,5 +1,6 @@
 import { pool } from "@workspace/db";
 import { logger } from "./logger";
+import { enqueueVisionAnalysisSafe } from "./vision-queue";
 
 const SCHOOL_TIMEZONE = process.env["SCHOOL_TIMEZONE"] ?? "Africa/Dar_es_Salaam";
 const CHECKPOINT_INTERVAL_MINUTES = Math.max(
@@ -369,6 +370,26 @@ export async function recordPresenceEvent(input: PresenceEventInput) {
   //    a failure to compute the live mismatch never breaks event ingestion.
   try {
     const live = await computeLiveMismatch(studentCode, cameraRow.zone_id ?? null, cameraRow.zone_type ?? null);
+    // 3. If the live path found an anomaly (wrong_location), enqueue a
+    //    scene-analysis request onto the intelligence path so a future
+    //    Youtu-VL worker can enrich the event without blocking the fast
+    //    path. Fire-and-forget — never throws.
+    if (live.status === "wrong_location") {
+      enqueueVisionAnalysisSafe({
+        cameraId,
+        studentCode,
+        question: `A student appears in ${cameraRow.zone_name ?? cameraRow.zone_type ?? "an unexpected zone"} but their timetable expects ${live.expectedZoneType}. Describe what the student appears to be doing.`,
+        reason: "auto:live_mismatch",
+        priority: 4,
+        context: {
+          actual_zone_id: cameraRow.zone_id,
+          actual_zone_type: cameraRow.zone_type,
+          expected_zone_id: live.expectedZoneId,
+          expected_zone_type: live.expectedZoneType,
+          confidence: input.confidence,
+        },
+      });
+    }
     await pool.query(
       `INSERT INTO current_student_presence (
          student_code, camera_id, zone_id, zone_name, zone_type,
