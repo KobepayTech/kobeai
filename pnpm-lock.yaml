@@ -535,6 +535,34 @@ importers:
         specifier: ^5.4.10
         version: 5.4.21(@types/node@25.3.5)(lightningcss@1.31.1)
 
+  artifacts/demo:
+    dependencies:
+      '@workspace/api-server':
+        specifier: workspace:*
+        version: link:../api-server
+      '@workspace/db':
+        specifier: workspace:*
+        version: link:../../lib/db
+      drizzle-orm:
+        specifier: 'catalog:'
+        version: 0.45.1(@types/pg@8.18.0)(pg@8.20.0)
+      express:
+        specifier: ^5
+        version: 5.2.1
+    devDependencies:
+      '@types/express':
+        specifier: ^5.0.6
+        version: 5.0.6
+      '@types/node':
+        specifier: 'catalog:'
+        version: 25.3.5
+      esbuild:
+        specifier: 0.27.3
+        version: 0.27.3
+      tsx:
+        specifier: 'catalog:'
+        version: 4.21.0
+
   artifacts/developer-portal:
     devDependencies:
       '@hookform/resolvers':

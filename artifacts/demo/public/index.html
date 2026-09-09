@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>KobeAI · K9 school demo</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --brand-green: #00A86B;
+      --brand-navy: #1A1A2E;
+      --brand-bg: #f6f8f7;
+      --brand-card: #ffffff;
+      --brand-border: rgba(26, 26, 46, 0.08);
+      --brand-muted: rgba(26, 26, 46, 0.6);
+      --brand-dim: rgba(26, 26, 46, 0.4);
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--brand-bg);
+      color: var(--brand-navy);
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+    }
+    header {
+      background: var(--brand-navy);
+      color: white;
+      padding: 40px 32px 32px;
+    }
+    header .wrap { max-width: 1100px; margin: 0 auto; }
+    header h1 { font-size: 2.6rem; margin: 0 0 8px; letter-spacing: -0.03em; }
+    header p { color: rgba(255,255,255,0.7); margin: 0; font-size: 1rem; max-width: 640px; }
+    header .brand { color: var(--brand-green); font-weight: 700; }
+    .status { margin-top: 16px; display: inline-flex; align-items: center; gap: 8px; font-size: 0.9rem; color: rgba(255,255,255,0.8); }
+    .status .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--brand-green); animation: pulse 2s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+    main { max-width: 1100px; margin: -24px auto 0; padding: 0 32px 64px; }
+    .cards { display: grid; gap: 20px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+    .card {
+      background: var(--brand-card);
+      border-radius: 20px;
+      padding: 24px;
+      box-shadow: 0 8px 32px rgba(26, 26, 46, 0.08);
+      border: 1px solid var(--brand-border);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .card h2 { margin: 0; font-size: 1.15rem; letter-spacing: -0.01em; display: flex; align-items: center; gap: 10px; }
+    .card h2 .icon {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 34px; height: 34px; border-radius: 10px;
+      background: rgba(0, 168, 107, 0.12); color: var(--brand-green);
+      font-size: 18px;
+    }
+    .card p { margin: 0; color: var(--brand-muted); font-size: 0.9rem; line-height: 1.5; }
+    .creds { background: rgba(0,168,107,0.06); border-radius: 10px; padding: 12px 14px; font-size: 0.8rem; color: var(--brand-navy); }
+    .creds code { font-family: "SF Mono", ui-monospace, Menlo, monospace; font-weight: 600; }
+    .card .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: auto; }
+    .btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: var(--brand-green); color: white; text-decoration: none;
+      padding: 10px 16px; border-radius: 10px; font-weight: 600; font-size: 0.9rem;
+      transition: transform 120ms ease;
+    }
+    .btn:hover { transform: translateY(-1px); }
+    .btn.ghost { background: transparent; color: var(--brand-navy); border: 1px solid var(--brand-border); }
+    section h3 {
+      grid-column: 1 / -1;
+      font-size: 0.75rem; letter-spacing: 0.15em; text-transform: uppercase;
+      color: var(--brand-dim); margin: 32px 0 4px; font-weight: 700;
+    }
+    footer {
+      text-align: center; padding: 24px; color: var(--brand-dim); font-size: 0.85rem;
+      border-top: 1px solid var(--brand-border);
+    }
+    footer code { background: rgba(26,26,46,0.05); padding: 2px 6px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <h1><span class="brand">KobeAI</span> · K9 school demo</h1>
+      <p>A single-command run of the whole school AI stack. Pick a persona to see what that user experiences. The world simulator is firing camera events, classroom questions, and birthday celebrations behind the scenes so every view is populated.</p>
+      <div class="status"><span class="dot"></span> Live · simulator running · <span id="uptime">–</span></div>
+    </div>
+  </header>
+
+  <main>
+    <div class="cards">
+
+      <section><h3>Classroom PC</h3></section>
+
+      <div class="card">
+        <h2><span class="icon">📺</span> Classroom TV — display</h2>
+        <p>The kiosk view for the classroom television. Shows the current lesson, the next few periods on the timetable, and full-screens a birthday celebration when one is approved.</p>
+        <div class="actions">
+          <a class="btn" href="/tv/?mode=display" target="_blank">Open display</a>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2><span class="icon">📊</span> Classroom TV — dashboard</h2>
+        <p>Wall-mounted admin board: the current period plus a live list of location mismatches (Juma is in the library instead of Physics).</p>
+        <div class="actions">
+          <a class="btn" href="/tv/?mode=dashboard" target="_blank">Open dashboard</a>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2><span class="icon">🎓</span> Classroom TV — teaching assistant</h2>
+        <p>Teacher AI chat. Ask "Explain photosynthesis to Form 3A" and the on-prem AI answers in the classroom's context.</p>
+        <div class="actions">
+          <a class="btn" href="/tv/?mode=assistant" target="_blank">Open assistant</a>
+        </div>
+      </div>
+
+      <section><h3>School staff</h3></section>
+
+      <div class="card">
+        <h2><span class="icon">👩‍🏫</span> Teacher dashboard</h2>
+        <p>Overview with the live-location tile, birthday celebrations to approve, and links out to attendance exceptions, classroom insights, camera network, models, and the school AI.</p>
+        <div class="creds">Login: <code>teacher@school.tz</code> · <code>teacher123</code></div>
+        <div class="actions">
+          <a class="btn" href="/teacher/" target="_blank">Open teacher dashboard</a>
+          <a class="btn ghost" href="/teacher/#/models" target="_blank">K9 models</a>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2><span class="icon">🛡️</span> Admin</h2>
+        <p>Same UI as the teacher, but the admin login unlocks the model registry, rotate-HCE-secret, and central controls.</p>
+        <div class="creds">Login: <code>admin@school.tz</code> · <code>admin123</code></div>
+        <div class="actions">
+          <a class="btn" href="/teacher/#/login" target="_blank">Open admin login</a>
+        </div>
+      </div>
+
+      <section><h3>Family</h3></section>
+
+      <div class="card">
+        <h2><span class="icon">👨‍👧</span> Parent app</h2>
+        <p>The mobile-shaped PWA. Sees the school-day summary (arrival + per-lesson accounted-for) and the personalised weekly magazine for each child.</p>
+        <div class="creds">Login: <code>+255700000001</code> · PIN <code>1234</code></div>
+        <div class="actions">
+          <a class="btn" href="/parent/" target="_blank">Open parent app</a>
+        </div>
+      </div>
+
+      <section><h3>Developer</h3></section>
+
+      <div class="card">
+        <h2><span class="icon">🧩</span> Developer portal</h2>
+        <p>Publish mini-apps to the watch AppStore. The new "Save draft" button lets you exit the wizard at any step.</p>
+        <div class="actions">
+          <a class="btn" href="/dev/" target="_blank">Open dev portal</a>
+        </div>
+      </div>
+
+      <section><h3>API</h3></section>
+
+      <div class="card">
+        <h2><span class="icon">🩺</span> Health</h2>
+        <p>Confirms the api-server is up and the demo simulator is ticking.</p>
+        <div class="actions">
+          <a class="btn ghost" href="/api/v1/health" target="_blank">GET /api/v1/health</a>
+          <a class="btn ghost" href="/api/v1/admin/watch-hce-secret" target="_blank">Watch HCE (admin)</a>
+        </div>
+      </div>
+
+    </div>
+  </main>
+
+  <footer>
+    <p>Running as <code>@workspace/demo</code>. Stop with <kbd>Ctrl-C</kbd>. Rebuild a Windows / macOS / Linux exe with <code>pnpm --filter @workspace/demo run pack-exe</code>.</p>
+  </footer>
+
+  <script>
+    // Cheap uptime counter. Updates once a second from the /demo/status
+    // endpoint so the "Live" badge is accurate even if the server restarts.
+    const uptimeEl = document.getElementById("uptime");
+    async function poll() {
+      try {
+        const res = await fetch("/demo/status");
+        if (!res.ok) throw new Error("bad status");
+        const j = await res.json();
+        const s = Math.floor(j.uptime_seconds ?? 0);
+        const hh = Math.floor(s / 3600);
+        const mm = Math.floor((s % 3600) / 60);
+        const ss = s % 60;
+        uptimeEl.textContent =
+          (hh > 0 ? hh + "h " : "") +
+          (mm > 0 || hh > 0 ? String(mm).padStart(2, "0") + "m " : "") +
+          String(ss).padStart(2, "0") + "s uptime";
+      } catch {
+        uptimeEl.textContent = "server offline";
+      }
+    }
+    poll();
+    setInterval(poll, 1000);
+  </script>
+</body>
+</html>
