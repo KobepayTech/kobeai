@@ -1,0 +1,132 @@
+{
+  "$schema_version": 1,
+  "description": "K9 model manifest. Read by scripts/kobeai-models.mjs and by GET /v1/admin/models. Every entry lists exactly one downloadable artifact — a role in the K9 cascade, the framework runtime that consumes it, a URL, its SHA-256, its on-disk size in MB, and a licence flag the operator MUST honour before shipping.",
+  "docs": "See docs/K9_ARCHITECTURE.md for how each model fits the cascade.",
+  "models": {
+    "yolo-master-v26.08": {
+      "role": "detection",
+      "runtime": "tensorrt",
+      "framework": "onnx",
+      "purpose": "Always-on object detection on every camera feed — people, faces, bags, doors, raised hands.",
+      "url_env": "KOBEAI_MODEL_URL_YOLO_MASTER",
+      "url": "https://models.kobeai.local/yolo-master-v26.08.onnx",
+      "sha256": "REPLACE_WITH_REAL_SHA256_ONCE_HOSTED",
+      "size_mb": 512,
+      "license": "commercial-review-required",
+      "license_note": "Tencent YOLO-Master v26.08 — confirm current release terms before shipping.",
+      "required": true
+    },
+    "bytetrack": {
+      "role": "single-camera-tracking",
+      "runtime": "python",
+      "framework": "algorithm-only",
+      "purpose": "Associates even low-confidence detection boxes across frames so track IDs survive brief occlusions.",
+      "url": null,
+      "sha256": null,
+      "size_mb": 0,
+      "license": "MIT",
+      "required": true,
+      "note": "Pure algorithm; installed via pip / source, not a downloadable weights file."
+    },
+    "osnet-ain-x1_0": {
+      "role": "cross-camera-reid",
+      "runtime": "onnxruntime",
+      "framework": "onnx",
+      "purpose": "Re-identify a person across cameras when the face isn't visible.",
+      "url_env": "KOBEAI_MODEL_URL_OSNET",
+      "url": "https://models.kobeai.local/osnet-ain-x1_0.onnx",
+      "sha256": "REPLACE_WITH_REAL_SHA256_ONCE_HOSTED",
+      "size_mb": 10,
+      "license": "MIT",
+      "required": true
+    },
+    "scrfd-10g-bnkps": {
+      "role": "face-detection",
+      "runtime": "onnxruntime",
+      "framework": "onnx",
+      "purpose": "Fast face detection inside person boxes; upstream of ArcFace.",
+      "url_env": "KOBEAI_MODEL_URL_SCRFD",
+      "url": "https://models.kobeai.local/scrfd-10g-bnkps.onnx",
+      "sha256": "REPLACE_WITH_REAL_SHA256_ONCE_HOSTED",
+      "size_mb": 17,
+      "license": "Apache-2.0",
+      "required": true
+    },
+    "arcface-r100-glint360k": {
+      "role": "face-recognition",
+      "runtime": "onnxruntime",
+      "framework": "onnx",
+      "purpose": "Face embedding — turns a face crop into the student-identity vector K9 matches against.",
+      "url_env": "KOBEAI_MODEL_URL_ARCFACE",
+      "url": "https://models.kobeai.local/arcface-r100-glint360k.onnx",
+      "sha256": "REPLACE_WITH_REAL_SHA256_ONCE_HOSTED",
+      "size_mb": 249,
+      "license": "commercial-review-required",
+      "license_note": "InsightFace pretrained recognition weights are research/non-commercial by default. Ship either an appropriately-licensed ArcFace-compatible embedding or an in-house trained one — do NOT silently ship the research weights.",
+      "required": true
+    },
+    "youtu-vl-4b": {
+      "role": "visual-intelligence",
+      "runtime": "vllm",
+      "framework": "safetensors",
+      "purpose": "Async scene reasoning: counting, OCR, VQA, grounding — never in the sub-second alert loop, consumed via /v1/vision/analyze queue.",
+      "url_env": "KOBEAI_MODEL_URL_YOUTU_VL",
+      "url": "https://huggingface.co/tencent/youtu-vl-4b/resolve/main/model.safetensors",
+      "sha256": "REPLACE_WITH_REAL_SHA256_ONCE_HOSTED",
+      "size_mb": 10700,
+      "license": "commercial-review-required",
+      "license_note": "Tencent Youtu-VL — confirm current release terms before shipping.",
+      "required": true
+    },
+    "locate-anything-3b": {
+      "role": "precision-visual-search",
+      "runtime": "vllm",
+      "framework": "safetensors",
+      "purpose": "Optional K9-Pro model for grounding queries like 'find the student with the blue backpack'.",
+      "url_env": "KOBEAI_MODEL_URL_LOCATE_ANYTHING",
+      "url": "https://huggingface.co/nvidia/locate-anything-3b/resolve/main/model.safetensors",
+      "sha256": "REPLACE_WITH_REAL_SHA256_ONCE_HOSTED",
+      "size_mb": 6500,
+      "license": "commercial-review-required",
+      "required": false,
+      "note": "K9 v1 ships without this — add only if Youtu-VL can't answer a class of grounding queries the school needs."
+    },
+    "whisper-large-v3-turbo": {
+      "role": "speech-recognition",
+      "runtime": "faster-whisper",
+      "framework": "ctranslate2",
+      "purpose": "Classroom speech → text. 4-layer decoder version of large-v3 for realtime chunked streaming.",
+      "url_env": "KOBEAI_MODEL_URL_WHISPER",
+      "url": "https://huggingface.co/Systran/faster-whisper-large-v3-turbo/resolve/main/model.bin",
+      "sha256": "REPLACE_WITH_REAL_SHA256_ONCE_HOSTED",
+      "size_mb": 1620,
+      "license": "MIT",
+      "required": true
+    },
+    "titanet-large": {
+      "role": "speaker-recognition",
+      "runtime": "nemo",
+      "framework": "nemo",
+      "purpose": "Speaker verification / diarisation — which enrolled student is speaking.",
+      "url_env": "KOBEAI_MODEL_URL_TITANET",
+      "url": "https://huggingface.co/nvidia/speakerverification_en_titanet_large/resolve/main/speakerverification_en_titanet_large.nemo",
+      "sha256": "REPLACE_WITH_REAL_SHA256_ONCE_HOSTED",
+      "size_mb": 102,
+      "license": "CC-BY-4.0",
+      "license_note": "Pretrained on English. For Tanzanian classrooms mixing English + Kiswahili, fine-tune on school-approved enrolment recordings before relying on it for automatic attribution — see docs/K9_ARCHITECTURE.md.",
+      "required": true
+    },
+    "qwen3-4b": {
+      "role": "reasoning",
+      "runtime": "sglang",
+      "framework": "safetensors",
+      "purpose": "The K9 assistant/reasoning layer. Sees structured events + text, never raw video. Handles timetable logic, alerts, teacher conversation.",
+      "url_env": "KOBEAI_MODEL_URL_QWEN3",
+      "url": "https://huggingface.co/Qwen/Qwen3-4B/resolve/main/model.safetensors",
+      "sha256": "REPLACE_WITH_REAL_SHA256_ONCE_HOSTED",
+      "size_mb": 8100,
+      "license": "Apache-2.0",
+      "required": true
+    }
+  }
+}

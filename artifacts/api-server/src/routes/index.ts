@@ -31,6 +31,7 @@ import learningProfileRouter from "./learning-profile";
 import classroomInsightsRouter from "./classroom-insights";
 import magazineRouter from "./magazine";
 import visionQueueRouter from "./vision-queue";
+import modelsRouter from "./models";
 
 const router: IRouter = Router();
 
@@ -70,5 +71,6 @@ router.use(learningProfileRouter);
 router.use(classroomInsightsRouter);
 router.use(magazineRouter);
 router.use(visionQueueRouter);
+router.use(modelsRouter);
 
 export default router;
