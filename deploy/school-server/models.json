@@ -88,6 +88,7 @@
       "sha256": "REPLACE_WITH_REAL_SHA256_ONCE_HOSTED",
       "size_mb": 6500,
       "license": "commercial-review-required",
+      "license_note": "NVIDIA LocateAnything — confirm the current release licence and, if commercial, that the school's tenancy allows local inference before enabling it.",
       "required": false,
       "note": "K9 v1 ships without this — add only if Youtu-VL can't answer a class of grounding queries the school needs."
     },
