@@ -249,3 +249,237 @@ body {
   font-family: "SF Mono", Menlo, monospace;
   font-size: 1vw;
 }
+
+/* --- Mode badge / status dot --- */
+.tv-mode-badge {
+  display: inline-block;
+  margin-left: 1vw;
+  padding: 0.3vw 0.9vw;
+  font-size: 1vw;
+  font-weight: 600;
+  color: var(--brand-fg);
+  background: var(--brand-card);
+  border: 1px solid var(--brand-card-border);
+  border-radius: 0.4vw;
+  letter-spacing: 0.02em;
+}
+
+.tv-date .dot {
+  display: inline-block;
+  width: 0.7vw;
+  height: 0.7vw;
+  border-radius: 50%;
+  margin-right: 0.3vw;
+  vertical-align: middle;
+}
+
+.tv-date .dot.ok { background: var(--brand-green); }
+.tv-date .dot.bad { background: #ef476f; }
+
+/* --- Dashboard mode --- */
+.tv-dashboard-main {
+  flex: 1;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 2vh;
+  min-height: 0;
+}
+
+.tv-dashboard-current {
+  padding-bottom: 1vh;
+  border-bottom: 1px solid var(--brand-card-border);
+}
+
+.tv-dashboard-headline {
+  font-size: 6vw;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  margin: 0.5vw 0 0.3vw 0;
+  line-height: 1.05;
+}
+
+.tv-dashboard-sub {
+  font-size: 1.6vw;
+  color: var(--brand-muted);
+}
+
+.tv-dashboard-alerts {
+  display: flex;
+  flex-direction: column;
+  gap: 1.2vw;
+  overflow: hidden;
+}
+
+.tv-dashboard-alerts-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.tv-dashboard-alerts-sub {
+  font-size: 1vw;
+  color: var(--brand-muted);
+  max-width: 40vw;
+  margin-top: 0.4vw;
+}
+
+.tv-dashboard-count {
+  font-size: 4vw;
+  font-weight: 800;
+  line-height: 1;
+  color: #ef476f;
+  font-variant-numeric: tabular-nums;
+}
+
+.tv-dashboard-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.8vw;
+  overflow-y: auto;
+}
+
+.tv-dashboard-row {
+  display: grid;
+  grid-template-columns: 1fr 2fr auto;
+  align-items: baseline;
+  gap: 1vw;
+  padding: 1vw 1.2vw;
+  background: var(--brand-card);
+  border: 1px solid var(--brand-card-border);
+  border-left: 4px solid #ef476f;
+  border-radius: 0.6vw;
+}
+
+.tv-dashboard-row-name {
+  font-size: 1.8vw;
+  font-weight: 700;
+}
+
+.tv-dashboard-row-detail {
+  font-size: 1.2vw;
+  color: var(--brand-muted);
+}
+
+.tv-dashboard-row-detail strong {
+  color: var(--brand-fg);
+}
+
+.tv-dashboard-row-ago {
+  font-size: 1vw;
+  color: var(--brand-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Assistant mode --- */
+.tv-assistant-main {
+  flex: 1;
+  display: grid;
+  grid-template-rows: 1fr auto;
+  gap: 2vh;
+  min-height: 0;
+}
+
+.tv-assistant-scroll {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2vh;
+  padding-right: 0.5vw;
+}
+
+.tv-assistant-empty {
+  padding: 4vh 2vw;
+  text-align: center;
+  color: var(--brand-muted);
+}
+
+.tv-assistant-empty h2 {
+  color: var(--brand-fg);
+  font-size: 3vw;
+  margin: 0 0 1vw 0;
+}
+
+.tv-assistant-empty p {
+  font-size: 1.2vw;
+  max-width: 55vw;
+  margin: 0 auto;
+  line-height: 1.5;
+}
+
+.tv-assistant-turn {
+  padding: 1.5vw 2vw;
+  border-radius: 1vw;
+  max-width: 75%;
+  border: 1px solid var(--brand-card-border);
+}
+
+.tv-assistant-turn-teacher {
+  align-self: flex-end;
+  background: rgba(0, 168, 107, 0.14);
+  border-color: rgba(0, 168, 107, 0.5);
+}
+
+.tv-assistant-turn-kobe {
+  align-self: flex-start;
+  background: var(--brand-card);
+}
+
+.tv-assistant-turn-label {
+  font-size: 0.9vw;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: var(--brand-dim);
+  margin-bottom: 0.4vw;
+  font-weight: 600;
+}
+
+.tv-assistant-turn-text {
+  font-size: 1.6vw;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+
+.tv-assistant-thinking {
+  color: var(--brand-dim);
+  font-style: italic;
+}
+
+.tv-assistant-form {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 1vw;
+}
+
+.tv-assistant-input {
+  padding: 1.2vw 1.5vw;
+  background: var(--brand-card);
+  border: 1px solid var(--brand-card-border);
+  border-radius: 0.8vw;
+  color: var(--brand-fg);
+  font-size: 1.5vw;
+  font-family: inherit;
+  outline: none;
+}
+
+.tv-assistant-input:focus {
+  border-color: var(--brand-green);
+}
+
+.tv-assistant-send {
+  background: var(--brand-green);
+  color: white;
+  border: none;
+  border-radius: 0.8vw;
+  padding: 0 3vw;
+  font-size: 1.4vw;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.tv-assistant-send:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}

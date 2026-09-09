@@ -27,18 +27,37 @@ classroom PC (`chromium --kiosk https://.../form-3a-tv` is a good default).
 If the API base or the secret is missing at build time, the kiosk renders a
 setup screen instead of silently 401'ing forever.
 
+## Modes
+
+The kiosk boots into one of three modes based on the URL:
+
+- `?mode=display` (default) — classroom TV kiosk: current lesson + upcoming
+  schedule, big-print, no chrome. Falls back to a stub view when no
+  timetable is configured yet.
+- `?mode=dashboard` — wall-mounted admin board: current period + live
+  location-mismatches feed pulled from `/v1/classroom/live/mismatches`.
+- `?mode=assistant` — teacher AI chat: text input → `POST /v1/classroom/ask`
+  (server calls `askAI()`); rate-limited per kiosk id so one classroom
+  can't exhaust the school's AI budget.
+
+Birthday celebrations overlay every mode. The server's
+`FOR UPDATE SKIP LOCKED` claim path means two kiosks never double-play.
+
 ## What's here today, what's coming
 
-The kiosk currently ships:
+Shipped:
 
-- A stub-timetable "Right now / Coming up" panel.
-- The birthday celebration loop end-to-end (poll → full-screen overlay →
-  server flips the row to `played`).
+- All three modes above, wired to real server endpoints:
+  - `/v1/classroom/context` — timetable + current period
+  - `/v1/classroom/live/mismatches` — kiosk alias of `/v1/presence/live/mismatches`
+  - `/v1/classroom/ask` — teacher AI question surface
+  - `/v1/classroom/celebrations/next` — birthday celebration claim
+- Setup screen when the build isn't paired.
+- Bundle stays ~140 KB / 46 KB gz.
 
-Follow-up work (server side already partially done):
+Follow-up:
 
-- Real timetable via a new `GET /v1/classroom/context?kiosk_id=` route.
-- Voice channel via KobeVoice (LiveKit) so the room can speak questions
-  and see the AI's answer on the TV.
-- Slot for the personalised magazine (already generated per student) to
-  cycle school-wide highlights during transitions.
+- Voice channel via KobeVoice (LiveKit) so the assistant mode can accept
+  spoken input from the room mic rather than typing on a wireless keyboard.
+- Slot in display mode to cycle school-wide highlights from the
+  personalised magazine during transitions.

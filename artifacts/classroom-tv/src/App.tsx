@@ -1,13 +1,17 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 // ---------------------------------------------------------------------------
-// Config: the kiosk authenticates against the school API with a shared secret
-// baked in via build-time env vars, so a teacher never has to type anything.
-// Run with:
+// Config — same three env vars regardless of mode.
+// Run:
 //   VITE_KOBEAI_API_BASE=https://school.local \
 //   VITE_KOBEAI_KIOSK_SECRET=... \
 //   VITE_KOBEAI_KIOSK_ID=form-3a-tv \
 //   pnpm --filter @workspace/classroom-tv run build
+//
+// Mode routing: default is "display" (the classroom TV kiosk). Add
+// ?mode=dashboard for the big-print live-status board or ?mode=assistant
+// for the teacher AI chat. Modes are URL-driven so kiosks in different
+// roles boot into different views without a rebuild.
 // ---------------------------------------------------------------------------
 const API_BASE = (import.meta.env.VITE_KOBEAI_API_BASE ?? "").replace(/\/$/, "");
 const KIOSK_SECRET = import.meta.env.VITE_KOBEAI_KIOSK_SECRET ?? "";
@@ -16,6 +20,8 @@ const KIOSK_ID = import.meta.env.VITE_KOBEAI_KIOSK_ID ?? "classroom-tv";
 const CELEBRATION_POLL_MS = 20_000;
 const CELEBRATION_DISPLAY_MS = 30_000;
 const CLOCK_TICK_MS = 15_000;
+const CONTEXT_POLL_MS = 60_000;
+const MISMATCH_POLL_MS = 25_000;
 
 type Celebration = {
   id: number;
@@ -26,13 +32,51 @@ type Celebration = {
   status: string;
 };
 
-async function api<T>(path: string): Promise<T | null> {
+type Period = {
+  period_id: number;
+  class_id: number | null;
+  class_name: string | null;
+  subject: string;
+  room: string | null;
+  start_minute: number;
+  end_minute: number;
+};
+
+type Mismatch = {
+  student_code: string;
+  student_name: string | null;
+  zone_name: string | null;
+  zone_type: string | null;
+  expected_zone_name: string | null;
+  expected_zone_type: string | null;
+  mismatch_status: string;
+  seen_at: string;
+};
+
+type Mode = "display" | "dashboard" | "assistant";
+
+function resolveMode(): Mode {
+  const params = new URLSearchParams(window.location.search);
+  const raw = (params.get("mode") ?? "").toLowerCase();
+  if (raw === "dashboard" || raw === "assistant" || raw === "display") return raw;
+  return "display";
+}
+
+// ---------------------------------------------------------------------------
+// Small typed fetch helper. Returns null on any non-2xx or network error so
+// the UI can degrade gracefully; the kiosk should never crash if the server
+// blips.
+// ---------------------------------------------------------------------------
+async function api<T>(path: string, init?: RequestInit): Promise<T | null> {
   if (!API_BASE || !KIOSK_SECRET) return null;
   try {
     const res = await fetch(`${API_BASE}/api${path}`, {
+      ...init,
       headers: {
         "x-classroom-kiosk-secret": KIOSK_SECRET,
         "x-classroom-kiosk-id": KIOSK_ID,
+        ...(init?.body ? { "content-type": "application/json" } : {}),
+        ...(init?.headers ?? {}),
       },
     });
     if (res.status === 204) return null;
@@ -47,6 +91,12 @@ function fmtHM(date: Date): string {
   return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
 
+function minuteToLabel(minute: number): string {
+  const h = Math.floor(minute / 60);
+  const m = minute % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
 function fmtDate(date: Date): string {
   return date.toLocaleDateString(undefined, {
     weekday: "long",
@@ -55,19 +105,26 @@ function fmtDate(date: Date): string {
   });
 }
 
+function timeAgo(iso: string): string {
+  try {
+    const then = new Date(iso).getTime();
+    const s = Math.max(0, Math.floor((Date.now() - then) / 1000));
+    if (s < 60) return `${s}s ago`;
+    if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+    return `${Math.floor(s / 3600)}h ago`;
+  } catch {
+    return "";
+  }
+}
+
 // ---------------------------------------------------------------------------
-// Setup gate: this kiosk refuses to talk to a school server it hasn't been
-// paired with. We tell the operator exactly what env vars to set instead of
-// silently 401'ing forever.
+// Setup gate
 // ---------------------------------------------------------------------------
 function SetupScreen() {
   return (
     <div className="tv-setup">
       <h1>KobeAI Classroom</h1>
-      <p>
-        This kiosk needs to be paired with the school server. Rebuild the
-        classroom-tv artifact with these environment variables:
-      </p>
+      <p>This kiosk needs to be paired with the school server. Rebuild with:</p>
       <p>
         <code>VITE_KOBEAI_API_BASE=https://your-school-server</code>
         <br />
@@ -75,12 +132,42 @@ function SetupScreen() {
         <br />
         <code>VITE_KOBEAI_KIOSK_ID=form-3a-tv</code>
       </p>
+      <p style={{ marginTop: "3vh" }}>
+        Then load{" "}
+        <code>?mode=display</code>, <code>?mode=dashboard</code>, or <code>?mode=assistant</code>.
+      </p>
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Birthday celebration overlay — full-screen for CELEBRATION_DISPLAY_MS.
+// Shared header + mode switcher (visible in dashboard + assistant modes;
+// hidden in display mode so the TV stays clean)
+// ---------------------------------------------------------------------------
+function ModeBadge({ mode }: { mode: Mode }) {
+  const label =
+    mode === "dashboard" ? "Dashboard" : mode === "assistant" ? "Teaching assistant" : "Display";
+  return <span className="tv-mode-badge">{label}</span>;
+}
+
+function ClockHeader({ now, connected, mode }: { now: Date; connected: boolean | null; mode: Mode }) {
+  return (
+    <header className="tv-header">
+      <div className="tv-brand">
+        KobeAI · {KIOSK_ID} <ModeBadge mode={mode} />
+      </div>
+      <div>
+        <div className="tv-clock">{fmtHM(now)}</div>
+        <div className="tv-date">
+          <span className={"dot " + (connected ? "ok" : "bad")} /> {fmtDate(now)}
+        </div>
+      </div>
+    </header>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Birthday overlay (used in every mode)
 // ---------------------------------------------------------------------------
 function BirthdayOverlay({ name, onDone }: { name: string; onDone: () => void }) {
   useEffect(() => {
@@ -97,23 +184,11 @@ function BirthdayOverlay({ name, onDone }: { name: string; onDone: () => void })
 }
 
 // ---------------------------------------------------------------------------
-// Main App
+// Shared hooks (celebrations poll, timetable context)
 // ---------------------------------------------------------------------------
-export function App() {
-  const [now, setNow] = useState(() => new Date());
+function useCelebrations() {
   const [celebration, setCelebration] = useState<Celebration | null>(null);
   const [connected, setConnected] = useState<null | boolean>(null);
-
-  // Clock tick (keeps the header current-time honest and drives the "now"
-  // schedule highlight without re-rendering more than we need to).
-  useEffect(() => {
-    const t = setInterval(() => setNow(new Date()), CLOCK_TICK_MS);
-    return () => clearInterval(t);
-  }, []);
-
-  // Celebration poll: claim the next approved-but-unplayed birthday
-  // celebration for today. The API's SELECT-FOR-UPDATE-SKIP-LOCKED path
-  // guarantees two kiosks won't both claim the same row.
   useEffect(() => {
     if (!API_BASE || !KIOSK_SECRET) return;
     let cancelled = false;
@@ -125,7 +200,7 @@ export function App() {
         return;
       }
       setConnected(true);
-      if (res.celebration && !celebration) setCelebration(res.celebration);
+      setCelebration((c) => c ?? res.celebration ?? null);
     }
     tick();
     const t = setInterval(tick, CELEBRATION_POLL_MS);
@@ -133,97 +208,293 @@ export function App() {
       cancelled = true;
       clearInterval(t);
     };
-  }, [celebration]);
+  }, []);
+  return { celebration, dismiss: () => setCelebration(null), connected };
+}
 
-  // Simple stub schedule display — a follow-up will fetch the real
-  // timetable via a public "/v1/classroom/context" endpoint keyed by the
-  // kiosk's room. For today we render the current wall-clock and slot the
-  // celebration hook alongside so the kiosk is useful on day one.
-  const stubPeriods = useMemo(
-    () => [
-      { start: "08:00", end: "08:45", subject: "Assembly", room: "Hall" },
-      { start: "09:00", end: "09:45", subject: "Biology", room: "Form 3A" },
-      { start: "10:00", end: "10:45", subject: "Mathematics", room: "Form 3A" },
-      { start: "11:00", end: "11:45", subject: "Kiswahili", room: "Form 3A" },
-      { start: "12:00", end: "12:30", subject: "Lunch", room: "Dining Hall" },
-      { start: "13:00", end: "13:45", subject: "Physics", room: "Physics Lab" },
-      { start: "14:00", end: "14:45", subject: "Geography", room: "Form 3A" },
-      { start: "15:00", end: "15:45", subject: "Sports", room: "Field" },
-    ],
-    [],
+function useClassroomContext() {
+  const [context, setContext] = useState<{ current: Period | null; upcoming: Period[] } | null>(null);
+  useEffect(() => {
+    if (!API_BASE || !KIOSK_SECRET) return;
+    let cancelled = false;
+    async function tick() {
+      const res = await api<{
+        current_period: Period | null;
+        upcoming_periods: Period[];
+      }>(`/v1/classroom/context?kiosk_id=${encodeURIComponent(KIOSK_ID)}`);
+      if (cancelled) return;
+      if (res)
+        setContext({ current: res.current_period, upcoming: res.upcoming_periods ?? [] });
+    }
+    tick();
+    const t = setInterval(tick, CONTEXT_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, []);
+  return context;
+}
+
+// ---------------------------------------------------------------------------
+// Mode: display — the classroom TV kiosk (current lesson + upcoming schedule)
+// ---------------------------------------------------------------------------
+function DisplayMode({ now, connected }: { now: Date; connected: boolean | null }) {
+  const context = useClassroomContext();
+  const current = context?.current ?? null;
+  const upcoming = (context?.upcoming ?? []).slice(0, 5);
+
+  return (
+    <div className="tv">
+      <ClockHeader now={now} connected={connected} mode="display" />
+      <main className="tv-main">
+        <section className="tv-now">
+          <div className="tv-now-label">Right now</div>
+          {current ? (
+            <>
+              <h1 className="tv-now-subject">{current.subject}</h1>
+              <div className="tv-now-class">
+                {current.class_name ?? "—"}
+                {current.room ? ` · ${current.room}` : ""}
+              </div>
+              <div className="tv-now-time">
+                {minuteToLabel(current.start_minute)} – {minuteToLabel(current.end_minute)}
+              </div>
+            </>
+          ) : (
+            <>
+              <h1 className="tv-now-subject">Free period</h1>
+              <div className="tv-now-time">No lesson scheduled at {fmtHM(now)}</div>
+            </>
+          )}
+        </section>
+
+        <aside className="tv-schedule">
+          <div className="tv-schedule-title">Coming up</div>
+          {upcoming.length === 0 ? (
+            <div className="tv-schedule-empty">No more lessons scheduled today.</div>
+          ) : (
+            upcoming.map((p) => (
+              <div key={p.period_id} className="tv-schedule-item">
+                <div className="tv-schedule-time">{minuteToLabel(p.start_minute)}</div>
+                <div className="tv-schedule-subject">{p.subject}</div>
+              </div>
+            ))
+          )}
+        </aside>
+      </main>
+      <footer className="tv-footer">
+        <div>
+          <span className={"dot " + (connected ? "ok" : "bad")}></span>
+          {connected ? "Connected to school server" : "Waiting for school server…"}
+        </div>
+        <div>Kiosk id · {KIOSK_ID}</div>
+      </footer>
+    </div>
   );
+}
 
-  const minuteOfDay = now.getHours() * 60 + now.getMinutes();
-  const currentIdx = stubPeriods.findIndex((p) => {
-    const [sh, sm] = p.start.split(":").map(Number);
-    const [eh, em] = p.end.split(":").map(Number);
-    return sh! * 60 + sm! <= minuteOfDay && minuteOfDay < eh! * 60 + em!;
-  });
-  const current = currentIdx >= 0 ? stubPeriods[currentIdx] : null;
-  const upcoming = stubPeriods.slice(currentIdx >= 0 ? currentIdx + 1 : 0, currentIdx + 5);
+// ---------------------------------------------------------------------------
+// Mode: dashboard — big-print live mismatches, for a wall-mounted admin TV
+// ---------------------------------------------------------------------------
+function DashboardMode({ now, connected }: { now: Date; connected: boolean | null }) {
+  const [mismatches, setMismatches] = useState<Mismatch[]>([]);
+  useEffect(() => {
+    if (!API_BASE || !KIOSK_SECRET) return;
+    let cancelled = false;
+    async function tick() {
+      const res = await api<{ mismatches: Mismatch[] }>(
+        "/v1/classroom/live/mismatches?since_minutes=30",
+      );
+      if (cancelled) return;
+      if (res) setMismatches(res.mismatches ?? []);
+    }
+    tick();
+    const t = setInterval(tick, MISMATCH_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, []);
 
-  if (!API_BASE || !KIOSK_SECRET) {
-    return <SetupScreen />;
-  }
+  const context = useClassroomContext();
+  const current = context?.current ?? null;
+
+  return (
+    <div className="tv tv-dashboard">
+      <ClockHeader now={now} connected={connected} mode="dashboard" />
+      <main className="tv-dashboard-main">
+        <section className="tv-dashboard-current">
+          <div className="tv-now-label">Current period</div>
+          <h1 className="tv-dashboard-headline">
+            {current?.subject ?? "Between lessons"}
+          </h1>
+          <div className="tv-dashboard-sub">
+            {current
+              ? `${current.class_name ?? ""}${current.room ? ` · ${current.room}` : ""}`
+              : `As of ${fmtHM(now)}`}
+          </div>
+        </section>
+
+        <section className="tv-dashboard-alerts">
+          <div className="tv-dashboard-alerts-header">
+            <div>
+              <div className="tv-schedule-title">Live location alerts</div>
+              <div className="tv-dashboard-alerts-sub">
+                Students seen somewhere other than their expected zone — last 30 min.
+              </div>
+            </div>
+            <div className="tv-dashboard-count">{mismatches.length}</div>
+          </div>
+          {mismatches.length === 0 ? (
+            <div className="tv-schedule-empty">
+              Everyone is where they should be.
+            </div>
+          ) : (
+            <ul className="tv-dashboard-list">
+              {mismatches.slice(0, 8).map((m) => (
+                <li key={m.student_code} className="tv-dashboard-row">
+                  <div className="tv-dashboard-row-name">
+                    {m.student_name ?? m.student_code}
+                  </div>
+                  <div className="tv-dashboard-row-detail">
+                    seen in <strong>{m.zone_name ?? m.zone_type ?? "unknown"}</strong>{" "}
+                    · expected{" "}
+                    <strong>{m.expected_zone_name ?? m.expected_zone_type ?? "unknown"}</strong>
+                  </div>
+                  <div className="tv-dashboard-row-ago">{timeAgo(m.seen_at)}</div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      </main>
+      <footer className="tv-footer">
+        <div>
+          <span className={"dot " + (connected ? "ok" : "bad")}></span>
+          {connected ? "Live" : "Offline"}
+        </div>
+        <div>Kiosk id · {KIOSK_ID}</div>
+      </footer>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Mode: assistant — teacher AI chat surface. Speaks to /v1/classroom/ask.
+// ---------------------------------------------------------------------------
+type ChatTurn = { role: "teacher" | "kobe"; text: string };
+
+function AssistantMode({ now, connected }: { now: Date; connected: boolean | null }) {
+  const [input, setInput] = useState("");
+  const [turns, setTurns] = useState<ChatTurn[]>([]);
+  const [busy, setBusy] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const send = useCallback(async () => {
+    const question = input.trim();
+    if (!question || busy) return;
+    setInput("");
+    setTurns((prev) => [...prev, { role: "teacher", text: question }]);
+    setBusy(true);
+    const res = await api<{ answer: string }>("/v1/classroom/ask", {
+      method: "POST",
+      body: JSON.stringify({ question, kiosk_id: KIOSK_ID }),
+    });
+    setBusy(false);
+    setTurns((prev) => [
+      ...prev,
+      { role: "kobe", text: res?.answer ?? "I couldn't reach KobeAI just now — try again in a moment." },
+    ]);
+  }, [input, busy]);
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+  }, [turns]);
+
+  return (
+    <div className="tv tv-assistant">
+      <ClockHeader now={now} connected={connected} mode="assistant" />
+      <main className="tv-assistant-main">
+        <div className="tv-assistant-scroll" ref={scrollRef}>
+          {turns.length === 0 && (
+            <div className="tv-assistant-empty">
+              <h2>Ask Kobe anything</h2>
+              <p>
+                Try "Explain photosynthesis to Form 2A", "Give me three quick questions
+                on Newton's second law", or "Summarize today's chemistry class."
+              </p>
+            </div>
+          )}
+          {turns.map((t, i) => (
+            <div
+              key={i}
+              className={"tv-assistant-turn tv-assistant-turn-" + t.role}
+            >
+              <div className="tv-assistant-turn-label">
+                {t.role === "teacher" ? "You" : "Kobe"}
+              </div>
+              <div className="tv-assistant-turn-text">{t.text}</div>
+            </div>
+          ))}
+          {busy && (
+            <div className="tv-assistant-turn tv-assistant-turn-kobe">
+              <div className="tv-assistant-turn-label">Kobe</div>
+              <div className="tv-assistant-turn-text tv-assistant-thinking">
+                thinking…
+              </div>
+            </div>
+          )}
+        </div>
+        <form
+          className="tv-assistant-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            send();
+          }}
+        >
+          <input
+            className="tv-assistant-input"
+            placeholder="Ask KobeAI…"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            disabled={busy}
+            autoFocus
+          />
+          <button className="tv-assistant-send" disabled={busy || !input.trim()}>
+            Send
+          </button>
+        </form>
+      </main>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Main App — picks a mode from ?mode= and mounts it. Shared state
+// (clock, celebration overlay) lives here so every mode gets it.
+// ---------------------------------------------------------------------------
+export function App() {
+  const mode = useMemo(resolveMode, []);
+  const [now, setNow] = useState(() => new Date());
+  const { celebration, dismiss, connected } = useCelebrations();
+
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), CLOCK_TICK_MS);
+    return () => clearInterval(t);
+  }, []);
+
+  if (!API_BASE || !KIOSK_SECRET) return <SetupScreen />;
 
   return (
     <>
-      <div className="tv">
-        <header className="tv-header">
-          <div className="tv-brand">KobeAI · {KIOSK_ID}</div>
-          <div>
-            <div className="tv-clock">{fmtHM(now)}</div>
-            <div className="tv-date">{fmtDate(now)}</div>
-          </div>
-        </header>
-
-        <main className="tv-main">
-          <section className="tv-now">
-            <div className="tv-now-label">Right now</div>
-            {current ? (
-              <>
-                <h1 className="tv-now-subject">{current.subject}</h1>
-                <div className="tv-now-class">{current.room}</div>
-                <div className="tv-now-time">
-                  {current.start} – {current.end}
-                </div>
-              </>
-            ) : (
-              <>
-                <h1 className="tv-now-subject">Free period</h1>
-                <div className="tv-now-time">No lesson scheduled at {fmtHM(now)}</div>
-              </>
-            )}
-          </section>
-
-          <aside className="tv-schedule">
-            <div className="tv-schedule-title">Coming up</div>
-            {upcoming.length === 0 ? (
-              <div className="tv-schedule-empty">No more lessons today.</div>
-            ) : (
-              upcoming.map((p) => (
-                <div key={p.start} className="tv-schedule-item">
-                  <div className="tv-schedule-time">{p.start}</div>
-                  <div className="tv-schedule-subject">{p.subject}</div>
-                </div>
-              ))
-            )}
-          </aside>
-        </main>
-
-        <footer className="tv-footer">
-          <div>
-            <span className={"dot " + (connected ? "ok" : "bad")}></span>
-            {connected ? "Connected to school server" : "Waiting for school server…"}
-          </div>
-          <div>Kiosk id · {KIOSK_ID}</div>
-        </footer>
-      </div>
-
+      {mode === "display" && <DisplayMode now={now} connected={connected} />}
+      {mode === "dashboard" && <DashboardMode now={now} connected={connected} />}
+      {mode === "assistant" && <AssistantMode now={now} connected={connected} />}
       {celebration && (
         <BirthdayOverlay
           name={celebration.student_name ?? celebration.student_code}
-          onDone={() => setCelebration(null)}
+          onDone={dismiss}
         />
       )}
     </>
