@@ -143,6 +143,9 @@ export const studentLearningProfileTable = pgTable("student_learning_profile", {
   computed_questions_asked_count: integer("computed_questions_asked_count").notNull().default(0),
   computed_achievements: jsonb("computed_achievements").notNull().default(sql`'[]'::jsonb`),
   computed_attendance_rate: integer("computed_attendance_rate"), // 0-100
+  // Concrete remediation suggestions mined from paper-marking (topic +
+  // example misconception). Shape: [{ topic, urgency, evidence }].
+  computed_remediations: jsonb("computed_remediations").notNull().default(sql`'[]'::jsonb`),
   // Teacher overrides — the merged view prefers these when non-null.
   override_topics_strong: jsonb("override_topics_strong"),
   override_topics_weak: jsonb("override_topics_weak"),
@@ -226,6 +229,137 @@ export const classroomDiscussionInsightsTable = pgTable(
 );
 export type ClassroomDiscussionInsight =
   typeof classroomDiscussionInsightsTable.$inferSelect;
+
+/**
+ * Teacher-lens sessions. The teacher taps "start" on the lens app when
+ * they're about to mark papers or walk around the class. The session
+ * groups paper-graded events + whisper queue + vision-frame requests so
+ * we can attribute them all back to one teacher + one moment.
+ */
+export const teacherLensSessionsTable = pgTable(
+  "teacher_lens_sessions",
+  {
+    id: serial("id").primaryKey(),
+    teacher_user_id: integer("teacher_user_id").references(() => usersTable.id, {
+      onDelete: "set null",
+    }),
+    // "marking" | "lookup" | "ambient"
+    mode: text("mode").notNull().default("marking"),
+    device: text("device"), // "android-phone" | "xreal-glasses" | "browser" | ...
+    started_at: timestamp("started_at").notNull().defaultNow(),
+    ended_at: timestamp("ended_at"),
+    metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
+  },
+  (t) => ({
+    teacher_idx: index("teacher_lens_sessions_teacher_idx").on(t.teacher_user_id, t.started_at),
+  }),
+);
+export type TeacherLensSession = typeof teacherLensSessionsTable.$inferSelect;
+
+/**
+ * One row per marked exam / homework paper the teacher processed through
+ * the lens. The paper-graded ingest endpoint accepts the whole payload in
+ * one shot (envelope + per-question items) so a stack of marked papers
+ * becomes a stack of graded_papers rows — with the individual questions
+ * living in graded_paper_items.
+ */
+export const gradedPapersTable = pgTable(
+  "graded_papers",
+  {
+    id: serial("id").primaryKey(),
+    session_id: integer("session_id").references(() => teacherLensSessionsTable.id, {
+      onDelete: "set null",
+    }),
+    teacher_user_id: integer("teacher_user_id").references(() => usersTable.id, {
+      onDelete: "set null",
+    }),
+    student_code: text("student_code").notNull(),
+    class_id: integer("class_id").references(() => classesTable.id, { onDelete: "set null" }),
+    subject: text("subject"),
+    // The paper's own title / assignment name if the teacher wrote one at
+    // the top and the OCR pass caught it.
+    assessment_title: text("assessment_title"),
+    total_questions: integer("total_questions").notNull().default(0),
+    correct_count: integer("correct_count").notNull().default(0),
+    incorrect_count: integer("incorrect_count").notNull().default(0),
+    score_percent: integer("score_percent"), // 0..100
+    graded_at: timestamp("graded_at").notNull().defaultNow(),
+    // Optional image reference in object storage if the lens saved the
+    // paper for review.
+    paper_image_key: text("paper_image_key"),
+    // Free-form OCR/AI extraction metadata (model version, confidence).
+    metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
+  },
+  (t) => ({
+    student_time_idx: index("graded_papers_student_time_idx").on(t.student_code, t.graded_at),
+    subject_idx: index("graded_papers_subject_idx").on(t.subject, t.graded_at),
+  }),
+);
+export type GradedPaper = typeof gradedPapersTable.$inferSelect;
+
+/**
+ * One row per question on a graded paper. This is the primary feed into
+ * the "concrete misconception" side of the learning profile — patterns
+ * like "student consistently gets multiplication basics wrong" fall out
+ * of aggregating on question_topic + is_correct.
+ */
+export const gradedPaperItemsTable = pgTable(
+  "graded_paper_items",
+  {
+    id: serial("id").primaryKey(),
+    paper_id: integer("paper_id")
+      .notNull()
+      .references(() => gradedPapersTable.id, { onDelete: "cascade" }),
+    question_number: integer("question_number"),
+    question_text: text("question_text"),
+    // Free-form categorisation the OCR/AI pass may or may not fill in
+    // (e.g. "multiplication basics", "cell biology definitions").
+    question_topic: text("question_topic"),
+    student_answer: text("student_answer"),
+    expected_answer: text("expected_answer"),
+    is_correct: boolean("is_correct").notNull(),
+    marks_awarded: integer("marks_awarded"),
+    marks_possible: integer("marks_possible"),
+    metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
+  },
+  (t) => ({
+    paper_idx: index("graded_paper_items_paper_idx").on(t.paper_id),
+    topic_correct_idx: index("graded_paper_items_topic_correct_idx").on(t.question_topic, t.is_correct),
+  }),
+);
+export type GradedPaperItem = typeof gradedPaperItemsTable.$inferSelect;
+
+/**
+ * Outgoing whisper queue — messages the teacher-lens client polls and
+ * plays through the paired earbud via TTS. Kept minimal on purpose: text
+ * only, kiosk claims one at a time with SKIP LOCKED to avoid two lenses
+ * on the same session double-playing.
+ */
+export const teacherLensWhispersTable = pgTable(
+  "teacher_lens_whispers",
+  {
+    id: serial("id").primaryKey(),
+    session_id: integer("session_id").references(() => teacherLensSessionsTable.id, {
+      onDelete: "cascade",
+    }),
+    teacher_user_id: integer("teacher_user_id").references(() => usersTable.id, {
+      onDelete: "set null",
+    }),
+    text: text("text").notNull(),
+    priority: integer("priority").notNull().default(5), // 1 = urgent, 10 = idle
+    status: text("status").notNull().default("pending"), // pending | played | dismissed
+    created_at: timestamp("created_at").notNull().defaultNow(),
+    played_at: timestamp("played_at"),
+  },
+  (t) => ({
+    session_status_idx: index("teacher_lens_whispers_session_status_idx").on(
+      t.session_id,
+      t.status,
+      t.priority,
+    ),
+  }),
+);
+export type TeacherLensWhisper = typeof teacherLensWhispersTable.$inferSelect;
 
 /**
  * One row per generated magazine edition. `edition_type = "school"` is the

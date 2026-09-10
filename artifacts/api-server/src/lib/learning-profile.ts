@@ -16,6 +16,14 @@ let tablesReady: Promise<void> | null = null;
 let schedulerStarted = false;
 let schedulerTimer: NodeJS.Timeout | null = null;
 
+export type RemediationSuggestion = {
+  topic: string;
+  urgency: "high" | "medium" | "low";
+  wrong_count: number;
+  total_seen: number;
+  evidence: string | null;
+};
+
 export type LearningProfileMerged = {
   student_code: string;
   student_name: string | null;
@@ -25,6 +33,7 @@ export type LearningProfileMerged = {
   questions_asked_count: number;
   achievements: string[];
   attendance_rate: number | null;
+  remediations: RemediationSuggestion[];
   override_notes: string | null;
   computed_at: string | null;
   updated_at: string | null;
@@ -77,6 +86,28 @@ function mergeArrays(override: unknown, computed: unknown): string[] {
   return coerceStringArray(computed);
 }
 
+function coerceRemediations(value: unknown): RemediationSuggestion[] {
+  if (!Array.isArray(value)) return [];
+  const out: RemediationSuggestion[] = [];
+  for (const raw of value) {
+    if (!raw || typeof raw !== "object") continue;
+    const r = raw as Record<string, unknown>;
+    const topic = typeof r["topic"] === "string" ? r["topic"] : null;
+    if (!topic) continue;
+    const urgencyRaw = String(r["urgency"] ?? "medium");
+    const urgency: "high" | "medium" | "low" =
+      urgencyRaw === "high" ? "high" : urgencyRaw === "low" ? "low" : "medium";
+    out.push({
+      topic,
+      urgency,
+      wrong_count: Number(r["wrong_count"] ?? 0),
+      total_seen: Number(r["total_seen"] ?? 0),
+      evidence: typeof r["evidence"] === "string" ? (r["evidence"] as string) : null,
+    });
+  }
+  return out;
+}
+
 export function mergeProfile(row: Record<string, unknown>): LearningProfileMerged {
   const rate = row["computed_attendance_rate"];
   return {
@@ -88,6 +119,7 @@ export function mergeProfile(row: Record<string, unknown>): LearningProfileMerge
     questions_asked_count: Number(row["computed_questions_asked_count"] ?? 0),
     achievements: mergeArrays(row["override_achievements"], row["computed_achievements"]),
     attendance_rate: rate == null ? null : Number(rate),
+    remediations: coerceRemediations(row["computed_remediations"]),
     override_notes: (row["override_notes"] as string) ?? null,
     computed_at: row["computed_at"] ? new Date(row["computed_at"] as string).toISOString() : null,
     updated_at: row["updated_at"] ? new Date(row["updated_at"] as string).toISOString() : null,
@@ -191,6 +223,63 @@ export async function rollupStudent(studentCode: string): Promise<LearningProfil
     );
   }
 
+  // 3c. Graded-paper mining. Every wrong answer from paper-marking is a
+  //     labeled data point. Aggregate by question_topic — if the student
+  //     got the same topic wrong twice or more, add it to topics_weak,
+  //     and generate a concrete remediation with an example misconception.
+  let remediations: Array<{
+    topic: string;
+    urgency: "high" | "medium" | "low";
+    wrong_count: number;
+    total_seen: number;
+    evidence: string | null;
+  }> = [];
+  try {
+    const topicRows = await pool.query(
+      `SELECT i.question_topic,
+              COUNT(*) FILTER (WHERE i.is_correct = FALSE)::int AS wrong_count,
+              COUNT(*)::int AS total_seen,
+              (SELECT student_answer FROM graded_paper_items gpi
+                 INNER JOIN graded_papers gp ON gp.id = gpi.paper_id
+                 WHERE gp.student_code = $1
+                   AND gpi.question_topic = i.question_topic
+                   AND gpi.is_correct = FALSE
+                   AND gpi.student_answer IS NOT NULL
+                 ORDER BY gp.graded_at DESC
+                 LIMIT 1) AS evidence
+       FROM graded_paper_items i
+       INNER JOIN graded_papers p ON p.id = i.paper_id
+       WHERE p.student_code = $1
+         AND i.question_topic IS NOT NULL
+       GROUP BY i.question_topic
+       HAVING COUNT(*) FILTER (WHERE i.is_correct = FALSE) >= 2
+       ORDER BY wrong_count DESC
+       LIMIT 6`,
+      [studentCode],
+    );
+    for (const row of topicRows.rows) {
+      const wrongCount: number = row.wrong_count;
+      const totalSeen: number = row.total_seen;
+      const wrongRate = totalSeen > 0 ? wrongCount / totalSeen : 0;
+      const urgency: "high" | "medium" | "low" =
+        wrongRate >= 0.7 ? "high" : wrongRate >= 0.4 ? "medium" : "low";
+      remediations.push({
+        topic: row.question_topic,
+        urgency,
+        wrong_count: wrongCount,
+        total_seen: totalSeen,
+        evidence: row.evidence ?? null,
+      });
+      if (!topicsWeak.includes(row.question_topic)) topicsWeak.push(row.question_topic);
+    }
+    topicsWeak.sort();
+  } catch (err) {
+    logger.warn(
+      { err: err instanceof Error ? err.message : String(err), studentCode },
+      "learning-profile: graded-paper mining skipped",
+    );
+  }
+
   // 4. Attendance rate: last N days of presence_checkpoint_results, treating
   //    on_schedule / low_confidence / wrong_location (student was seen
   //    somewhere) as "seen", and not_seen as "missing". Camera coverage
@@ -218,14 +307,22 @@ export async function rollupStudent(studentCode: string): Promise<LearningProfil
     );
   }
 
+  // Additive migration for older installs: add computed_remediations if the
+  // column isn't there yet. Cheap check; runs once effectively.
+  await pool.query(`
+    ALTER TABLE student_learning_profile
+    ADD COLUMN IF NOT EXISTS computed_remediations JSONB NOT NULL DEFAULT '[]'::jsonb
+  `);
+
   // Upsert without touching any override_* fields.
   const result = await pool.query(
     `INSERT INTO student_learning_profile (
        student_code, student_user_id,
        computed_topics_strong, computed_topics_weak,
        computed_questions_asked_count, computed_achievements,
-       computed_attendance_rate, computed_at, updated_at
-     ) VALUES ($1, $2, $3::jsonb, $4::jsonb, $5, $6::jsonb, $7, NOW(), NOW())
+       computed_attendance_rate, computed_remediations,
+       computed_at, updated_at
+     ) VALUES ($1, $2, $3::jsonb, $4::jsonb, $5, $6::jsonb, $7, $8::jsonb, NOW(), NOW())
      ON CONFLICT (student_code) DO UPDATE SET
        student_user_id = EXCLUDED.student_user_id,
        computed_topics_strong = EXCLUDED.computed_topics_strong,
@@ -233,6 +330,7 @@ export async function rollupStudent(studentCode: string): Promise<LearningProfil
        computed_questions_asked_count = EXCLUDED.computed_questions_asked_count,
        computed_achievements = EXCLUDED.computed_achievements,
        computed_attendance_rate = EXCLUDED.computed_attendance_rate,
+       computed_remediations = EXCLUDED.computed_remediations,
        computed_at = NOW(),
        updated_at = NOW()
      RETURNING *`,
@@ -244,6 +342,7 @@ export async function rollupStudent(studentCode: string): Promise<LearningProfil
       questionsAsked,
       JSON.stringify(achievements),
       attendanceRate,
+      JSON.stringify(remediations),
     ],
   );
   return mergeProfile({ ...result.rows[0], student_name: student.rows[0].name });
