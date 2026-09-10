@@ -2,6 +2,7 @@ import { pool } from "@workspace/db";
 import { logger } from "./logger";
 import { presenceConfig } from "./presence-monitor";
 import { enqueueVisionAnalysisSafe } from "./vision-queue";
+import { askKobe, llmGenerationEnabled } from "./kobe-llm";
 
 // ---------------------------------------------------------------------------
 // Student-development toolkit. Curated notes, adaptive retests, behavior
@@ -138,10 +139,7 @@ type WrongItem = {
   expected_answer: string | null;
 };
 
-function noteBody(item: WrongItem, studentName: string | null): string {
-  // LLM slot: replace with Qwen call once wired. For now a templated
-  // explainer that reads naturally when the topic + expected answer are
-  // present, and degrades gracefully when only one is.
+function noteBodyTemplate(item: WrongItem, studentName: string | null): string {
   const name = studentName ?? "This student";
   const lines: string[] = [];
   lines.push(`## ${item.topic}\n`);
@@ -164,6 +162,27 @@ function noteBody(item: WrongItem, studentName: string | null): string {
     `word "${item.topic.split(/\s+/)[0]}" and pause: what's the definition ` +
     `first, then the example?_`);
   return lines.join("\n");
+}
+
+/**
+ * Ask the LLM for a curated note. Falls back to the rule-based
+ * template on any failure so paper marking never blocks on model
+ * availability.
+ */
+async function generateNoteBody(item: WrongItem, studentName: string | null): Promise<{ body: string; generator: string }> {
+  if (!llmGenerationEnabled()) {
+    return { body: noteBodyTemplate(item, studentName), generator: "rule-based-v1" };
+  }
+  const prompt =
+    `Write a 180-word note for a Tanzanian school student called ${studentName ?? "the student"} ` +
+    `about the topic "${item.topic}"${item.subject ? ` in ${item.subject}` : ""}. ` +
+    `Their answer on the last paper was: "${item.student_answer ?? "(not captured)"}". ` +
+    `The stronger answer was: "${item.expected_answer ?? "(not captured)"}". ` +
+    `Explain the concept clearly, gently correct the misconception, and give one Tanzanian example. ` +
+    `Use markdown headings and one short paragraph. Do not moralise; keep it practical.`;
+  const answer = await askKobe(prompt, { tag: "curated-note:v1", maxChars: 2000 });
+  if (answer) return { body: answer, generator: "kobe-llm-v1" };
+  return { body: noteBodyTemplate(item, studentName), generator: "rule-based-v1" };
 }
 
 export async function generateCuratedNotesForPaper(
@@ -198,12 +217,12 @@ export async function generateCuratedNotesForPaper(
       student_answer: raw.student_answer ?? null,
       expected_answer: raw.expected_answer ?? null,
     };
-    const body = noteBody(wrong, paperRow.student_name ?? null);
+    const { body, generator } = await generateNoteBody(wrong, paperRow.student_name ?? null);
     await pool.query(
       `INSERT INTO student_curated_notes (
          student_code, source_paper_id, subject, topic,
          student_answer, ideal_answer, body_markdown, generator
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'rule-based-v1')`,
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
       [
         paperRow.student_code,
         paperRow.id,
@@ -212,12 +231,14 @@ export async function generateCuratedNotesForPaper(
         wrong.student_answer,
         wrong.expected_answer,
         body,
+        generator,
       ],
     );
     inserted += 1;
 
-    // LLM slot: also enqueue a Qwen job so the note can be re-authored
-    // richer once the on-prem worker lands. Fire-and-forget.
+    // Also enqueue a queue-based Qwen job so a heavier worker (with
+    // pedagogy fine-tuning) can eventually re-author the note. Fire-and-
+    // forget — the rule-based / short-Ollama version is already saved.
     enqueueVisionAnalysisSafe({
       studentCode: paperRow.student_code,
       question: `Write a 200-word student-facing curated note for topic "${wrong.topic}" in ${paperRow.subject ?? "the relevant subject"}. Student's answer was "${wrong.student_answer ?? "not captured"}"; expected "${wrong.expected_answer ?? "not captured"}". Explain the concept, correct the misconception, give one Tanzanian example.`,
@@ -261,6 +282,36 @@ function stubQuestionsForTopic(
   return hard;
 }
 
+async function llmQuestionsForTopic(
+  topic: string,
+  subject: string | null,
+  difficulty: number,
+): Promise<Array<{ question_text: string; expected_answer: string }> | null> {
+  if (!llmGenerationEnabled()) return null;
+  const band = difficulty <= 1 ? "easy" : difficulty <= 3 ? "medium" : "hard";
+  const prompt =
+    `Write exactly 3 ${band} questions on "${topic}"${subject ? ` in ${subject}` : ""} ` +
+    `for a Tanzanian secondary-school student, plus a one-line expected answer for each. ` +
+    `Return one question and one answer per line separated by " || ". ` +
+    `Do not number the questions or add any preamble. Nine lines total in the format ` +
+    `<question> || <expected answer>. Nothing else.`;
+  const raw = await askKobe(prompt, { tag: "retest-question:v1", maxChars: 2000 });
+  if (!raw) return null;
+  const parsed: Array<{ question_text: string; expected_answer: string }> = [];
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const parts = trimmed.split("||");
+    if (parts.length < 2) continue;
+    const q = parts[0].trim();
+    const a = parts.slice(1).join("||").trim();
+    if (q.length < 8 || a.length < 2) continue;
+    parsed.push({ question_text: q, expected_answer: a });
+    if (parsed.length >= 3) break;
+  }
+  return parsed.length > 0 ? parsed : null;
+}
+
 async function ensureQuestionBankFor(
   topic: string,
   subject: string | null,
@@ -272,13 +323,15 @@ async function ensureQuestionBankFor(
     [topic, difficulty],
   );
   if ((existing.rows[0]?.n ?? 0) >= 3) return;
-  const stubs = stubQuestionsForTopic(topic, subject, difficulty);
+  const llmOnes = await llmQuestionsForTopic(topic, subject, difficulty);
+  const stubs = llmOnes ?? stubQuestionsForTopic(topic, subject, difficulty);
+  const generator = llmOnes ? "kobe-llm-v1" : "rule-based-v1";
   for (const s of stubs) {
     await pool.query(
       `INSERT INTO generated_questions
          (topic, subject, difficulty_level, question_text, expected_answer, generator)
-       VALUES ($1, $2, $3, $4, $5, 'rule-based-v1')`,
-      [topic, subject, difficulty, s.question_text, s.expected_answer],
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [topic, subject, difficulty, s.question_text, s.expected_answer, generator],
     );
   }
 }
@@ -577,7 +630,33 @@ export async function generateLessonPlanForStudent(
     lines.push("");
     lines.push(`Recently generated notes to hand out: ${notes.rows.map((n) => n.topic).join(", ")}.`);
   }
-  const plan = lines.join("\n");
+  let plan = lines.join("\n");
+  let planGenerator: "rule-based-v1" | "kobe-llm-v1" = "rule-based-v1";
+
+  if (llmGenerationEnabled()) {
+    const structuredContext = JSON.stringify({
+      student_name: studentName,
+      week_start: week,
+      strong_topics: strongTopics,
+      weak_topics: weakTopics,
+      remediations: remediations.slice(0, 4),
+      dominant_habit: dominantHabit,
+      behavior_counts: Object.fromEntries(behaviorMap),
+      open_retests: openRetests.rows.length,
+      recent_note_topics: notes.rows.map((n) => n.topic),
+    });
+    const prompt =
+      `Write a personalized weekly lesson plan for a Tanzanian teacher's ` +
+      `student. Data: ${structuredContext}. Use three markdown sections: ` +
+      `"## Focus this week", "## Practice", "## Watch out for". Total under ` +
+      `250 words. Give concrete, kind, actionable suggestions tied to the ` +
+      `data provided; no invented facts.`;
+    const authored = await askKobe(prompt, { tag: "lesson-plan:v1", maxChars: 3000 });
+    if (authored) {
+      plan = `# Personalized lesson plan — ${studentName}\n_Week starting ${week}_\n\n${authored.trim()}`;
+      planGenerator = "kobe-llm-v1";
+    }
+  }
 
   const snapshot = {
     week_start: week,
@@ -592,7 +671,7 @@ export async function generateLessonPlanForStudent(
   const result = await pool.query(
     `INSERT INTO personalized_lesson_plans
        (student_code, week_start, plan_markdown, snapshot, generator, generated_by)
-     VALUES ($1, $2, $3, $4::jsonb, 'rule-based-v1', $5)
+     VALUES ($1, $2, $3, $4::jsonb, $5, $6)
      ON CONFLICT (week_start, student_code) DO UPDATE SET
        plan_markdown = EXCLUDED.plan_markdown,
        snapshot = EXCLUDED.snapshot,
@@ -600,7 +679,7 @@ export async function generateLessonPlanForStudent(
        generated_at = NOW(),
        generated_by = EXCLUDED.generated_by
      RETURNING id, plan_markdown`,
-    [studentCode, week, plan, JSON.stringify(snapshot), generatedBy],
+    [studentCode, week, plan, JSON.stringify(snapshot), planGenerator, generatedBy],
   );
   return { id: Number(result.rows[0].id), plan_markdown: result.rows[0].plan_markdown };
 }
@@ -646,9 +725,6 @@ export async function generateAllLessonPlans(
 export function startLessonPlanScheduler(): void {
   if (schedulerStarted) return;
   schedulerStarted = true;
-  ensureStudentDevelopmentTables().catch((err) =>
-    logger.error({ err }, "student-development tables initialization failed"),
-  );
   const tick = async () => {
     try {
       const out = await generateAllLessonPlans();
@@ -660,6 +736,11 @@ export function startLessonPlanScheduler(): void {
       schedulerTimer.unref();
     }
   };
+  // Kick a first pass on startup — fresh installs shouldn't wait a whole
+  // week before the first lesson plans exist.
+  ensureStudentDevelopmentTables()
+    .then(() => generateAllLessonPlans().catch(() => undefined))
+    .catch((err) => logger.error({ err }, "lesson-plan startup pass failed"));
   schedulerTimer = setTimeout(tick, LESSON_PLAN_INTERVAL_MS);
   schedulerTimer.unref();
   logger.info({ interval_hours: LESSON_PLAN_INTERVAL_MS / 3_600_000 }, "lesson-plan scheduler started");

@@ -483,3 +483,26 @@ body {
   opacity: 0.4;
   cursor: not-allowed;
 }
+
+.tv-assistant-mic {
+  background: var(--brand-card);
+  border: 1px solid var(--brand-card-border);
+  color: var(--brand-fg);
+  padding: 0 2vw;
+  border-radius: 0.8vw;
+  font-size: 1.2vw;
+  font-weight: 600;
+  cursor: pointer;
+  min-width: 12vw;
+}
+.tv-assistant-mic.tv-assistant-mic-on {
+  background: #ef476f;
+  border-color: transparent;
+  color: white;
+  animation: mic-pulse 1.4s infinite;
+}
+.tv-assistant-mic:disabled { opacity: 0.5; cursor: not-allowed; }
+@keyframes mic-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 71, 111, 0.6); }
+  50%      { box-shadow: 0 0 0 12px rgba(239, 71, 111, 0.0); }
+}

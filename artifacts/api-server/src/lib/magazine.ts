@@ -470,10 +470,6 @@ export function startMagazineScheduler(): void {
   if (schedulerStarted) return;
   schedulerStarted = true;
 
-  ensureMagazineTables().catch((err) =>
-    logger.error({ err }, "magazine tables initialization failed"),
-  );
-
   const scheduleNext = () => {
     schedulerTimer = setTimeout(async () => {
       try {
@@ -487,6 +483,13 @@ export function startMagazineScheduler(): void {
     }, WEEKLY_INTERVAL_MS);
     schedulerTimer.unref();
   };
+
+  // Kick a first pass on startup so a fresh install has editions
+  // immediately, not after the first week. Best-effort — a failure
+  // here doesn't stop the scheduler.
+  ensureMagazineTables()
+    .then(() => generateAllEditions().catch(() => undefined))
+    .catch((err) => logger.error({ err }, "magazine startup pass failed"));
 
   scheduleNext();
   logger.info({ interval_hours: WEEKLY_INTERVAL_MS / 3_600_000 }, "magazine scheduler started");

@@ -187,7 +187,76 @@ function useCamera() {
     ctx.drawImage(v, 0, 0);
     return canvas.toDataURL("image/jpeg", 0.7);
   }, []);
-  return { videoRef, ready, err, captureFrame };
+  const captureBlob = useCallback(async (): Promise<Blob | null> => {
+    const v = videoRef.current;
+    if (!v || v.videoWidth === 0) return null;
+    const canvas = document.createElement("canvas");
+    canvas.width = v.videoWidth;
+    canvas.height = v.videoHeight;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+    ctx.drawImage(v, 0, 0);
+    return await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob((b) => resolve(b), "image/jpeg", 0.75),
+    );
+  }, []);
+  return { videoRef, ready, err, captureFrame, captureBlob };
+}
+
+// ---------------------------------------------------------------------------
+// Wake-word listener. Uses webkitSpeechRecognition (Chromium; iOS Safari
+// exposes it under a vendor prefix). Falls back silently on unsupported
+// browsers — the shutter still works. Only trigger on the word "Kobe".
+// ---------------------------------------------------------------------------
+type WakeWordOptions = { enabled: boolean; onFire: () => void };
+function useWakeWord({ enabled, onFire }: WakeWordOptions) {
+  useEffect(() => {
+    if (!enabled) return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const anyWindow = window as any;
+    const SR = anyWindow.SpeechRecognition ?? anyWindow.webkitSpeechRecognition;
+    if (!SR) return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rec: any = new SR();
+    rec.continuous = true;
+    rec.interimResults = false;
+    rec.lang = "en-US";
+    let stopped = false;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    rec.onresult = (ev: any) => {
+      for (let i = ev.resultIndex; i < ev.results.length; i += 1) {
+        const t = (ev.results[i]?.[0]?.transcript ?? "").toLowerCase().trim();
+        if (!t) continue;
+        if (/\bkobe\b/.test(t) || /\bcoby\b/.test(t) || /\bkobey\b/.test(t)) {
+          onFire();
+          break;
+        }
+      }
+    };
+    rec.onend = () => {
+      // Chrome kills continuous recognition after ~60s. Restart while enabled.
+      if (!stopped && enabled) {
+        try {
+          rec.start();
+        } catch {
+          /* ignore */
+        }
+      }
+    };
+    try {
+      rec.start();
+    } catch {
+      /* already started or not permitted */
+    }
+    return () => {
+      stopped = true;
+      try {
+        rec.stop();
+      } catch {
+        /* ignore */
+      }
+    };
+  }, [enabled, onFire]);
 }
 
 // ---------------------------------------------------------------------------
@@ -500,7 +569,12 @@ export function App() {
   const [lookupBrief, setLookupBrief] = useState<StudentBrief | null>(null);
   const [markOpen, setMarkOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
-  const { videoRef, ready: camReady, err: camErr, captureFrame } = useCamera();
+  const [wakeWordOn, setWakeWordOn] = useState<boolean>(false);
+  const [studentPicker, setStudentPicker] = useState<null | {
+    students: Array<{ student_code: string; student_name: string | null }>;
+    imageKey: string | null;
+  }>(null);
+  const { videoRef, ready: camReady, err: camErr, captureFrame, captureBlob } = useCamera();
 
   // Start a session as soon as we have auth.
   useEffect(() => {
@@ -541,21 +615,84 @@ export function App() {
     return () => clearTimeout(t);
   }, [toast]);
 
+  // Fetch a small recent-student picker so lookup mode always has a
+  // list of names to tap while face-rec isn't running yet. Cached
+  // per-session; refreshed lazily.
+  const fetchRecentStudents = useCallback(async (): Promise<
+    Array<{ student_code: string; student_name: string | null }>
+  > => {
+    if (!auth) return [];
+    try {
+      const res = await fetch(`${auth.api_base}/api/v1/teacher/students?limit=25`, {
+        headers: { authorization: `Bearer ${auth.token}` },
+      });
+      if (!res.ok) return [];
+      const body = await res.json();
+      // /v1/teacher/students returns { students: [{ student_id, name, ... }] }
+      // where student_id is the student_code.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return (body?.students ?? []).map((s: any) => ({
+        student_code: String(s.student_id ?? s.student_code ?? ""),
+        student_name: s.name ?? null,
+      })).filter((s: { student_code: string }) => s.student_code);
+    } catch {
+      return [];
+    }
+  }, [auth]);
+
+  // Upload the current frame to /v1/teacher-lens/frame. Returns the
+  // resulting image_key + queue id if the server accepted it; server
+  // enqueues the analysis request. Best effort — if it fails we still
+  // let the teacher pick a student manually.
+  const uploadFrame = useCallback(async (): Promise<{ image_key: string | null } | null> => {
+    if (!auth) return null;
+    const blob = await captureBlob();
+    if (!blob) return null;
+    try {
+      const res = await fetch(`${auth.api_base}/api/v1/teacher-lens/frame`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${auth.token}`,
+          "content-type": "image/jpeg",
+          "x-lens-session-id": String(sessionId ?? ""),
+          "x-lens-mode": mode,
+        },
+        body: blob,
+      });
+      if (!res.ok) return null;
+      const body = await res.json();
+      return { image_key: body?.image_key ?? null };
+    } catch {
+      return null;
+    }
+  }, [auth, captureBlob, mode, sessionId]);
+
   const onShutter = useCallback(async () => {
     if (!auth) return;
     // Priming the SpeechSynthesis on the first user gesture is critical
     // on iOS/Android — later background whispers only fire if we've spoken
     // at least once from a direct tap.
     speak(mode === "lookup" ? "Looking up." : "Ready to mark.");
-    captureFrame(); // future: upload for on-device-less face rec
+    captureFrame(); // for local UX polish; the upload path uses captureBlob
 
     if (mode === "lookup") {
-      // For now the client asks the teacher which student they're looking
-      // at via a small prompt. The full flow will use face recognition
-      // via /v1/teacher-lens/frame once the vision worker is wired.
-      const guess = window.prompt("Student code you're looking at:", "K9-001");
-      const studentCode = guess?.trim();
-      if (!studentCode) return;
+      // Fire the frame upload in parallel with prepping the picker. When
+      // the real Youtu-VL / SCRFD worker is running server-side, the
+      // recognised student_code will come back via the whisper channel
+      // ("Asha. Last Biology 92%…") without the teacher having to pick.
+      const upload = uploadFrame();
+      const recent = await fetchRecentStudents();
+      const uploaded = await upload;
+      setStudentPicker({ students: recent, imageKey: uploaded?.image_key ?? null });
+    } else {
+      setMarkOpen(true);
+    }
+  }, [auth, mode, captureFrame, uploadFrame, fetchRecentStudents]);
+
+  const runLookup = useCallback(
+    async (studentCode: string) => {
+      if (!auth) return;
+      setStudentPicker(null);
       try {
         const r = await apiPost<StudentBrief>(auth, "/v1/teacher-lens/lookup", {
           student_code: studentCode,
@@ -565,10 +702,20 @@ export function App() {
       } catch (err) {
         setToast(err instanceof Error ? err.message : "lookup failed");
       }
-    } else {
-      setMarkOpen(true);
-    }
-  }, [auth, mode, sessionId, captureFrame]);
+    },
+    [auth, sessionId],
+  );
+
+  // Wake-word toggle — when on, saying "Kobe" fires the shutter.
+  useWakeWord({
+    enabled: wakeWordOn,
+    onFire: () => {
+      if (mode === "lookup" && !studentPicker && !lookupBrief) onShutter();
+      // Deliberately no auto-shutter in mark mode: the teacher usually
+      // needs to line up the paper first, and a stray "Kobe" mention
+      // shouldn't open the mark sheet mid-conversation.
+    },
+  });
 
   const uptimeLabel = useMemo(() => `Session ${sessionId ?? "starting…"}`, [sessionId]);
 
@@ -630,17 +777,23 @@ export function App() {
 
       <div className="lens-actions">
         <button
-          className="lens-secondary"
-          onClick={() => speak("Sound check. If you hear this, your earbud is paired.")}
-          aria-label="Sound check"
+          className={"lens-secondary" + (wakeWordOn ? " lens-wake-on" : "")}
+          onClick={() => {
+            setWakeWordOn((v) => !v);
+            speak(!wakeWordOn ? "Listening for Kobe." : "Wake-word off.");
+          }}
+          aria-label="Wake word"
         >
-          Test sound
+          {wakeWordOn ? "🎙️ Kobe on" : "🎙️ Kobe off"}
         </button>
         <button className="lens-shutter" onClick={onShutter} aria-label="Shutter" />
         <button
           className="lens-secondary"
-          onClick={() => setLookupBrief(null)}
-          disabled={!lookupBrief}
+          onClick={() => {
+            setLookupBrief(null);
+            setStudentPicker(null);
+          }}
+          disabled={!lookupBrief && !studentPicker}
           aria-label="Close"
         >
           Close
@@ -648,6 +801,51 @@ export function App() {
       </div>
 
       {toast && <div className="lens-toast">{toast}</div>}
+
+      {studentPicker && (
+        <div className="lens-sheet" onClick={() => setStudentPicker(null)}>
+          <div className="lens-sheet-body" onClick={(e) => e.stopPropagation()}>
+            <h2>Who are you looking at?</h2>
+            <p>
+              {studentPicker.imageKey
+                ? "Frame sent to Kobe. Pick a student — face-recognition will replace this list once the on-prem vision worker is running."
+                : "Couldn't send the frame — pick a student manually to continue."}
+            </p>
+            <ul style={{ listStyle: "none", padding: 0, margin: 0, maxHeight: "50vh", overflowY: "auto" }}>
+              {studentPicker.students.length === 0 ? (
+                <li style={{ color: "var(--brand-muted)", padding: "8px 0" }}>No students loaded. Enter a code:</li>
+              ) : (
+                studentPicker.students.map((s) => (
+                  <li key={s.student_code} style={{ borderBottom: "1px solid var(--brand-card-border)" }}>
+                    <button
+                      className="mark-add"
+                      style={{ textAlign: "left", borderStyle: "solid", margin: "6px 0" }}
+                      onClick={() => runLookup(s.student_code)}
+                    >
+                      <strong>{s.student_name ?? s.student_code}</strong>
+                      <span style={{ color: "var(--brand-muted)", marginLeft: 8, fontFamily: "SF Mono, monospace", fontSize: 12 }}>
+                        {s.student_code}
+                      </span>
+                    </button>
+                  </li>
+                ))
+              )}
+            </ul>
+            <div className="mark-actions">
+              <input
+                className="mark-input"
+                placeholder="Or type a student code (e.g. K9-001)"
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter") return;
+                  const v = (e.target as HTMLInputElement).value.trim();
+                  if (v) runLookup(v);
+                }}
+              />
+              <button className="mark-ghost" onClick={() => setStudentPicker(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <LookupPanel auth={auth} sessionId={sessionId} onClose={() => setLookupBrief(null)} brief={lookupBrief} />
       {markOpen && <MarkPanel auth={auth} sessionId={sessionId} onClose={() => setMarkOpen(false)} />}

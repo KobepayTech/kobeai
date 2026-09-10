@@ -7,7 +7,7 @@ import { Card } from "@/components/ui/card";
 import { RenewalBanner } from "@/components/renewal-banner";
 import { AdBanner } from "@/components/ad-banner";
 import { SchoolDayCard } from "@/components/school-day";
-import { Star, TrendingUp, ArrowRight, UserPlus, Package, Newspaper } from "lucide-react";
+import { Star, TrendingUp, ArrowRight, UserPlus, Package, Newspaper, Sparkles } from "lucide-react";
 
 export default function Dashboard() {
   const [, setLocation] = useLocation();
@@ -124,6 +124,22 @@ export default function Dashboard() {
                   </div>
                 </div>
                 <ArrowRight className="w-4 h-4 text-primary" />
+              </button>
+
+              <button
+                onClick={() => setLocation(`/development/${child.id}`)}
+                className="mt-3 w-full flex items-center justify-between bg-amber-50 hover:bg-amber-100 transition rounded-2xl p-4"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center">
+                    <Sparkles className="w-5 h-5" />
+                  </div>
+                  <div className="text-left">
+                    <p className="text-sm font-semibold text-gray-900">Notes &amp; lesson plan</p>
+                    <p className="text-xs text-gray-500 -mt-0.5">What the AI is learning about {child.name}</p>
+                  </div>
+                </div>
+                <ArrowRight className="w-4 h-4 text-amber-700" />
               </button>
             </Card>
           ))

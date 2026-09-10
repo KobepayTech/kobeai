@@ -729,4 +729,66 @@ router.post("/v1/parent/wallet/add-funds", async (req, res) => {
   });
 });
 
+/**
+ * GET /v1/parent/child/:childId/development
+ * Parent-facing digest of the child's learning-development signals:
+ * recent curated notes (topic + short intro only — parents don't need
+ * to see the student's actual wrong answer), the latest lesson-plan
+ * summary, and a family-safe habit summary. Ownership goes through
+ * parent_children like every other /v1/parent/* route.
+ */
+router.get("/v1/parent/child/:childId/development", async (req, res) => {
+  const parentId = parentIdOr401(req, res);
+  if (parentId == null) return;
+  const child = await resolveOwnedChild(parentId, String(req.params["childId"]));
+  if (!child) {
+    res.status(404).json({ error: "Child not found" });
+    return;
+  }
+
+  // Curated notes — pare down to the fields the parent app renders.
+  const notes = await pool.query(
+    `SELECT id, topic, subject, body_markdown, generator, created_at
+     FROM student_curated_notes
+     WHERE student_code = $1 AND status = 'published'
+     ORDER BY created_at DESC
+     LIMIT 8`,
+    [child.student_code],
+  ).catch(() => ({ rows: [] as Array<Record<string, unknown>> }));
+
+  // Latest lesson plan (may not exist yet on brand-new deploys).
+  const plan = await pool.query(
+    `SELECT id, week_start, plan_markdown, generator, generated_at
+     FROM personalized_lesson_plans
+     WHERE student_code = $1
+     ORDER BY week_start DESC
+     LIMIT 1`,
+    [child.student_code],
+  ).catch(() => ({ rows: [] as Array<Record<string, unknown>> }));
+
+  // Habit summary — bucketed counts, no individual observation timestamps
+  // going to the parent (matches the "summaries not surveillance" rule).
+  const habits = await pool.query(
+    `SELECT category, COUNT(*)::int AS n
+     FROM student_behavior_observations
+     WHERE student_code = $1
+       AND captured_at >= NOW() - INTERVAL '14 days'
+     GROUP BY category
+     ORDER BY n DESC`,
+    [child.student_code],
+  ).catch(() => ({ rows: [] as Array<Record<string, unknown>> }));
+
+  res.json({
+    child: {
+      id: String(child.student_user_id),
+      name: child.name,
+      grade: child.grade,
+      student_code: child.student_code,
+    },
+    notes: notes.rows,
+    plan: plan.rows[0] ?? null,
+    habits: habits.rows,
+  });
+});
+
 export default router;

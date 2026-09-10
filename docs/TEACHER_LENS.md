@@ -116,13 +116,28 @@ Shipped:
   lifecycle including `sendBeacon` end-of-session.
 - Integration into `artifacts/demo/` — the K9 school demo mounts the
   lens at `/lens/` and links to it from the landing page.
+- **Auto-generated curated notes + adaptive retests** on every marked
+  paper. Each wrong-topic-of-≥2 kicks off a Youtu-VL/Qwen enqueue for
+  a richer version that replaces the rule-based note when a real
+  worker is available.
+- **`POST /v1/teacher-lens/frame`** — accepts raw JPEG bytes (up to
+  6 MB), saves to `KOBEAI_LENS_FRAMES_DIR`, enqueues a vision analysis
+  request. The stub worker (`scripts/k9-worker.mjs`) drains it today;
+  a real SCRFD+ArcFace worker completes it later without any client
+  change.
+- **Wake-word** — the lens listens for "Kobe" via `webkitSpeechRecognition`
+  and fires the shutter automatically. Toggle button on the actions
+  row; falls back silently on browsers without support.
+- **Face-recognition lookup UX** — shutter uploads the frame in
+  parallel with fetching a recent-students list. Teacher taps the
+  matching student; when the real worker lands, it fills the answer
+  in without the tap.
 
 Follow-up (needs the on-prem GPU box):
 
-- `POST /v1/teacher-lens/frame` — upload a JPEG; server routes to the
-  vision workers for face-recognition (student identity from a glance)
-  and paper OCR (auto-fill the mark-paper sheet's items before the
-  teacher confirms).
-- `GET /v1/teacher-lens/context` — the ambient mode's proactive whisper
-  hook.
-- Wake-word detection for hands-free "Kobe, next student" flow.
+- Actual face-recognition on `POST /v1/teacher-lens/frame` (worker
+  swap; endpoint is ready).
+- Actual OCR that auto-fills the mark-paper sheet from a captured
+  frame (worker swap).
+- `GET /v1/teacher-lens/context` — proactive whispers when the lens
+  sees a student due for a scheduled follow-up.

@@ -7,6 +7,7 @@
     "hello": "tsx ./src/hello.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "models": "node ./kobeai-models.mjs",
+    "worker": "node ./k9-worker.mjs",
     "test": "node --test ./tests/*.test.mjs"
   },
   "devDependencies": {

@@ -209,20 +209,43 @@ Already in tree:
 - `artifacts/api-server/src/lib/presence-monitor.ts` — timetable-aware
   reconciliation with `on_schedule / wrong_location / not_seen /
   low_confidence / insufficient_camera_coverage` statuses.
+- `artifacts/api-server/src/lib/vision-queue.ts` +
+  `vision_analysis_requests` — the intelligence-path queue.
+- `scripts/k9-worker.mjs` — a **stub** worker that drains the queue
+  end-to-end. Real GPU models replace `handle()` without changing the
+  wire protocol.
+- `artifacts/api-server/src/lib/kobe-llm.ts` — the shared `askKobe()`
+  shim; every LLM-producing generator (curated notes, retest
+  questions, lesson plans) calls it. Gated by
+  `AI_PROVIDER=ollama` + `OLLAMA_ENABLE_GENERATION=1`.
 - `artifacts/api-server/src/routes/classroom-insights.ts` +
-  `classroom_discussion_insights` — the sink for mic-derived Q&A that
-  Whisper + Qwen produce.
+  `classroom_discussion_insights` — the sink for mic-derived Q&A.
+- Teacher-lens PWA + `POST /v1/teacher-lens/frame` — end-to-end path
+  for the phone/glasses camera. Stub worker acknowledges frames today;
+  a real face-rec / OCR worker completes the request via
+  `POST /v1/vision/analyze/:id/complete`.
+- Classroom TV kiosk with `?mode=display|dashboard|assistant`, mic
+  input via `webkitSpeechRecognition`, TTS reply via
+  `SpeechSynthesis` (no LiveKit required — pure browser APIs).
+- `artifacts/demo/` one-command demo of the whole stack.
+- `artifacts/teacher-lens/` PWA (installable to phone home screen).
 
 Not in tree, tracked here:
 
 - YOLO-Master, ByteTrack, OSNet, SCRFD deployment recipe.
-- Youtu-VL-4B worker that consumes `vision_analysis_requests`.
+- Youtu-VL-4B worker that consumes `vision_analysis_requests` for
+  scene analysis / OCR / face recognition.
 - TitaNet speaker-recognition wiring in the voice gateway.
-- Qwen3-4B serving path (SGLang recommended) for the K9 assistant.
+- Qwen3-4B serving path (SGLang recommended) — Ollama fills in today
+  when `OLLAMA_ENABLE_GENERATION=1`.
 - DeepStream + TensorRT bring-up on the school-server tower.
 
 Each of these is its own hardware/model integration and belongs in a
 follow-up PR against `services/kobevision/` and `services/kobevoice/`.
+The **wire protocols are stable** — swapping a real worker in
+requires only editing `handle()` in `scripts/k9-worker.mjs` (or
+replacing the whole file with a Python-side drain against the same
+endpoints).
 
 ## Teacher-worn lens (primary client)
 

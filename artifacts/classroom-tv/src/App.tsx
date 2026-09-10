@@ -385,28 +385,110 @@ function DashboardMode({ now, connected }: { now: Date; connected: boolean | nul
 // ---------------------------------------------------------------------------
 type ChatTurn = { role: "teacher" | "kobe"; text: string };
 
+function speakTTS(text: string): void {
+  if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+  const u = new SpeechSynthesisUtterance(text);
+  u.rate = 1.03;
+  u.pitch = 1.0;
+  u.volume = 1.0;
+  window.speechSynthesis.cancel();
+  window.speechSynthesis.speak(u);
+}
+
 function AssistantMode({ now, connected }: { now: Date; connected: boolean | null }) {
   const [input, setInput] = useState("");
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [busy, setBusy] = useState(false);
+  const [listening, setListening] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const recognitionRef = useRef<any>(null);
+
+  const askKobe = useCallback(
+    async (question: string) => {
+      const trimmed = question.trim();
+      if (!trimmed || busy) return;
+      setTurns((prev) => [...prev, { role: "teacher", text: trimmed }]);
+      setBusy(true);
+      const res = await api<{ answer: string }>("/v1/classroom/ask", {
+        method: "POST",
+        body: JSON.stringify({ question: trimmed, kiosk_id: KIOSK_ID }),
+      });
+      setBusy(false);
+      const reply =
+        res?.answer ?? "I couldn't reach KobeAI just now — try again in a moment.";
+      setTurns((prev) => [...prev, { role: "kobe", text: reply }]);
+      // Speak the reply through the classroom speakers.
+      speakTTS(reply);
+    },
+    [busy],
+  );
 
   const send = useCallback(async () => {
-    const question = input.trim();
-    if (!question || busy) return;
+    const question = input;
     setInput("");
-    setTurns((prev) => [...prev, { role: "teacher", text: question }]);
-    setBusy(true);
-    const res = await api<{ answer: string }>("/v1/classroom/ask", {
-      method: "POST",
-      body: JSON.stringify({ question, kiosk_id: KIOSK_ID }),
-    });
-    setBusy(false);
-    setTurns((prev) => [
-      ...prev,
-      { role: "kobe", text: res?.answer ?? "I couldn't reach KobeAI just now — try again in a moment." },
-    ]);
-  }, [input, busy]);
+    await askKobe(question);
+  }, [input, askKobe]);
+
+  // Push-to-talk via webkitSpeechRecognition. On classroom PCs with
+  // Chromium this works out of the box; on unsupported browsers the
+  // button hides itself and the teacher can still type.
+  const speechSupported = useMemo(() => {
+    if (typeof window === "undefined") return false;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const w = window as any;
+    return !!(w.SpeechRecognition ?? w.webkitSpeechRecognition);
+  }, []);
+
+  const startListening = useCallback(() => {
+    if (!speechSupported || listening || busy) return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const w = window as any;
+    const SR = w.SpeechRecognition ?? w.webkitSpeechRecognition;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rec: any = new SR();
+    rec.continuous = false;
+    rec.interimResults = true;
+    rec.lang = "en-US";
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    rec.onresult = (ev: any) => {
+      let interim = "";
+      let final = "";
+      for (let i = 0; i < ev.results.length; i += 1) {
+        const r = ev.results[i];
+        if (r?.isFinal) final += r[0]?.transcript ?? "";
+        else interim += r[0]?.transcript ?? "";
+      }
+      if (final) {
+        setInput("");
+        setListening(false);
+        askKobe(final);
+      } else if (interim) {
+        setInput(interim);
+      }
+    };
+    rec.onend = () => setListening(false);
+    rec.onerror = () => setListening(false);
+    try {
+      rec.start();
+      recognitionRef.current = rec;
+      setListening(true);
+    } catch {
+      setListening(false);
+    }
+  }, [askKobe, busy, listening, speechSupported]);
+
+  const stopListening = useCallback(() => {
+    const rec = recognitionRef.current;
+    if (rec) {
+      try {
+        rec.stop();
+      } catch {
+        /* ignore */
+      }
+    }
+    setListening(false);
+  }, []);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -452,10 +534,24 @@ function AssistantMode({ now, connected }: { now: Date; connected: boolean | nul
             e.preventDefault();
             send();
           }}
+          style={{
+            gridTemplateColumns: speechSupported ? "auto 1fr auto" : "1fr auto",
+          }}
         >
+          {speechSupported && (
+            <button
+              type="button"
+              className={"tv-assistant-mic" + (listening ? " tv-assistant-mic-on" : "")}
+              onClick={listening ? stopListening : startListening}
+              disabled={busy}
+              aria-label={listening ? "Stop listening" : "Push to talk"}
+            >
+              {listening ? "● Listening…" : "🎙️ Push to talk"}
+            </button>
+          )}
           <input
             className="tv-assistant-input"
-            placeholder="Ask KobeAI…"
+            placeholder={listening ? "Say your question…" : "Ask KobeAI…"}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             disabled={busy}

@@ -1,7 +1,12 @@
-import { Router, type Request, type Response } from "express";
+import express, { Router, type Request, type Response } from "express";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { pool } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
-import { enqueueVisionAnalysisSafe } from "../lib/vision-queue";
+import {
+  enqueueVisionAnalysis,
+  enqueueVisionAnalysisSafe,
+} from "../lib/vision-queue";
 import { getMergedProfile } from "../lib/learning-profile";
 import {
   generateCuratedNotesForPaper,
@@ -524,6 +529,100 @@ router.get(
       recent_papers: recent.rows,
       recurring_weak_topics: wrongTopics.rows,
     });
+  },
+);
+
+/**
+ * POST /v1/teacher-lens/frame
+ * Accepts a raw JPEG frame from the lens client. Saves it to
+ * KOBEAI_LENS_FRAMES_DIR (default /var/lib/kobeai/lens-frames), enqueues
+ * a vision-analysis request that a Youtu-VL / SCRFD worker drains, and
+ * returns immediately with the storage key + queue id. The client then
+ * polls /v1/vision/analyze/pending... via the worker path OR (simpler)
+ * awaits a whisper on /whisper/next once the worker completes.
+ *
+ * The body is raw octet-stream — capped at 6 MB so a lens client
+ * can't fill the frame directory. The route uses its own body parser
+ * because the app-level express.json() would otherwise reject non-JSON.
+ */
+router.post(
+  "/v1/teacher-lens/frame",
+  express.raw({ type: ["image/jpeg", "image/png", "application/octet-stream"], limit: "6mb" }),
+  requireTeacher,
+  async (req, res) => {
+    await ensureTables();
+    if (!Buffer.isBuffer(req.body) || req.body.length < 512) {
+      res.status(400).json({ error: "empty or too-small image body" });
+      return;
+    }
+    const sessionId = Number(req.header("x-lens-session-id"));
+    const mode = text(req.header("x-lens-mode"), 40) ?? "lookup";
+    const kind = mode === "mark" ? "mark_paper" : "lookup";
+
+    const framesDir = resolve(process.env["KOBEAI_LENS_FRAMES_DIR"] ?? "/var/lib/kobeai/lens-frames");
+    const today = new Date().toISOString().slice(0, 10);
+    const dayDir = join(framesDir, today);
+    try {
+      await mkdir(dayDir, { recursive: true });
+    } catch (err) {
+      // Directory creation can fail on read-only sandboxes — still enqueue
+      // the request with a null image path so the worker sees the event.
+      logger.warn(
+        { err: err instanceof Error ? err.message : String(err), dayDir },
+        "lens frame dir mkdir failed; enqueueing without image",
+      );
+    }
+    const stamp = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+    const filename = `${stamp}.${kind}.jpg`;
+    const fullPath = join(dayDir, filename);
+    let key: string | null = null;
+    try {
+      await writeFile(fullPath, req.body);
+      key = join(today, filename);
+    } catch (err) {
+      logger.warn(
+        { err: err instanceof Error ? err.message : String(err) },
+        "lens frame write failed",
+      );
+    }
+
+    // Enqueue the appropriate vision question. Priority 3 (higher than
+    // the auto-enqueued wrong_location questions from presence).
+    const question =
+      kind === "mark_paper"
+        ? "OCR this student paper and extract per-question (question_number, question_text, question_topic, student_answer, expected_answer, is_correct) items. Return JSON."
+        : "Face-recognise the closest / largest face in this frame and return the matched student_code + confidence. Return JSON.";
+    let request;
+    try {
+      request = await enqueueVisionAnalysis({
+        question,
+        reason: `lens:${kind}`,
+        requestedBy: req.auth?.user_id ?? null,
+        priority: 3,
+        context: {
+          image_key: key,
+          image_bytes: req.body.length,
+          lens_session_id: Number.isFinite(sessionId) ? sessionId : null,
+          lens_mode: mode,
+        },
+      });
+    } catch (err) {
+      res.status(500).json({
+        error: err instanceof Error ? err.message : "enqueue_failed",
+      });
+      return;
+    }
+
+    // Also drop a whisper so the teacher hears "sent to Kobe" immediately —
+    // the worker's actual answer will replace that once it's ready.
+    await enqueueWhisper({
+      sessionId: Number.isFinite(sessionId) ? sessionId : null,
+      teacherUserId: req.auth?.user_id ?? null,
+      text: kind === "mark_paper" ? "Paper sent to Kobe." : "Looking that student up.",
+      priority: 7,
+    }).catch(() => undefined);
+
+    res.status(202).json({ request, image_key: key });
   },
 );
 
