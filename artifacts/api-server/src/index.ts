@@ -8,6 +8,7 @@ import { startCentralSync } from "./lib/central-sync";
 import { startPresenceMonitor } from "./lib/presence-monitor";
 import { startLearningProfileScheduler } from "./lib/learning-profile";
 import { startMagazineScheduler } from "./lib/magazine";
+import { startLessonPlanScheduler } from "./lib/student-development";
 import { startDailyDigest } from "./routes/parent-push";
 
 const rawPort = process.env["PORT"];
@@ -66,4 +67,5 @@ app.listen(port, async (err) => {
   startPresenceMonitor();
   startLearningProfileScheduler();
   startMagazineScheduler();
+  startLessonPlanScheduler();
 });

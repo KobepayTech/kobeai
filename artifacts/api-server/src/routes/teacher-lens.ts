@@ -3,6 +3,10 @@ import { pool } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 import { enqueueVisionAnalysisSafe } from "../lib/vision-queue";
 import { getMergedProfile } from "../lib/learning-profile";
+import {
+  generateCuratedNotesForPaper,
+  generateRetestForPaper,
+} from "../lib/student-development";
 import { logger } from "../lib/logger";
 
 const router = Router();
@@ -305,9 +309,47 @@ router.post("/v1/teacher-lens/paper-graded", requireTeacher, async (req, res) =>
       }
     }
 
+    // Kick the student-development pipeline. Both steps are best-effort:
+    // a failure here doesn't take down the paper submission itself, since
+    // the raw graded_papers row is already committed.
+    let notesGenerated = 0;
+    let retest: { retest_id: number; items: number } | null = null;
+    try {
+      notesGenerated = await generateCuratedNotesForPaper(paperId);
+    } catch (e) {
+      logger.warn(
+        { err: e instanceof Error ? e.message : String(e), paperId },
+        "curated-notes generation skipped",
+      );
+    }
+    try {
+      retest = await generateRetestForPaper(paperId);
+    } catch (e) {
+      logger.warn(
+        { err: e instanceof Error ? e.message : String(e), paperId },
+        "retest generation skipped",
+      );
+    }
+
+    // Follow-up whisper so the teacher hears what was generated
+    // ("3 notes ready, 6-question retest queued").
+    if (notesGenerated > 0 || retest) {
+      const parts: string[] = [];
+      if (notesGenerated > 0) parts.push(`${notesGenerated} curated note${notesGenerated === 1 ? "" : "s"} ready`);
+      if (retest) parts.push(`retest ${retest.items} question${retest.items === 1 ? "" : "s"} queued`);
+      await enqueueWhisper({
+        sessionId,
+        teacherUserId: req.auth?.user_id ?? null,
+        text: `For ${studentCode}: ${parts.join(", ")}.`,
+        priority: 4,
+      }).catch(() => undefined);
+    }
+
     res.status(201).json({
       paper: paper.rows[0],
       summary: { total, correct, incorrect, score_percent: score },
+      curated_notes_generated: notesGenerated,
+      retest,
     });
   } catch (err) {
     await client.query("ROLLBACK").catch(() => undefined);

@@ -362,6 +362,194 @@ export const teacherLensWhispersTable = pgTable(
 export type TeacherLensWhisper = typeof teacherLensWhispersTable.$inferSelect;
 
 /**
+ * Curated notes per student. Every time a paper is graded, for each
+ * distinct wrong-answer topic we generate a short expansion the
+ * student can read: "here's what you got wrong, here's the fuller
+ * answer, here's an example". The generator today is rule-based; the
+ * `body_markdown` will later be produced by an on-prem Qwen worker
+ * with the same shape.
+ */
+export const studentCuratedNotesTable = pgTable(
+  "student_curated_notes",
+  {
+    id: serial("id").primaryKey(),
+    student_code: text("student_code").notNull(),
+    source_paper_id: integer("source_paper_id").references(() => gradedPapersTable.id, {
+      onDelete: "cascade",
+    }),
+    subject: text("subject"),
+    topic: text("topic").notNull(),
+    // The bit that was wrong — for context when the student reads it.
+    student_answer: text("student_answer"),
+    // The teacher-provided or AI-suggested ideal answer.
+    ideal_answer: text("ideal_answer"),
+    // The main explanation, markdown, one page or less.
+    body_markdown: text("body_markdown").notNull(),
+    // Which model / rule wrote this — helps track regressions.
+    generator: text("generator").notNull().default("rule-based-v1"),
+    // A teacher can flag "this note isn't accurate" and it's hidden until fixed.
+    status: text("status").notNull().default("published"), // published | flagged | archived
+    created_at: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    student_time_idx: index("student_curated_notes_student_time_idx").on(t.student_code, t.created_at),
+    topic_idx: index("student_curated_notes_topic_idx").on(t.topic),
+  }),
+);
+export type StudentCuratedNote = typeof studentCuratedNotesTable.$inferSelect;
+
+/**
+ * Adaptive retests. When a graded paper is ingested, the server builds a
+ * follow-up test using only the wrong topics. The teacher schedules and
+ * administers it — usually paper-based — and later feeds the results
+ * back through `POST /v1/teacher-lens/paper-graded` referencing this
+ * retest session so the improvement is tracked.
+ */
+export const retestSessionsTable = pgTable(
+  "retest_sessions",
+  {
+    id: serial("id").primaryKey(),
+    student_code: text("student_code").notNull(),
+    source_paper_id: integer("source_paper_id").references(() => gradedPapersTable.id, {
+      onDelete: "set null",
+    }),
+    subject: text("subject"),
+    // "wrong-only" (v1), "difficulty-band" (end-of-term), "mixed" (hybrid).
+    strategy: text("strategy").notNull().default("wrong-only"),
+    // Difficulty band 1..5. Advances when the student passes at the
+    // current level; end-of-term exams draw from the student's current
+    // level, not the classroom baseline.
+    difficulty_level: integer("difficulty_level").notNull().default(1),
+    // pending | administered | passed | failed | archived
+    status: text("status").notNull().default("pending"),
+    generated_at: timestamp("generated_at").notNull().defaultNow(),
+    administered_at: timestamp("administered_at"),
+    result_paper_id: integer("result_paper_id"),
+    score_percent: integer("score_percent"),
+  },
+  (t) => ({
+    student_idx: index("retest_sessions_student_idx").on(t.student_code, t.status),
+  }),
+);
+export type RetestSession = typeof retestSessionsTable.$inferSelect;
+
+export const retestItemsTable = pgTable(
+  "retest_items",
+  {
+    id: serial("id").primaryKey(),
+    session_id: integer("session_id")
+      .notNull()
+      .references(() => retestSessionsTable.id, { onDelete: "cascade" }),
+    topic: text("topic").notNull(),
+    question_text: text("question_text").notNull(),
+    expected_answer: text("expected_answer"),
+    // If the item was authored by a real Qwen worker, this is set — helps
+    // us later score which topics the generator handles well.
+    generator: text("generator").notNull().default("rule-based-v1"),
+    difficulty_level: integer("difficulty_level").notNull().default(1),
+  },
+  (t) => ({
+    session_idx: index("retest_items_session_idx").on(t.session_id),
+  }),
+);
+export type RetestItem = typeof retestItemsTable.$inferSelect;
+
+/**
+ * Behavior observations during prep time / free periods. Cameras
+ * remain, audio-eavesdrop drops off (per the K9 design). The Youtu-VL
+ * worker emits observation rows via POST /v1/behavior/event; the
+ * weekly lesson-plan generator reads them to tailor advice per student.
+ * Category is a bounded enum so the UI can render without guessing.
+ */
+export const studentBehaviorObservationsTable = pgTable(
+  "student_behavior_observations",
+  {
+    id: serial("id").primaryKey(),
+    student_code: text("student_code").notNull(),
+    camera_id: text("camera_id"),
+    // FK to campus_zones is intentionally omitted — that table is
+    // maintained via raw SQL in presence-monitor.ts, not Drizzle.
+    zone_id: integer("zone_id"),
+    // "attentive" | "reading" | "writing" | "sleeping" | "idle" |
+    // "collaborating" | "drawing" | "restless" | "distracted"
+    category: text("category").notNull(),
+    // 0..100 — how confident the vision worker is about this classification.
+    confidence: integer("confidence").notNull().default(70),
+    // Short human-readable description ("appeared to be reading a textbook").
+    description: text("description"),
+    // The lesson context, if we know it (period_id + subject).
+    period_id: integer("period_id"),
+    subject: text("subject"),
+    // Free-form generator metadata (model version, frame refs).
+    metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
+    captured_at: timestamp("captured_at").notNull().defaultNow(),
+    created_at: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    student_time_idx: index("student_behavior_student_time_idx").on(t.student_code, t.captured_at),
+    category_idx: index("student_behavior_category_idx").on(t.category),
+  }),
+);
+export type StudentBehaviorObservation =
+  typeof studentBehaviorObservationsTable.$inferSelect;
+
+/**
+ * Personalized lesson plan the teacher can print. Weekly cadence —
+ * generated by aggregating the student's learning profile,
+ * curated notes, behavior observations, and open retests.
+ */
+export const personalizedLessonPlansTable = pgTable(
+  "personalized_lesson_plans",
+  {
+    id: serial("id").primaryKey(),
+    student_code: text("student_code").notNull(),
+    week_start: text("week_start").notNull(), // "YYYY-MM-DD" Monday
+    // Bullet list, markdown; sections are ["focus", "practice", "watch_out"].
+    plan_markdown: text("plan_markdown").notNull(),
+    // Data snapshot the plan was built from — reproducible + auditable.
+    snapshot: jsonb("snapshot").notNull().default(sql`'{}'::jsonb`),
+    generator: text("generator").notNull().default("rule-based-v1"),
+    generated_at: timestamp("generated_at").notNull().defaultNow(),
+    generated_by: integer("generated_by"),
+  },
+  (t) => ({
+    week_student_uk: uniqueIndex("personalized_lesson_plans_week_student_uk").on(
+      t.week_start,
+      t.student_code,
+    ),
+  }),
+);
+export type PersonalizedLessonPlan = typeof personalizedLessonPlansTable.$inferSelect;
+
+/**
+ * Auto-authored question bank. Every time a wrong-answer topic appears
+ * on graded_paper_items and doesn't have enough questions in the bank,
+ * a rule-based generator (later swapped for a Qwen worker) adds 3–5
+ * new questions on that topic at increasing difficulty. Feeds the
+ * retest builder + gives teachers a pool they can reuse.
+ */
+export const generatedQuestionsTable = pgTable(
+  "generated_questions",
+  {
+    id: serial("id").primaryKey(),
+    topic: text("topic").notNull(),
+    subject: text("subject"),
+    difficulty_level: integer("difficulty_level").notNull().default(1),
+    question_text: text("question_text").notNull(),
+    expected_answer: text("expected_answer"),
+    generator: text("generator").notNull().default("rule-based-v1"),
+    // How many times a teacher has used this question in a real retest —
+    // helps demote low-quality autogen entries over time.
+    used_count: integer("used_count").notNull().default(0),
+    created_at: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    topic_diff_idx: index("generated_questions_topic_diff_idx").on(t.topic, t.difficulty_level),
+  }),
+);
+export type GeneratedQuestion = typeof generatedQuestionsTable.$inferSelect;
+
+/**
  * One row per generated magazine edition. `edition_type = "school"` is the
  * whole-school newsletter (student_code IS NULL); `edition_type = "student"`
  * is the personalised per-child version (student_code set). `week_start`

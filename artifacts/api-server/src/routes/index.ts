@@ -34,6 +34,7 @@ import visionQueueRouter from "./vision-queue";
 import modelsRouter from "./models";
 import classroomRouter from "./classroom";
 import teacherLensRouter from "./teacher-lens";
+import studentDevelopmentRouter from "./student-development";
 
 const router: IRouter = Router();
 
@@ -76,5 +77,6 @@ router.use(visionQueueRouter);
 router.use(modelsRouter);
 router.use(classroomRouter);
 router.use(teacherLensRouter);
+router.use(studentDevelopmentRouter);
 
 export default router;
