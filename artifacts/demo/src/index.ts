@@ -30,6 +30,7 @@ const MOUNTS: Mount[] = [
   { path: "/parent", artifact: "parent-app", description: "Parent PWA" },
   { path: "/dev", artifact: "developer-portal", description: "Developer portal" },
   { path: "/tv", artifact: "classroom-tv", description: "Classroom TV kiosk" },
+  { path: "/lens", artifact: "teacher-lens", description: "Teacher-worn lens PWA" },
 ];
 
 function artifactDist(artifact: string): string {

@@ -224,6 +224,24 @@ Not in tree, tracked here:
 Each of these is its own hardware/model integration and belongs in a
 follow-up PR against `services/kobevision/` and `services/kobevoice/`.
 
+## Teacher-worn lens (primary client)
+
+The primary K9 client is a teacher-worn phone or AR glasses + bluetooth
+earbuds, not a per-student device. See `docs/TEACHER_LENS.md` for the
+full contract; the short version is:
+
+- **Lookup mode**: teacher looks at a student, taps shutter, phone
+  whispers a short brief via `SpeechSynthesis`.
+- **Mark paper mode**: teacher marks a paper as normal, phone captures
+  per-question right/wrong + topic + student answer, `POST
+  /v1/teacher-lens/paper-graded` writes it, learning-profile rollup
+  mines it into `computed_remediations` and `topics_weak`.
+
+This is where the vision stack earns its keep: face recognition
+(SCRFD/ArcFace) for the lookup, and OCR + layout parsing (Youtu-VL) for
+the mark-paper flow. Both live on the on-prem GPU box; the phone just
+uploads JPEGs.
+
 ## Non-goals
 
 - Uploading raw CCTV video to the cloud. The whole point is that this
