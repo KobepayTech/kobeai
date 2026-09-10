@@ -15,6 +15,7 @@ import AttendanceExceptions from "@/pages/attendance-exceptions";
 import ClassroomInsights from "@/pages/classroom-insights";
 import CameraNetwork from "@/pages/camera-network";
 import ModelsPage from "@/pages/models";
+import StudentDevelopment from "@/pages/student-development";
 import Quizzes from "@/pages/quizzes";
 import Timetable from "@/pages/timetable";
 import Exams from "@/pages/exams";
@@ -61,6 +62,9 @@ function Router() {
       </Route>
       <Route path="/classroom-insights">
         <Shell><ClassroomInsights /></Shell>
+      </Route>
+      <Route path="/student-development">
+        <Shell><StudentDevelopment /></Shell>
       </Route>
       <Route path="/camera-network">
         <Shell><CameraNetwork /></Shell>

@@ -395,16 +395,28 @@ function MarkPanel({
         setBusy(false);
         return;
       }
-      const r = await apiPost<{ summary: { total: number; correct: number; score_percent: number | null } }>(
-        auth,
-        "/v1/teacher-lens/paper-graded",
-        payload,
+      const r = await apiPost<{
+        summary: { total: number; correct: number; score_percent: number | null };
+        curated_notes_generated: number;
+        retest: { retest_id: number; items: number } | null;
+      }>(auth, "/v1/teacher-lens/paper-graded", payload);
+      const parts: string[] = [];
+      parts.push(
+        `Saved ${studentCode}: ${r.summary.correct} of ${r.summary.total}` +
+          (r.summary.score_percent != null ? `, ${r.summary.score_percent} percent` : "") +
+          ".",
       );
-      speak(
-        `Saved ${studentCode}: ${r.summary.correct} of ${r.summary.total}${
-          r.summary.score_percent != null ? `, ${r.summary.score_percent} percent` : ""
-        }.`,
-      );
+      if (r.curated_notes_generated > 0) {
+        parts.push(
+          `${r.curated_notes_generated} curated note${r.curated_notes_generated === 1 ? "" : "s"} ready.`,
+        );
+      }
+      if (r.retest) {
+        parts.push(
+          `Retest ${r.retest.items} question${r.retest.items === 1 ? "" : "s"} queued.`,
+        );
+      }
+      speak(parts.join(" "));
       onClose();
     } catch (err) {
       speak("Couldn't save. Try again.");
