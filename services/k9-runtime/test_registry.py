@@ -52,6 +52,12 @@ class RegistryTests(unittest.TestCase):
         }
         self.assertTrue(required.issubset(BY_NAME))
 
+    def test_registry_uses_canonical_downloader_paths(self) -> None:
+        self.assertEqual(BY_NAME["qwen-gguf"].relative_path, r"brain/existing/qwen.gguf")
+        self.assertEqual(BY_NAME["rtdetr-v2-r50vd"].relative_path, r"detection/rtdetr-v2-r50vd")
+        self.assertEqual(BY_NAME["locateanything-3b"].relative_path, r"vision/locateanything-3b")
+        self.assertEqual(BY_NAME["paddleocr-vl-1.6"].relative_path, r"ocr/paddleocr-vl-1.6")
+
 
 if __name__ == "__main__":
     unittest.main()
