@@ -13,6 +13,6 @@ export interface TeacherDashboardStats {
   total_points: number;
   avg_performance: number;
   questions_today: number;
-  online_watches: number;
+  online_devices: number;
   recent_activity: ActivityItem[];
 }

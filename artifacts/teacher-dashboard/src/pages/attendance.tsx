@@ -15,7 +15,7 @@ export default function Attendance() {
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Attendance</h1>
-          <p className="text-muted-foreground mt-1">Daily smartwatch check-ins and points awarded.</p>
+          <p className="text-muted-foreground mt-1">Daily attendance records and points awarded.</p>
         </div>
         <div className="flex items-center gap-2">
           <Input 

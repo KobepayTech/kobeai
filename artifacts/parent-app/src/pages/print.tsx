@@ -53,9 +53,9 @@ export default function PrintPage() {
       <div className="px-6 pt-12 pb-6 bg-primary text-white rounded-b-[40px] shadow-sm relative overflow-hidden">
         <div className="absolute top-0 right-0 w-64 h-64 bg-white/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/4"></div>
         <div className="relative z-10">
-          <h1 className="text-sm font-medium text-primary-foreground/80 mb-1">Tap-to-print</h1>
+          <h1 className="text-sm font-medium text-primary-foreground/80 mb-1">School printing</h1>
           <h2 className="text-2xl font-bold">Assigned documents</h2>
-          <p className="text-primary-foreground/80 text-sm mt-2">What your child can print from their watch.</p>
+          <p className="text-primary-foreground/80 text-sm mt-2">Handouts your child's teachers have shared with their class.</p>
           <Link
             href="/print/history"
             className="inline-flex items-center gap-1.5 mt-3 text-xs font-medium text-white/90 hover:text-white bg-white/15 hover:bg-white/25 px-3 py-1.5 rounded-full transition-colors"
@@ -131,7 +131,7 @@ export default function PrintPage() {
 
         <Card className="p-4 rounded-3xl shadow-sm border-gray-100 bg-primary/5">
           <p className="text-xs text-gray-600 leading-relaxed">
-            <span className="font-semibold text-primary">How it works:</span> your child taps their watch on a tap-box, picks one of these documents, and the school printer prints it. No paper goes home until they ask for it.
+            <span className="font-semibold text-primary">How it works:</span> teachers send these documents to the school printer from the Teacher Dashboard. Handouts printed specifically for your child appear in print history.
           </p>
         </Card>
       </div>

@@ -83,11 +83,11 @@ Do not duplicate student/class records inside KobeVoice. The voice agent should 
 
 ## Highest-value KobeAI uses
 
-### 1. Spoken AI tutor on the watch
+### 1. Teacher Lens whisper assistant
 
-Student speaks -> KobeVoice/LiveKit receives audio -> STT -> KobeAI Router -> answer -> KobeVoice TTS -> spoken answer through watch/earbuds.
+Teacher speaks (wake word or push-to-talk) -> KobeVoice/LiveKit receives audio -> STT -> KobeAI Router -> answer -> KobeVoice TTS -> private whisper through the teacher's earbud.
 
-This removes the need for keyboard-first interaction and makes Swahili/English conversation a first-class interface.
+This keeps the teacher hands-free while marking or walking the classroom and makes Swahili/English conversation a first-class interface. Students do not need a device of their own.
 
 ### 2. Classroom AI through microphones, TV and speakers
 
@@ -209,7 +209,7 @@ The LLM's Swahili quality must be tested separately from TTS pronunciation. A fl
 2. Run its local LiveKit/STT/TTS stack and measure English + Swahili latency.
 3. **Done:** KobeAI `/api/v1/voice/*` authenticated gateway.
 4. **Done:** KobeVoice LLM can route through the KobeAI OpenAI-compatible bridge via `KOBEAI_BASE_URL`.
-5. Add watch/browser/classroom LiveKit clients.
+5. Add Teacher Lens/browser/classroom LiveKit clients.
 6. Connect PAIR behind the KobeAI Router for distributed LLM inference.
 7. Add CubeSandbox only for tool/agent actions that need isolated execution.
 8. Add SIP/GSM telephony after the local voice loop is stable.

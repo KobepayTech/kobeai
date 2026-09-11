@@ -81,7 +81,6 @@ export default function Creatives() {
             <select className="input" value={format} onChange={(e) => setFormat(e.target.value)}>
               <option value="banner">banner</option>
               <option value="native">native</option>
-              <option value="watch_tile">watch_tile</option>
               <option value="interstitial">interstitial</option>
             </select>
           </div>

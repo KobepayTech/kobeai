@@ -1,59 +1,88 @@
 # KobeAI
 
-An end-to-end educational platform built for Tanzanian secondary schools.
-Designed to run on cheap on-premise hardware, work offline, and reach
-parents on basic phones — all while giving students a magical
-tap-to-print experience from a smartwatch.
+K9 is KobeAI's on-premise, school-wide AI system for Tanzanian secondary
+schools. It runs on the school's own server, keeps working offline on the
+LAN, and reaches parents on their phones.
+
+No student carries a device. Existing cameras identify students, the
+classroom PC + TV is the shared student-facing AI, and teachers use a
+laptop, phone or Teacher Lens.
+
+```text
+                 K9 SCHOOL SERVER
+            KobeAI + Models + Database
+                      │
+        ┌─────────────┼──────────────┐
+        │             │              │
+     CAMERAS       CLASSROOM      TEACHERS
+    / NVRs         PC + TV       Phone/Laptop
+        │             │          + Teacher Lens
+        └─────────────┼──────────────┘
+                      │
+                 SCHOOL LAN/WIFI
+                      │
+          ┌───────────┼───────────┐
+       Students    Parents      Admin
+       Profiles     Portal       Portal
+```
 
 ## What's in the box
 
-| Surface | Tech | Status |
+| Surface | Tech | Path |
 |---|---|---|
-| **Teacher Dashboard** | React + Vite + TypeScript (web) | Active |
-| **Parent App** | React PWA (offline-capable) | Active |
-| **Watch App** | Kotlin + Jetpack Compose for Wear OS, NFC HCE | Active |
-| **API Server** | Node.js + Express 5 + Drizzle ORM (PostgreSQL) | Active |
-| **Tap-Box** | Raspberry Pi Zero 2 W + ACR122U NFC reader + CUPS | Active |
-| **Shared schema / API client** | Drizzle + Zod + Orval | Active |
-| **On-prem AI** | Offline Ollama (Mistral 7B by default) | Active |
+| **Teacher Dashboard** | React + Vite + TypeScript | `artifacts/teacher-dashboard` |
+| **Teacher Lens** | PWA for a phone or AR glasses + earbud | `artifacts/teacher-lens` |
+| **Classroom TV** | Full-screen kiosk on the classroom PC | `artifacts/classroom-tv` |
+| **Parent Portal** | React PWA (offline-capable) | `artifacts/parent-app` |
+| **API Server** | Node.js + Express 5 + Drizzle ORM (PostgreSQL) | `artifacts/api-server` |
+| **Camera network + vision** | K-9 discovery, KobeVision, vision queue worker | `services/`, `scripts/k9-worker.mjs` |
+| **Voice** | KobeVoice / LiveKit through the KobeAI voice gateway | `services/kobevoice` |
+| **Print agent** | Raspberry Pi + CUPS beside each printer | `tap-box/` |
+| **Shared schema / API client** | Drizzle + Zod + Orval | `lib/` |
+| **On-prem AI** | Offline Ollama (Mistral 7B by default) | — |
 
 Brand: green `#00A86B` primary, `#1A1A2E` secondary. Currency: Tanzanian
 Shilling (TSh).
 
-## The tap-to-print system
+## How K9 works
 
-Students wear a Wear OS watch. To print a homework handout:
+- **Presence from cameras.** Fast detection and tracking run continuously on
+  existing CCTV/NVR streams and produce structured events
+  (`student → zone → time`), not stored video. The timetable engine compares
+  where each student is with where they should be and raises missing,
+  wrong-room or camera-coverage exceptions for staff.
+- **Classroom TV.** The classroom PC shows lessons, announcements,
+  birthdays, attendance and a shared AI assistant the class can use by
+  keyboard or room microphone.
+- **Teacher Lens.** Teachers look up a student, get a private spoken
+  briefing, and scan marked papers so results roll into learning profiles.
+- **Learning profiles and agents.** Strengths, weak topics, attendance and
+  interventions build up per student; K9 flags, teachers decide.
+- **Parents** get school-day summaries, progress and approved notices, never
+  a live tracking view.
 
-1. Student taps the watch on a `tap-box` (~$50 BOM) attached to the school
-   library printer.
-2. The watch's HostApduService emits a signed payload over NFC.
-3. The tap-box hits `/api/v1/print/pair` with that payload + its own
-   shared secret.
-4. The watch immediately polls `/api/v1/print/pairing-for-session/:id`,
-   discovers the pairing, fetches the document list available for that
-   student (joined from `class_memberships → document_assignments →
-   documents`), and lets the student pick one.
-5. The watch sends `/api/v1/print/submit` with an HMAC binding the
-   pairing-id to the document-id.
-6. The tap-box picks up the queued job from `/api/v1/print/next`,
-   downloads the PDF from object storage, and prints it via CUPS.
+See `docs/K9_ARCHITECTURE.md`, `docs/TEACHER_LENS.md` and
+`docs/K9_MODEL_STACK.md` for the full design.
 
-**Security:** HMAC-SHA256 on both the watch payload and the submit;
-nonce replay cache (5-min TTL); `x-tap-box-secret` for tap-box auth;
-JWT bearer for everything user-facing; per-student ownership checks on
-all watch-facing print endpoints.
+## Printing
 
-**State:** in-flight pairings, jobs, and the seen-nonce set live in
-Redis when `REDIS_URL` is set (atomic `SET NX EX` for nonces, `LIST`
-queues per printer). Falls back to in-process `Map`s for local dev.
+Printing is staff-initiated. A teacher picks a document, printer and number
+of copies on the Teacher Dashboard **Documents** page, which calls
+`POST /api/v1/print/jobs`. The print agent beside that printer polls
+`GET /api/v1/print/next`, downloads the PDF and prints it through CUPS.
+Every job writes a `print_jobs` audit row; jobs printed for one student show
+up in that child's parent print history.
+
+**State:** live jobs live in Redis when `REDIS_URL` is set (a `LIST` queue
+per printer) and fall back to in-process `Map`s for local dev.
 
 ## Offline AI (Ollama)
 
-The watch tutor (`POST /api/v1/watch/ask`) runs against an on-prem Ollama
-instance — no questions ever leave the school LAN. When `AI_PROVIDER=ollama`
-the api-server calls `OLLAMA_BASE_URL/api/generate` with a Tanzania-specific
-system prompt; if Ollama is unreachable the watch silently falls back to a
-small canned answer set so the classroom keeps moving.
+The classroom assistant (`POST /api/v1/classroom/ask`) and Teacher Lens run
+against an on-prem Ollama instance — no questions ever leave the school LAN.
+When `AI_PROVIDER=ollama` the api-server calls `OLLAMA_BASE_URL/api/generate`
+with a Tanzania-specific system prompt; if Ollama is unreachable K9 silently
+falls back to a small canned answer set so the classroom keeps moving.
 
 To install on a school server (Ubuntu 22.04+):
 
@@ -86,6 +115,8 @@ inside KobeAI as normal directories; there are no Git submodules and a normal
 artifacts/
   api-server/          Express API + JWT auth + Drizzle
   teacher-dashboard/   React/Vite teacher web app
+  teacher-lens/        Teacher-worn phone / AR-glasses PWA
+  classroom-tv/        Classroom PC + TV kiosk
   parent-app/          React/Vite parent PWA
   mockup-sandbox/      Canvas component preview server
 lib/
@@ -97,8 +128,7 @@ services/
   k9-bridge/           K-9 → KobeAI inventory sync bridge
   kobevision/          Local camera/face-analysis service
   kobevoice/           Full vendored KobeVoice/LiveKit voice-agent source
-watch-app/             Wear OS app (Kotlin / Jetpack Compose)
-tap-box/               Raspberry Pi tap-box daemon (Python)
+tap-box/               Raspberry Pi print agent (Python)
 deploy/
   school-server/       Docker compose for on-prem deployments
 .github/workflows/     CI (typecheck + build on PR)
@@ -121,7 +151,6 @@ mockup sandbox as separate workflows on path-prefix routes.
 
 | Role | Login | Password |
 |---|---|---|
-| Student (watch) | `TEST001` | `1234` |
 | Teacher | `teacher@school.tz` | `teacher123` |
 | Admin | `admin@school.tz` | `admin123` |
 | Parent | (any registered phone) | `1234` |
@@ -133,42 +162,31 @@ mockup sandbox as separate workflows on path-prefix routes.
 | `DATABASE_URL` | Postgres connection string |
 | `JWT_SECRET` | JWT signing secret (required outside `NODE_ENV=development`) |
 | `SESSION_SECRET` | Express session secret |
-| `TAP_BOX_SECRET` | Shared secret presented by tap-boxes |
-| `WATCH_HCE_SECRET` | Shared secret used by watch HMAC + server verification |
-| `REDIS_URL` | Optional — switches print state to Redis |
+| `TAP_BOX_SECRET` | Shared secret presented by print agents |
+| `CLASSROOM_KIOSK_SECRET` | Optional — lets classroom TVs call `/v1/classroom/*` without a staff login |
+| `REDIS_URL` | Optional — switches live print-job state to Redis |
 | `DEFAULT_OBJECT_STORAGE_BUCKET_ID` | Object storage bucket for uploaded PDFs |
 | `PUBLIC_OBJECT_SEARCH_PATHS` | Object storage public search paths |
 | `PRIVATE_OBJECT_DIR` | Object storage private dir |
-
-Watch APK build:
-
-```bash
-./gradlew assembleRelease \
-  -PKOBEAI_API_BASE=https://your-school-server/ \
-  -PWATCH_HCE_SECRET=$(openssl rand -hex 32)
-```
-
-Set the same `WATCH_HCE_SECRET` value on the API server.
 
 ## Deploying a school server
 
 The `deploy/school-server/` compose file brings up Postgres, Redis,
 the API server, and the dashboards behind a single nginx, designed to
 run on a school's own hardware (a NUC or mid-range tower is enough).
-The tap-boxes on the LAN talk to this server. No internet required for
-core operation.
+Classroom PCs, Teacher Lens devices and print agents on the LAN talk to
+this server. No internet required for core operation.
 
-## Tap-box hardware
+## Print agent hardware
 
-A complete tap-box is ~$50:
+A print agent is ~$30:
 
-- Raspberry Pi Zero 2 W
-- ACR122U USB NFC reader
+- Raspberry Pi Zero 2 W (any Pi 3+ also works)
 - microSD + power supply
 
 Install with `sudo bash tap-box/install.sh`, edit
 `/etc/default/kobeai-tap-box`, add the printer to CUPS, and start the
-systemd unit. See `tap-box/README.md` for the full BOM and setup.
+systemd unit. See `tap-box/README.md` for the full setup.
 
 ## License
 

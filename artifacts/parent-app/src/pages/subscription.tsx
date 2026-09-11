@@ -296,7 +296,7 @@ export default function SubscriptionPage() {
                     </div>
                     <div className="text-xl font-bold leading-tight">+{payment.kp_granted} KP</div>
                     <div className="text-[10px] opacity-90">
-                      They'll see this on their watch instantly.
+                      Credited to their KobeAI account instantly.
                     </div>
                   </div>
                 </div>

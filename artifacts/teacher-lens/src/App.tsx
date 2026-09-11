@@ -385,7 +385,7 @@ function LookupPanel({
             onClick={async () => {
               // Ask K9 for a longer summary via the on-prem tutor.
               try {
-                const r = await apiPost<{ answer: string }>(auth, "/v1/watch/ask", {
+                const r = await apiPost<{ answer: string }>(auth, "/v1/classroom/ask", {
                   question: `Summarise ${brief.student_name ?? brief.student_code} in three sentences for their teacher.`,
                 });
                 if (r?.answer) speak(r.answer);

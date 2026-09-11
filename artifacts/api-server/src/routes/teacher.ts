@@ -28,7 +28,7 @@ router.get("/v1/teacher/dashboard/stats", (_req, res) => {
     total_points: 458920,
     avg_performance: 78.5,
     questions_today: 3421,
-    online_watches: 1103,
+    online_devices: 64,
     recent_activity: ACTIVITY,
   });
 });
@@ -272,7 +272,7 @@ router.get("/v1/teacher/documents", async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// Quiz authoring. Teachers write quizzes here; the watch reads them via
+// Quiz authoring. Teachers write quizzes here; student clients read them via
 // /v1/quizzes (which falls back to a hardcoded set when the table is empty).
 // ---------------------------------------------------------------------------
 

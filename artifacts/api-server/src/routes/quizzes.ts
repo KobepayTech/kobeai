@@ -19,7 +19,7 @@ const router = Router();
  * populates `req.auth` if a valid bearer is present so downstream handlers
  * can do per-student filtering (e.g. class-based quiz visibility, attempt
  * persistence). Used because /v1/quizzes is historically a public route but
- * the watch and dashboard now both send their tokens.
+ * the dashboard and student clients now send their tokens.
  */
 function softAuth(req: Request, _res: Response, next: NextFunction): void {
   const header = req.header("authorization") ?? req.header("Authorization");
@@ -33,7 +33,7 @@ router.use("/v1/quizzes", softAuth);
 
 // ---------------------------------------------------------------------------
 // Hardcoded fallback. We keep these so a freshly-seeded environment with no
-// teacher-authored quizzes still has something for the watch / teacher
+// teacher-authored quizzes still has something for the classroom / teacher
 // dashboard to render. The first time a teacher creates a real quiz, the
 // fallback disappears (the real list always wins when non-empty).
 // ---------------------------------------------------------------------------

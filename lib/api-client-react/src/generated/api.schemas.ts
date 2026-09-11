@@ -61,7 +61,7 @@ export interface TeacherDashboardStats {
   total_points: number;
   avg_performance: number;
   questions_today: number;
-  online_watches: number;
+  online_devices: number;
   recent_activity: ActivityItem[];
 }
 
@@ -228,30 +228,6 @@ export interface WalletResponse {
   daily_earned: number;
   daily_limit: number;
   recent_transactions: Transaction[];
-}
-
-export interface AskQuestionRequest {
-  question: string;
-  subject?: string;
-  conversation_id?: string;
-}
-
-export interface AskQuestionResponse {
-  answer: string;
-  points_earned: number;
-  new_balance: number;
-  follow_up_suggestions: string[];
-  conversation_id: string;
-  model_used: string;
-}
-
-export interface AttendanceCheckInResponse {
-  success: boolean;
-  message: string;
-  points_earned: number;
-  check_in_time: string;
-  already_checked_in: boolean;
-  new_balance: number;
 }
 
 export interface ChildInfo {

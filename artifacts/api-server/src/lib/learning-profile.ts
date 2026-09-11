@@ -180,8 +180,8 @@ export async function rollupStudent(studentCode: string): Promise<LearningProfil
 
   // 3. Questions asked count comes from classroom_discussion_insights when
   //    a question is attributed to this student with enough confidence.
-  //    /v1/watch/ask calls still aren't persisted per-student — that's the
-  //    other feeder we'd add later.
+  //    Classroom assistant questions aren't attributed per-student yet —
+  //    that's the other feeder we'd add later.
   let questionsAsked = 0;
   try {
     const q = await pool.query(

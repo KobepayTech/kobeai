@@ -4,7 +4,7 @@ import { useAuth } from "@/lib/auth";
 import { Layout } from "@/components/layout";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Settings, HelpCircle, FileText, LogOut, ChevronRight, User, Watch, Bell } from "lucide-react";
+import { Settings, HelpCircle, FileText, LogOut, ChevronRight, User, Bell } from "lucide-react";
 import { useGetParentDashboard } from "@workspace/api-client-react";
 
 export default function Profile() {
@@ -27,7 +27,6 @@ export default function Profile() {
   if (!token) return null;
 
   const menuItems = [
-    { icon: Watch, label: "Watch Settings", href: "/profile/watch" },
     { icon: Bell, label: "Notifications", href: "/profile/notifications" },
     { icon: Settings, label: "Account Settings", href: "#" },
     { icon: HelpCircle, label: "Help & Support", href: "#" },

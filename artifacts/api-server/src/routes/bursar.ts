@@ -223,7 +223,7 @@ router.get("/v1/bursar/students/balances", (_req, res) => {
  * POST /v1/bursar/deposit
  * Bursar manually credits a student account (cash/M-Pesa STK confirmation that
  * landed outside the standard flow). When the student exists in our DB we
- * credit the real `student_kp` ledger so the watch wallet, leaderboard, and
+ * credit the real `student_kp` ledger so the student wallet, leaderboard, and
  * KP totals all reflect the deposit. Falls back to mock balance display only
  * when the student_id can't be matched (legacy demo IDs).
  *
@@ -334,20 +334,20 @@ router.get("/v1/admin/cheat-sheet.pdf", (_req, res) => {
   item("2.", "If status = 'pending' for >5 min, hit Verify (super-admin) or wait for callback.");
   item("3.", "Manual deposit: Bursar → Add Deposit → enter Student ID + amount.");
 
-  section("If the watch won't connect");
-  item("1.", "Confirm watch is on the school Wi-Fi (Settings → Wi-Fi).");
-  item("2.", "On the watch: Sign out → Sign in. Use student ID + PIN.");
+  section("If a classroom TV won't connect");
+  item("1.", "Confirm the classroom PC is on the school Wi-Fi.");
+  item("2.", "Reload the K9 classroom display in the browser (F5), then return to full screen.");
   item("3.", "If still failing, check API server is up (step above).");
 
-  section("If a printer won't print (NFC tap)");
-  item("1.", "Hold watch flat against the NFC label on the printer for 2 seconds.");
-  item("2.", "Wait for printer beep. If no beep, check printer power + paper.");
-  item("3.", "Print job log: Teacher Dashboard → Documents → Print history.");
+  section("If a printer won't print");
+  item("1.", "Check the print agent (small box beside the printer) is powered and on Wi-Fi.");
+  item("2.", "Check printer power + paper, then resend from Teacher Dashboard → Documents → Print.");
+  item("3.", "Agent log: run `journalctl -u kobeai-tap-box -f` on the print agent.");
 
   section("Daily checklist (5 minutes, every morning)");
   item("✓", "Server LED green; dashboard loads at http://kobeai.local.");
   item("✓", "Date/time on dashboard is correct (UTC drift breaks attendance).");
-  item("✓", "At least one printer paired and online.");
+  item("✓", "At least one print agent online.");
   item("✓", "Backup ran overnight — Settings → Backups → last status = OK.");
 
   section("Who to call");

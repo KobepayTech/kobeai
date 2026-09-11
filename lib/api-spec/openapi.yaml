@@ -20,8 +20,6 @@ tags:
     description: Quiz management
   - name: wallet
     description: Student wallet & points
-  - name: watch
-    description: Watch/AI assistant
   - name: parent
     description: Parent portal
 
@@ -284,38 +282,6 @@ paths:
               schema:
                 $ref: "#/components/schemas/WalletResponse"
 
-  /v1/watch/ask:
-    post:
-      operationId: askQuestion
-      tags: [watch]
-      summary: Ask AI a question
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/AskQuestionRequest"
-      responses:
-        "200":
-          description: AI response
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AskQuestionResponse"
-
-  /v1/watch/attendance/checkin:
-    post:
-      operationId: checkIn
-      tags: [watch]
-      summary: Check in for attendance
-      responses:
-        "200":
-          description: Check-in successful
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AttendanceCheckInResponse"
-
   /v1/parent/dashboard:
     get:
       operationId: getParentDashboard
@@ -513,7 +479,7 @@ components:
           type: number
         questions_today:
           type: number
-        online_watches:
+        online_devices:
           type: number
         recent_activity:
           type: array
@@ -525,7 +491,7 @@ components:
         - total_points
         - avg_performance
         - questions_today
-        - online_watches
+        - online_devices
         - recent_activity
 
     Student:
@@ -951,66 +917,6 @@ components:
         - daily_earned
         - daily_limit
         - recent_transactions
-
-    AskQuestionRequest:
-      type: object
-      properties:
-        question:
-          type: string
-        subject:
-          type: string
-        conversation_id:
-          type: string
-      required:
-        - question
-
-    AskQuestionResponse:
-      type: object
-      properties:
-        answer:
-          type: string
-        points_earned:
-          type: number
-        new_balance:
-          type: number
-        follow_up_suggestions:
-          type: array
-          items:
-            type: string
-        conversation_id:
-          type: string
-        model_used:
-          type: string
-      required:
-        - answer
-        - points_earned
-        - new_balance
-        - follow_up_suggestions
-        - conversation_id
-        - model_used
-
-    AttendanceCheckInResponse:
-      type: object
-      properties:
-        success:
-          type: boolean
-        message:
-          type: string
-        points_earned:
-          type: number
-        check_in_time:
-          type: string
-        already_checked_in:
-          type: boolean
-        new_balance:
-          type: number
-      required:
-        - success
-        - message
-        - points_earned
-        - check_in_time
-        - already_checked_in
-        - new_balance
 
     ChildInfo:
       type: object

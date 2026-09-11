@@ -62,7 +62,7 @@ ${BOLD}${CYAN}BACKUP:${NC}
 ${BOLD}${CYAN}CONFIGURATION:${NC}
   ${GREEN}config show${NC}                   Show current configuration
   ${GREEN}config set <key> <value>${NC}      Update configuration
-  ${GREEN}server-url <url>${NC}              Set server URL for watches
+  ${GREEN}server-url <url>${NC}              Set server URL for LAN clients
 
 ${BOLD}${CYAN}OTHER:${NC}
   ${GREEN}version${NC}                       Show version

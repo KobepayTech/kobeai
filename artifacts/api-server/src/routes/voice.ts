@@ -15,7 +15,6 @@ const SESSION_TTL_MS = Math.max(
 );
 
 const ALLOWED_CHANNELS = new Set([
-  "watch",
   "classroom",
   "phone",
   "reception",
@@ -32,7 +31,6 @@ const DIRECT_USER_ROLES = new Set<Principal["role"]>([
 ]);
 
 type VoiceChannel =
-  | "watch"
   | "classroom"
   | "phone"
   | "reception"
@@ -106,7 +104,7 @@ function bearerPrincipal(req: Request): Principal | null {
  * 2. First-party KobeAI clients may call the gateway directly with a normal
  *    KobeAI bearer token.
  *
- * The shared secret is never given to watches, browsers, students or parents.
+ * The shared secret is never given to browsers, students or parents.
  */
 function requireVoiceAuth(req: Request, res: Response, next: NextFunction): void {
   const configuredSecret = process.env["KOBEVOICE_SHARED_SECRET"];
@@ -178,8 +176,6 @@ function channelSystemPrompt(session: VoiceSession): string {
       : "Reply in the same language as the speaker; support English and Kiswahili naturally.";
 
   const channelRule: Record<VoiceChannel, string> = {
-    watch:
-      "You are speaking to a student through a watch or earbuds. Keep the reply short, clear, age-appropriate and easy to understand when spoken aloud.",
     classroom:
       "You are assisting a classroom. Address the class clearly, avoid assuming which student spoke unless identity was explicitly supplied, and keep spoken answers concise.",
     phone:

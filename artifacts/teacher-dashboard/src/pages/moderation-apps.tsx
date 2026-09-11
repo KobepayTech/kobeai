@@ -9,7 +9,7 @@ import { ShieldCheck, ShieldX, RefreshCw, Eye } from "lucide-react";
 
 // Super-admin moderation queue for mini-app submissions.
 // Only "submitted" apps appear here. Approve flips status to "approved" so
-// it shows up in the watch AppStore. Reject sets a `rejection_reason` the
+// it shows up in the KobeAI AppStore. Reject sets a `rejection_reason` the
 // developer sees on their dashboard.
 
 type QueueApp = {

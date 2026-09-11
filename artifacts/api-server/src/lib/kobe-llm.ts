@@ -6,7 +6,7 @@ import { logger } from "./logger";
 // falls back to canned answers). Rule-based templates keep firing when
 // AI_PROVIDER is not "ollama" or when OLLAMA_ENABLE_GENERATION is not
 // explicitly set to "1" — that gate lets an operator keep Ollama running
-// for the watch-tutor path without paying LLM cost on every paper mark.
+// for the classroom-assistant path without paying LLM cost on every paper mark.
 
 const AI_PROVIDER = () => (process.env["AI_PROVIDER"] ?? "canned").toLowerCase();
 const GEN_FLAG = () => (process.env["OLLAMA_ENABLE_GENERATION"] ?? "0") === "1";

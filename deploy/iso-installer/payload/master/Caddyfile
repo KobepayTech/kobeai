@@ -21,7 +21,7 @@ kobeai.school, 192.168.1.10 {
         reverse_proxy teacher:80
     }
 
-    # API (used by the watches and the parent PWA)
+    # API (used by classroom TVs, Teacher Lens, print agents and the parent PWA)
     handle /api/* {
         reverse_proxy backend:8000
     }

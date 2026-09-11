@@ -170,7 +170,7 @@ export async function sendDigestForParent(parentPhone: string): Promise<{
  * waiting for the daily digest. Returns counts so the caller can log + alert.
  *
  * Failures are swallowed per-subscription (logged) so a single dead endpoint
- * never blocks the originating teacher/watch request. Dead endpoints (404/410)
+ * never blocks the originating teacher request. Dead endpoints (404/410)
  * are auto-pruned, identical to the digest path.
  */
 export async function sendApprovalPushToParents(

@@ -5,14 +5,12 @@ import teacherRouter from "./teacher";
 import bursarRouter from "./bursar";
 import quizzesRouter from "./quizzes";
 import walletRouter from "./wallet";
-import watchRouter from "./watch";
-import watchCompatRouter from "./watch-compat";
 import voiceOpenAiModelsRouter from "./voice-openai-models";
 import voiceRouter from "./voice";
 import attendanceRouter from "./attendance";
 import presenceRouter from "./presence";
 import networkDiscoveryRouter from "./network-discovery";
-import tabletRouter from "./tablet";
+import devicesRouter from "./devices";
 import parentRouter from "./parent";
 import parentPushRouter from "./parent-push";
 import adminRouter from "./admin";
@@ -44,10 +42,6 @@ router.use(teacherRouter);
 router.use(bursarRouter);
 router.use(quizzesRouter);
 router.use(walletRouter);
-// watch-compat must be first so /v1/watch/login (public) is matched before
-// watchRouter's path-prefix `requireAuth` middleware would block it.
-router.use(watchCompatRouter);
-router.use(watchRouter);
 // The OpenAI model-list route is mounted first because LiveKit may call
 // models.list() while prewarming its LLM client before any chat completion.
 router.use(voiceOpenAiModelsRouter);
@@ -55,7 +49,7 @@ router.use(voiceRouter);
 router.use(attendanceRouter);
 router.use(presenceRouter);
 router.use(networkDiscoveryRouter);
-router.use(tabletRouter);
+router.use(devicesRouter);
 router.use(parentRouter);
 router.use(parentPushRouter);
 router.use(adminRouter);

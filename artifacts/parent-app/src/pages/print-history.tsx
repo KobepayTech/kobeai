@@ -130,7 +130,7 @@ export default function PrintHistoryPage() {
             <div className="text-center py-10">
               <Printer className="w-10 h-10 text-gray-300 mx-auto mb-3" />
               <p className="text-gray-500 text-sm">No prints yet.</p>
-              <p className="text-gray-400 text-xs mt-1">Jobs your child sends from their watch will appear here.</p>
+              <p className="text-gray-400 text-xs mt-1">Handouts the school prints for your child will appear here.</p>
             </div>
           ) : (
             <div className="divide-y divide-gray-100">

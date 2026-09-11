@@ -156,7 +156,7 @@ export default function Quizzes() {
         ) : (
           <Card className="col-span-full">
             <CardContent className="py-12 text-center text-muted-foreground">
-              No quizzes yet. Click <strong>New quiz</strong> to create your first one — your students will see it on their watches immediately.
+              No quizzes yet. Click <strong>New quiz</strong> to create your first one.
             </CardContent>
           </Card>
         )}
@@ -273,7 +273,7 @@ function NewQuizForm({ onCreated }: { onCreated: () => void }) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error ?? `HTTP ${res.status}`);
       }
-      toast({ title: "Quiz published", description: "Your students will see it on their watches now." });
+      toast({ title: "Quiz published", description: "It's now available to your classes." });
       onCreated();
     } catch (e) {
       toast({ title: "Could not save quiz", description: String((e as Error).message), variant: "destructive" });
@@ -286,7 +286,7 @@ function NewQuizForm({ onCreated }: { onCreated: () => void }) {
     <>
       <DialogHeader>
         <DialogTitle>New quiz</DialogTitle>
-        <DialogDescription>Authored quizzes appear on every enrolled student's watch within a few seconds.</DialogDescription>
+        <DialogDescription>Published quizzes are available to your classes immediately.</DialogDescription>
       </DialogHeader>
       <div className="space-y-4 py-2">
         <div className="grid gap-3 sm:grid-cols-2">

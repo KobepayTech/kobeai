@@ -26,9 +26,9 @@ async function teacherOwnsClass(req: Request, classId: number): Promise<boolean>
  * - Admins/teachers manage the school-wide schedule via /v1/teacher/timetable
  *   (one row per class period, ISO weekday 1=Mon..7=Sun, time stored as
  *   minutes-from-midnight to keep TZ math out of the database).
- * - Students hit /v1/watch/timetable/today (full day) and
- *   /v1/watch/timetable/current (the period happening right now) — the watch
- *   polls the latter and vibrates when the subject changes.
+ * - Student-facing reads live at /v1/student/timetable/today (full day) and
+ *   /v1/student/timetable/current (the period happening right now). K9's
+ *   presence monitor uses the same periods to know where students should be.
  */
 const router = Router();
 
@@ -180,7 +180,7 @@ router.delete("/v1/teacher/timetable/:id", teacherAuth, async (req, res) => {
   res.json({ deleted: id });
 });
 
-// -------- Watch / student-facing --------
+// -------- Student-facing --------
 
 /** Resolve the calling student's class IDs. */
 async function callerClassIds(studentCode: string): Promise<number[]> {
@@ -190,7 +190,7 @@ async function callerClassIds(studentCode: string): Promise<number[]> {
   return rows.map((r) => r.class_id);
 }
 
-router.get("/v1/watch/timetable/today", studentAuth, async (req, res) => {
+router.get("/v1/student/timetable/today", studentAuth, async (req, res) => {
   const classIds = await callerClassIds(req.auth!.student_id!);
   if (classIds.length === 0) {
     res.json({ day_of_week: isoDayOfWeek(new Date()), periods: [] });
@@ -212,7 +212,7 @@ router.get("/v1/watch/timetable/today", studentAuth, async (req, res) => {
   res.json({ day_of_week: today, periods });
 });
 
-router.get("/v1/watch/timetable/current", studentAuth, async (req, res) => {
+router.get("/v1/student/timetable/current", studentAuth, async (req, res) => {
   const classIds = await callerClassIds(req.auth!.student_id!);
   if (classIds.length === 0) {
     res.json({ current: null, next: null });

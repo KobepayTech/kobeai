@@ -37,8 +37,8 @@ That's it. The installer:
 6. Prints the URLs to share with parents and teachers.
 
 When it's done, parents go to `http://<server-ip>/` and teachers go to
-`http://<server-ip>/teacher/`. Watches get configured with
-`kobeai-admin server-url http://<server-ip>/api`.
+`http://<server-ip>/teacher/`. Classroom displays, Teacher Lens and print
+agents use `http://<server-ip>/api` (set via `kobeai-admin server-url`).
 
 ## Installer flags
 
@@ -92,7 +92,7 @@ up and you've backed up the whole school's data.
 |--------------|--------------------------------------|
 | Parents      | `http://<server-ip>/`                |
 | Teachers     | `http://<server-ip>/teacher/`        |
-| Watch app    | `http://<server-ip>/api` (set via `kobeai-admin server-url`) |
+| LAN clients (classroom TV, Teacher Lens, print agents) | `http://<server-ip>/api` (set via `kobeai-admin server-url`) |
 | Admin debug  | `http://<server-ip>:11434` (Ollama)  |
 
 ## Hardware budget
@@ -117,7 +117,7 @@ sudo kobeai-admin system status    # which services are up
 sudo kobeai-admin system logs api  # tail logs
 sudo kobeai-admin models status    # which models are ready
 sudo kobeai-admin backup           # snapshot DB + config
-sudo kobeai-admin server-url http://192.168.1.100   # update watch URL
+sudo kobeai-admin server-url http://192.168.1.100   # update LAN client URL
 ```
 
 See `admin-cli/README.md` for the full command list.
@@ -171,7 +171,7 @@ cd /opt/kobeai && docker compose run --rm migrate
 ## Admin stats
 
 `kobeai-admin stats` calls `/api/v1/admin/stats` on the backend and returns
-a snapshot of students, teachers, quizzes, AI question volume, and watch
-device presence. Today the numbers are derived from the demo data; once a
+a snapshot of students, teachers, quizzes, AI question volume, and
+classroom display / camera presence. Today the numbers are derived from the demo data; once a
 real schema is in place, swap the body of `routes/admin.ts` for live
 Drizzle `count()` queries.

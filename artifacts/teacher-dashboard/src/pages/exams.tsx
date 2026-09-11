@@ -201,7 +201,7 @@ export default function ExamsPage() {
       return await res.json();
     },
     onSuccess: () => {
-      toast({ title: "Exam session created", description: "Press Start to send the countdown to all student watches." });
+      toast({ title: "Exam session created", description: "Press Start to begin the countdown." });
       qc.invalidateQueries({ queryKey: ["exams"] });
       setOpen(false);
       setDraftTitle("");
@@ -227,7 +227,7 @@ export default function ExamsPage() {
             Exam Mode (Master Supervisor)
           </h1>
           <p className="text-sm text-muted-foreground">
-            Start a countdown that takes over every student watch in the class. Use the buttons below to add or remove time mid-exam.
+            Run a server-timed exam countdown for a class. Use the buttons below to add or remove time mid-exam.
           </p>
         </div>
         <Dialog open={open} onOpenChange={setOpen}>
@@ -274,7 +274,7 @@ export default function ExamsPage() {
       ) : open_.length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center text-sm text-muted-foreground">
-            No active exam sessions. Create one to push a countdown to every watch in a class.
+            No active exam sessions. Create one to start a countdown for a class.
           </CardContent>
         </Card>
       ) : (

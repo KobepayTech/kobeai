@@ -7,7 +7,7 @@
 //   2. Independent deploy/scale — we can horizontally scale just this
 //      service when ad volume grows.
 //   3. Smaller blast radius — a buggy targeting tweak can't take down
-//      attendance, wallet, or watch login.
+//      attendance, wallet, or login.
 //
 // All routes are prefixed `/ads-api` (the platform path strip means we mount
 // router at "/" inside the app and the proxy handles the prefix).

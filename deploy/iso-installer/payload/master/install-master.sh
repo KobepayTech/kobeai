@@ -37,7 +37,6 @@ if [[ ! -f "$CRED_FILE" ]]; then
   SUPER_ADMIN_PW="$(openssl rand -base64 12 | tr -d '/+=' | cut -c1-16)"
   SESSION_SECRET="$(openssl rand -hex 32)"
   POSTGRES_PASSWORD="$(openssl rand -base64 18 | tr -d '/+=')"
-  WATCH_HCE_SECRET="$(openssl rand -hex 32)"
   cat > "$CRED_FILE" <<EOF
 # =============================================================================
 # KobeAI MASTER credentials — generated $(date -Is)
@@ -47,7 +46,6 @@ SUPER_ADMIN_LOGIN=admin@kobeai.school
 SUPER_ADMIN_PASSWORD=$SUPER_ADMIN_PW
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
 SESSION_SECRET=$SESSION_SECRET
-WATCH_HCE_SECRET=$WATCH_HCE_SECRET
 EOF
   chmod 600 "$CRED_FILE"
 fi
@@ -58,7 +56,7 @@ source "$CRED_FILE"
 # 3. Run the existing school-server bootstrap.
 # -----------------------------------------------------------------------------
 export KOBEAI_HOME
-export SESSION_SECRET POSTGRES_PASSWORD WATCH_HCE_SECRET
+export SESSION_SECRET POSTGRES_PASSWORD
 bash "$REPO_DIR/deploy/school-server/install.sh" --skip-models
 
 # -----------------------------------------------------------------------------
@@ -120,7 +118,7 @@ cat <<EOF
   URLs (LAN only):
     Parent App         https://kobeai.school/        (or https://192.168.1.10/)
     Teacher Dashboard  https://kobeai.school/teacher/
-    API for watches    https://kobeai.school/api
+    API (LAN clients)  https://kobeai.school/api
 
   Super-admin login:
     email:     admin@kobeai.school

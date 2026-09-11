@@ -168,7 +168,7 @@ export default function TimetablePage() {
             School Timetable
           </h1>
           <p className="text-sm text-muted-foreground">
-            Add weekly periods per class. Student watches will buzz when the subject changes.
+            Add weekly periods per class. K9 uses the timetable to know where every student should be.
           </p>
         </div>
         <div className="flex items-center gap-2">

@@ -156,7 +156,7 @@ const SCHEDULE: Record<string, Cell | null> = {
 };
 
 function TimetablePage() {
-  // Highlight Fri 08:00 as the current period (matches "NOW" idea on the watch)
+  // Highlight Fri 08:00 as the current period
   const nowKey = "Fri|08:00";
   return (
     <Chrome page="Timetable">
@@ -167,7 +167,7 @@ function TimetablePage() {
             Weekly schedule
           </h2>
           <p className="text-[13px] text-gray-500">
-            Drag-free editor · changes propagate to the watch <span style={{ color: PRIMARY, fontWeight: 600 }}>instantly</span>
+            Drag-free editor · K9 presence checks use changes <span style={{ color: PRIMARY, fontWeight: 600 }}>instantly</span>
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -360,7 +360,7 @@ function ExamsPage() {
             Exam supervisor
           </h2>
           <p className="text-[13px] text-gray-500">
-            Starting an exam <span style={{ color: PRIMARY, fontWeight: 600 }}>locks all watches</span> in the class onto a fullscreen countdown.
+            Starting an exam runs a <span style={{ color: PRIMARY, fontWeight: 600 }}>server-timed countdown</span> for the class.
           </p>
         </div>
         <div
@@ -419,16 +419,16 @@ function ExamsPage() {
           <ControlButton icon="■" label="Finish exam" variant="danger" />
         </div>
 
-        {/* Watch sync indicators */}
+        {/* Classroom status indicators */}
         <div className="flex items-center gap-4 mt-4 text-[11px] text-gray-300">
           <div className="flex items-center gap-1.5">
-            <span style={{ color: PRIMARY }}>●</span> 32 / 32 watches synced
+            <span style={{ color: PRIMARY }}>●</span> 32 / 32 students present
           </div>
           <div className="flex items-center gap-1.5">
-            <span>📡</span> Last poll: 3 s ago
+            <span>📡</span> Last sync: 3 s ago
           </div>
           <div className="flex items-center gap-1.5">
-            <span>🔇</span> Audio + AI disabled on watches
+            <span>🔇</span> Classroom assistant paused
           </div>
         </div>
       </div>

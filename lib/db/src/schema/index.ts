@@ -82,8 +82,8 @@ export const documentAssignmentsTable = pgTable(
       .notNull()
       .references(() => classesTable.id, { onDelete: "cascade" }),
     assigned_at: timestamp("assigned_at").defaultNow().notNull(),
-    // Optional scheduling window. The watch print picker, parent app, and
-    // tap-box only show the document when (now >= scheduled_at OR null) AND
+    // Optional scheduling window. Student-facing document lists (parent app)
+    // only show the document when (now >= scheduled_at OR null) AND
     // (now < expires_at OR null). Lets teachers queue homework in advance and
     // auto-retire stale worksheets without manual cleanup.
     scheduled_at: timestamp("scheduled_at"),
@@ -94,28 +94,11 @@ export const documentAssignmentsTable = pgTable(
 
 /**
  * Persistent record of every print job. The in-memory `print_store` keeps
- * the live job state (queued / printing / done) for the tap-box flow, but it
- * evicts entries after JOB_TTL_MS. This table is the long-term audit log so
- * parents can see history and bursars can spot abuse.
+ * the live job state (queued / printing / done) for the print-agent flow, but
+ * it evicts entries after JOB_TTL_MS. This table (`print_jobs`, defined below)
+ * is the long-term audit log so parents can see history and bursars can spot
+ * abuse.
  */
-/**
- * Per-student watch device preferences. The parent app writes these via
- * /v1/parent/child/:childId/settings; the watch reads them on login (and on
- * each app launch) and mirrors them into local DataStore so they survive
- * being offline. Defaults assume both audio and keyboard are enabled — a
- * fresh student gets the full experience until a parent dials it back.
- */
-export const studentSettingsTable = pgTable("student_settings", {
-  student_code: text("student_code").primaryKey(),
-  audio_enabled: boolean("audio_enabled").notNull().default(true),
-  keyboard_enabled: boolean("keyboard_enabled").notNull().default(true),
-  // Parent-controlled. When false the watch suppresses the AdHomeTile and
-  // AdInterstitialScreen. The build-time BuildConfig.ENABLE_ADS flag is the
-  // operator-level off-switch; this is the per-family runtime override.
-  ads_enabled: boolean("ads_enabled").notNull().default(true),
-  updated_at: timestamp("updated_at").defaultNow().notNull(),
-});
-export type StudentSettings = typeof studentSettingsTable.$inferSelect;
 
 /**
  * Aggregated learning profile per student — the "brain" surface for the K9
@@ -583,11 +566,14 @@ export type MagazineEdition = typeof magazineEditionsTable.$inferSelect;
 export const printJobsTable = pgTable("print_jobs", {
   id: serial("id").primaryKey(),
   job_ref: text("job_ref").notNull().unique(),
-  student_code: text("student_code").notNull(),
+  // Null for class handouts; set when staff print for one student.
+  student_code: text("student_code"),
   student_id: integer("student_id").references(() => usersTable.id, { onDelete: "set null" }),
+  requested_by: integer("requested_by").references(() => usersTable.id, { onDelete: "set null" }),
   document_id: integer("document_id"),
   document_name: text("document_name").notNull(),
   pages: integer("pages").notNull().default(1),
+  copies: integer("copies").notNull().default(1),
   printer_id: text("printer_id").notNull(),
   printer_name: text("printer_name"),
   status: text("status").notNull().default("queued"),
@@ -623,13 +609,6 @@ export const tenantsTable = pgTable(
     contact_phone: text("contact_phone"),
     active: boolean("active").notNull().default(true),
     students_cap: integer("students_cap").notNull().default(500),
-    // 32-byte hex secret used to verify watch HCE payloads for this school.
-    // When null, the api-server falls back to the WATCH_HCE_SECRET env var
-    // (legacy single-tenant deploys). Rotated via the admin secret-rotate
-    // endpoint; rotation requires re-building the watch APK for this school
-    // with the new value passed as `-PWATCH_HCE_SECRET=...`.
-    watch_hce_secret: text("watch_hce_secret"),
-    watch_hce_secret_rotated_at: timestamp("watch_hce_secret_rotated_at"),
     last_sync_at: timestamp("last_sync_at"),
     last_sync_ip: text("last_sync_ip"),
     created_at: timestamp("created_at").defaultNow().notNull(),
@@ -744,7 +723,7 @@ export type TenantUsageSnapshot = typeof tenantUsageSnapshotsTable.$inferSelect;
 //
 // Replaces the original hardcoded QUIZZES list in routes/quizzes.ts. The
 // route falls back to the legacy hardcoded set when the table is empty so
-// existing demos and watch builds keep working out of the box.
+// existing demos keep working out of the box.
 // ---------------------------------------------------------------------------
 
 export const quizzesTable = pgTable(
@@ -754,7 +733,7 @@ export const quizzesTable = pgTable(
     title: text("title").notNull(),
     subject: text("subject").notNull(),
     // Optional class scoping: if null, the quiz is globally visible. If set,
-    // /v1/watch/quizzes filters to quizzes whose class matches one of the
+    // /v1/quizzes filters to quizzes whose class matches one of the
     // student's enrolled classes.
     class_id: integer("class_id").references(() => classesTable.id, {
       onDelete: "set null",
@@ -794,7 +773,7 @@ export const quizQuestionsTable = pgTable(
 export type QuizQuestion = typeof quizQuestionsTable.$inferSelect;
 
 /**
- * Persistent record of one student's attempt at one quiz. Powers the watch
+ * Persistent record of one student's attempt at one quiz. Powers the quiz
  * leaderboard and the teacher's "who attempted what" view. Only the most
  * recent attempt counts toward leaderboard ranking (we MAX(score) per
  * student in the SELECT — a re-take that scored worse doesn't penalize them).
@@ -849,8 +828,8 @@ export type PushSubscription = typeof pushSubscriptionsTable.$inferSelect;
 
 // ---------------------------------------------------------------------------
 // Class timetable. Admins/teachers populate one row per period in a class's
-// weekly schedule. The watch app polls /v1/watch/timetable/current to learn
-// which subject is happening *right now* and vibrates when it changes.
+// weekly schedule. K9's presence monitor compares camera sightings against it
+// to know where each student should be *right now*.
 //
 // Time-of-day is stored as `start_minute` / `end_minute` (minutes from
 // midnight, 0..1439) — keeps comparisons trivial in SQL/JS without dragging
@@ -881,8 +860,8 @@ export type TimetablePeriod = typeof timetablePeriodsTable.$inferSelect;
 
 // ---------------------------------------------------------------------------
 // Exam sessions. A teacher acting as supervisor creates an exam against a
-// class. While it is `active`, every student watch in that class polls
-// /v1/watch/exam/active and switches to a fullscreen countdown until
+// class. While it is `active`, student clients in that class can read
+// /v1/student/exam/active and show a fullscreen countdown until
 // `ends_at`. The supervisor can pause (status=paused, remaining_seconds
 // captured), resume (recomputes ends_at), add time (pushes ends_at forward
 // or grows remaining_seconds when paused), and finish.
@@ -1030,7 +1009,7 @@ export type StudentKp = typeof studentKpTable.$inferSelect;
 // provisioned yet. We can't look up a `user_id` and we can't fail the
 // payment over it, so we park the grant here keyed by `student_code` and
 // drain it the next time that student touches a KP-aware endpoint
-// (currently `GET /v1/watch/market/me`).
+// (currently `GET /v1/student/market/me`).
 //
 // Each row is at-most-once: when claimed, `claimed_at` and the resulting
 // `kp_ledger.id` are set in the same transaction that credits the
@@ -1059,28 +1038,16 @@ export const kpPendingGrantsTable = pgTable(
 export type KpPendingGrant = typeof kpPendingGrantsTable.$inferSelect;
 
 // ===========================================================================
-// Parent ↔ Student linking + watch QR pairing
+// Parent ↔ Student linking
 // ===========================================================================
 //
 // A parent has its own user row (role="parent") and is linked to one or more
-// students via `parent_children`. Linking happens through one of:
-//
-//   1. CLAIM CODE: school issues a globally-unique code shaped like
-//      `<school-prefix>-XXXX-XXXX` (e.g. "MARI-7K3P-9XQ2"). Parent types or
-//      pastes the code, server hashes + looks up the row in `claim_codes`,
-//      consumes it, and inserts into `parent_children`. The school prefix
-//      means a parent with kids in 5 different schools never has collisions
-//      and the code is self-describing.
-//
-//   2. WATCH QR: the kid opens "Link Parent" on their watch, which calls
-//      POST /v1/watch/pairing/start. Server stores a fresh row in
-//      `parent_pairing_tokens` (random short token, 2-min TTL, single-use,
-//      bound to that student). Watch displays the token as a QR. Parent
-//      scans → POST /v1/parent/pairing/scan { token } consumes the row and
-//      links. Static QR on watch face would let bus passengers steal a
-//      child link; on-demand + short TTL kills that attack.
-//
-// Both paths converge on the same `parent_children` join table.
+// students via `parent_children`. Linking uses a CLAIM CODE: the school
+// issues a globally-unique code shaped like `<school-prefix>-XXXX-XXXX`
+// (e.g. "MARI-7K3P-9XQ2"). Parent types or pastes the code, server hashes +
+// looks up the row in `claim_codes`, consumes it, and inserts into
+// `parent_children`. The school prefix means a parent with kids in 5
+// different schools never has collisions and the code is self-describing.
 // ---------------------------------------------------------------------------
 
 export const parentChildrenTable = pgTable(
@@ -1140,32 +1107,6 @@ export const claimCodesTable = pgTable(
   }),
 );
 export type ClaimCode = typeof claimCodesTable.$inferSelect;
-
-// Watch → parent pairing tokens. Random ~12-char base32 string. Hash stored.
-// 2-minute TTL by default; consumed_at flips on first successful scan.
-export const parentPairingTokensTable = pgTable(
-  "parent_pairing_tokens",
-  {
-    id: serial("id").primaryKey(),
-    token_hash: text("token_hash").notNull(),
-    student_user_id: integer("student_user_id")
-      .notNull()
-      .references(() => usersTable.id, { onDelete: "cascade" }),
-    tenant_id: integer("tenant_id")
-      .notNull()
-      .references(() => tenantsTable.id, { onDelete: "cascade" }),
-    expires_at: timestamp("expires_at").notNull(),
-    consumed_by: integer("consumed_by").references(() => usersTable.id, {
-      onDelete: "set null",
-    }),
-    consumed_at: timestamp("consumed_at"),
-    created_at: timestamp("created_at").defaultNow().notNull(),
-  },
-  (t) => ({
-    hash_idx: uniqueIndex("pairing_tokens_hash_idx").on(t.token_hash),
-  }),
-);
-export type ParentPairingToken = typeof parentPairingTokensTable.$inferSelect;
 
 // ===========================================================================
 // Stationery ordering
@@ -1266,7 +1207,7 @@ export const stationeryOrdersTable = pgTable(
     parent_user_id: integer("parent_user_id").references(() => usersTable.id, {
       onDelete: "set null",
     }),
-    // Who drafted it: "teacher" | "student_watch" | "parent"
+    // Who drafted it: "teacher" | "parent"
     placed_by: text("placed_by").notNull().default("parent"),
     // draft | pending_parent_approval | approved | rejected | packed
     status: text("status").notNull().default("draft"),
@@ -1316,7 +1257,7 @@ export type StationeryOrderItem = typeof stationeryOrderItemsTable.$inferSelect;
 // ===========================================================================
 // MINI-APP STORE — developer accounts, mini-apps, installs, purchases.
 // Apps are tiny JSON-defined experiences (flashcards, quizzes, readings,
-// counters, timers) rendered by a built-in runtime on the watch. Devs pay
+// counters, timers) rendered by the built-in KobeAI mini-app runtime. Devs pay
 // for an account and get revenue share when students pay for their apps.
 // ===========================================================================
 
@@ -1501,7 +1442,7 @@ export type MiniAppReview = typeof miniAppReviewsTable.$inferSelect;
 
 // =====================================================================
 // Ad Exchange — self-serve advertiser portal + cross-surface ad serving
-// (parent PWA banners, watch home tile, watch mini-app interstitials).
+// (parent PWA banners, mini-app interstitials).
 // =====================================================================
 
 /**
@@ -1570,7 +1511,7 @@ export type AdCampaign = typeof adCampaignsTable.$inferSelect;
 
 /**
  * Creatives (the actual rendered units). One campaign can have multiple,
- * one per format (banner image, native title+body, watch tile, etc.).
+ * one per format (banner image, native title+body, interstitial, etc.).
  * `format` matches placement.allowed_formats so the engine picks the right
  * creative per slot.
  */
@@ -1582,7 +1523,7 @@ export const adCreativesTable = pgTable(
       .notNull()
       .references(() => adCampaignsTable.id, { onDelete: "cascade" }),
     format: text("format").notNull(),
-    // banner|native|watch_tile|interstitial
+    // banner|native|interstitial
     title: text("title").notNull(),
     body: text("body"),
     image_url: text("image_url"),
@@ -1604,7 +1545,7 @@ export type AdCreative = typeof adCreativesTable.$inferSelect;
  */
 export const adPlacementsTable = pgTable("ad_placements", {
   id: text("id").primaryKey(), // e.g. parent_app_home
-  surface: text("surface").notNull(), // parent_app | watch | watch_miniapp
+  surface: text("surface").notNull(), // parent_app | miniapp
   description: text("description").notNull(),
   allowed_formats: jsonb("allowed_formats").notNull(), // string[]
   floor_bid_tsh: integer("floor_bid_tsh").default(0).notNull(),
@@ -1615,7 +1556,7 @@ export type AdPlacement = typeof adPlacementsTable.$inferSelect;
 /**
  * Every served ad creates an impression row. `charged_tsh` is non-zero only
  * for CPM and flat campaigns (clicks for CPC charge on the click event).
- * `user_id` is nullable since some surfaces (e.g. watch home) may serve
+ * `user_id` is nullable since some surfaces (e.g. shared displays) may serve
  * pre-login.
  */
 export const adImpressionsTable = pgTable(

@@ -219,7 +219,7 @@ export default function NewAppPage() {
               spellCheck={false}
             />
             <p className="text-xs text-gray-500 mt-2">
-              The runtime on the watch reads this manifest and renders the experience.
+              The KobeAI mini-app runtime reads this manifest and renders the experience.
               We pre-filled a template for <code>{type}</code> — edit to taste.
             </p>
           </div>

@@ -4,7 +4,6 @@ import {
   db,
   subscriptionCacheTable,
   printJobsTable,
-  studentSettingsTable,
   parentChildrenTable,
   usersTable,
 } from "@workspace/db";
@@ -208,8 +207,8 @@ router.get("/v1/parent/child/:childId/activity", async (req, res) => {
 /**
  * GET /v1/parent/child/:childId/documents
  * Documents assigned to the classes this child belongs to.
- * Same join the student watch sees in the print picker, so parents always
- * know exactly what is available for tap-to-print.
+ * Same class join teachers print from, so parents always know which
+ * handouts their child's classes have been given.
  */
 router.get("/v1/parent/child/:childId/documents", async (req, res) => {
   const parentId = parentIdOr401(req, res);
@@ -442,77 +441,6 @@ router.get("/v1/parent/child/:childId/school-day", async (req, res) => {
   });
 });
 
-// Watch device settings (audio responses + keyboard input). Parents can flip
-// these per child from the app; the watch reads them at login + on demand.
-// Defaults are applied here so brand-new students don't 404 — we never insert
-// a row until the parent actually changes something.
-router.get("/v1/parent/child/:childId/settings", async (req, res) => {
-  const parentId = parentIdOr401(req, res);
-  if (parentId == null) return;
-  const child = await resolveOwnedChild(parentId, String(req.params["childId"]));
-  if (!child) return res.status(404).json({ error: "child_not_found" });
-  const rows = await db
-    .select()
-    .from(studentSettingsTable)
-    .where(eq(studentSettingsTable.student_code, child.student_code))
-    .limit(1);
-  const row = rows[0];
-  res.json({
-    student_code: child.student_code,
-    audio_enabled: row?.audio_enabled ?? true,
-    keyboard_enabled: row?.keyboard_enabled ?? true,
-    ads_enabled: row?.ads_enabled ?? true,
-  });
-});
-
-router.patch("/v1/parent/child/:childId/settings", async (req, res) => {
-  const parentId = parentIdOr401(req, res);
-  if (parentId == null) return;
-  const child = await resolveOwnedChild(parentId, String(req.params["childId"]));
-  if (!child) return res.status(404).json({ error: "child_not_found" });
-  const studentCode = child.student_code;
-  const body = req.body ?? {};
-  const audio = typeof body.audio_enabled === "boolean" ? body.audio_enabled : undefined;
-  const keyboard =
-    typeof body.keyboard_enabled === "boolean" ? body.keyboard_enabled : undefined;
-  const ads = typeof body.ads_enabled === "boolean" ? body.ads_enabled : undefined;
-  if (audio === undefined && keyboard === undefined && ads === undefined) {
-    return res.status(400).json({ error: "no_changes" });
-  }
-  // Upsert: insert with the provided values (defaulting the missing one to
-  // true since that's also the schema default), or update only the supplied
-  // fields on conflict so a partial PATCH doesn't clobber the other toggle.
-  await db
-    .insert(studentSettingsTable)
-    .values({
-      student_code: studentCode,
-      audio_enabled: audio ?? true,
-      keyboard_enabled: keyboard ?? true,
-      ads_enabled: ads ?? true,
-    })
-    .onConflictDoUpdate({
-      target: studentSettingsTable.student_code,
-      set: {
-        ...(audio !== undefined ? { audio_enabled: audio } : {}),
-        ...(keyboard !== undefined ? { keyboard_enabled: keyboard } : {}),
-        ...(ads !== undefined ? { ads_enabled: ads } : {}),
-        updated_at: new Date(),
-      },
-    });
-  const rows = await db
-    .select()
-    .from(studentSettingsTable)
-    .where(eq(studentSettingsTable.student_code, studentCode))
-    .limit(1);
-  const row = rows[0]!;
-  res.json({
-    student_code: studentCode,
-    audio_enabled: row.audio_enabled,
-    keyboard_enabled: row.keyboard_enabled,
-    ads_enabled: row.ads_enabled,
-  });
-});
-
 router.get("/v1/parent/wallet", async (req, res) => {
   const parentId = parentIdOr401(req, res);
   if (parentId == null) return;
@@ -664,8 +592,8 @@ router.get("/v1/parent/notifications", async (req, res) => {
           ? `${child?.name ?? r.student_code}'s plan expires today`
           : `${child?.name ?? r.student_code}'s plan expires in ${days} day${days === 1 ? "" : "s"}`,
         body: expired
-          ? "The watch's premium features are paused. Pay now to reactivate."
-          : "Tap Pay now to renew for another 30 days and keep the watch active.",
+          ? "Premium KobeAI features for this child are paused. Pay now to reactivate."
+          : "Tap Pay now to renew for another 30 days.",
       };
     })
     .sort((a, b) => a.days_remaining - b.days_remaining);

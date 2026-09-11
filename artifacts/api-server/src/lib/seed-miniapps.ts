@@ -1,5 +1,5 @@
 // Idempotent seed: one demo developer ("KobeAI Studios") + a few approved
-// mini-apps in different categories so the watch-app store and the
+// mini-apps in different categories so the KobeAI AppStore and the
 // teacher-dashboard moderation queue have real data to render.
 //
 // Re-runs are safe: each insert checks for an existing row first.

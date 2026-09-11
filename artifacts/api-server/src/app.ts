@@ -6,7 +6,7 @@ import { logger } from "./lib/logger";
 
 const NODE_ENV = process.env["NODE_ENV"] ?? "development";
 
-// Comma-separated origin allowlist. The watch app, tap-box, and any
+// Comma-separated origin allowlist. The print agent and any other
 // non-browser client never send an Origin header so they're unaffected.
 // In development we allow any origin so local Vite dashboards work without
 // extra config; in any other env an unset list means "no browser clients."

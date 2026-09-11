@@ -10,8 +10,8 @@ GPU box lands.
 
 ## Why this shape
 
-- **Cost.** A cheap Android + TWS earbuds is ~$100. A tablet or watch per
-  student is ~$100 × 40 per class. For rural Tanzanian schools this is a
+- **Cost.** A cheap Android + TWS earbuds is ~$100. A device per student
+  is ~$100 × 40 per class. For rural Tanzanian schools this is a
   40× cost delta on the same educational outcome.
 - **Signal quality.** Paper marking is the cleanest AI feed you can get
   from a classroom. Every wrong answer is a labeled data point:

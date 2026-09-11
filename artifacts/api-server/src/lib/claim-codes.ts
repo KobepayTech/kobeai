@@ -1,4 +1,4 @@
-// Claim codes & watch-pairing tokens.
+// Claim codes.
 //
 // Codes look like `<PREFIX>-XXXX-XXXX`, where PREFIX is the school slug's
 // first 4 letters (uppercased) and the two trailing groups are 4 chars each
@@ -7,9 +7,6 @@
 //
 // We never store the plaintext code — only its SHA-256 hash. The school
 // admin sees the plaintext exactly once, when the code is generated.
-//
-// Pairing tokens use the same alphabet but are 12 chars total (no prefix).
-// They're meant to live on a watch face for ≤2 minutes inside a QR.
 
 import crypto from "node:crypto";
 
@@ -31,11 +28,6 @@ export function schoolPrefix(slug: string): string {
 
 export function generateClaimCode(slug: string): string {
   return `${schoolPrefix(slug)}-${randomChars(4)}-${randomChars(4)}`;
-}
-
-export function generatePairingToken(): string {
-  // 12 chars in groups of 4 for human-readable fallback if QR fails.
-  return `${randomChars(4)}-${randomChars(4)}-${randomChars(4)}`;
 }
 
 export function hashCode(code: string): string {

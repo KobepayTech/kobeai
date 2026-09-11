@@ -174,7 +174,7 @@ show_connections() {
     echo -e "${BOLD}${CYAN}Active Connections${NC}"
     echo "==============================================================="
     echo ""
-    echo -e "${CYAN}Connected Watches:${NC}"
+    echo -e "${CYAN}Connected Devices:${NC}"
     docker exec kobeai-redis redis-cli SCARD "online_devices" 2>/dev/null || echo "  0"
     echo ""
     echo -e "${CYAN}Active API Connections:${NC}"

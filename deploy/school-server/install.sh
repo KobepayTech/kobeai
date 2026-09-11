@@ -168,7 +168,7 @@ print_summary() {
   ${BOLD}URLs to share with the school:${NC}
     Parent App         http://$ip/
     Teacher Dashboard  http://$ip/teacher/   (or http://$ip:3000)
-    API (for watches)  http://$ip/api        (or http://$ip:8000)
+    API (LAN clients)  http://$ip/api        (or http://$ip:8000)
     Ollama (debug)     http://$ip:11434
 
   ${BOLD}Useful commands:${NC}

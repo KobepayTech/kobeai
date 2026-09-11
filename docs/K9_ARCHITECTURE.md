@@ -247,6 +247,26 @@ requires only editing `handle()` in `scripts/k9-worker.mjs` (or
 replacing the whole file with a Python-side drain against the same
 endpoints).
 
+## Clients (no student devices)
+
+K9 is a school-wide system, not a student-device product. Students never
+carry a watch, phone or tablet for K9 to work: the camera cascade identifies
+them, and the shared classroom display serves them.
+
+| Client | User | Talks to |
+|---|---|---|
+| Classroom PC + TV (`artifacts/classroom-tv`) | Whole class | `/v1/classroom/*` |
+| Teacher Lens phone / AR glasses (`artifacts/teacher-lens`) | Teacher | `/v1/teacher-lens/*`, `/v1/classroom/ask` |
+| Teacher Dashboard | Teachers, head teacher, IT | staff JWT routes |
+| Parent Portal (`artifacts/parent-app`) | Parents | `/v1/parent/*` |
+| Print agent (`tap-box/`) | Sits beside each printer | `/v1/print/next` + job routes |
+| Existing CCTV / NVR cameras | — | camera discovery + vision worker |
+
+Non-camera LAN clients register and heartbeat through the device registry
+(`/v1/devices/*`, table `k9_devices`) so the server console can show what is
+online. The Wear OS watch app, the `/v1/watch/*` API and NFC HCE print
+pairing were removed; printing is staff-initiated (`POST /v1/print/jobs`).
+
 ## Teacher-worn lens (primary client)
 
 The primary K9 client is a teacher-worn phone or AR glasses + bluetooth
