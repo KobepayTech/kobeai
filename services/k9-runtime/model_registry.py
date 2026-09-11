@@ -58,7 +58,17 @@ class ModelSpec:
 
 
 MODEL_SPECS: tuple[ModelSpec, ...] = (
-    ModelSpec("qwen-gguf", "chat", r"brain/existing/qwen.gguf", "llama_cpp", True),
+    ModelSpec(
+        "qwen-gguf",
+        "chat",
+        r"brain/existing/qwen.gguf",
+        "llama_cpp",
+        True,
+        notes=(
+            "K9 runtime-local path. On Windows, link the existing "
+            r"C:\KobeOS\Models\qwen.gguf here instead of duplicating the file."
+        ),
+    ),
     ModelSpec("deepseek-gguf", "reasoning", r"brain/existing/deepseek.gguf", "llama_cpp"),
     ModelSpec("llama3-gguf", "chat", r"brain/existing/llama3.gguf", "llama_cpp"),
     ModelSpec("mistral-gguf", "chat", r"brain/existing/mistral.gguf", "llama_cpp"),
@@ -86,9 +96,9 @@ MODEL_SPECS: tuple[ModelSpec, ...] = (
     ModelSpec("bge-m3", "embedding", r"embeddings/bge-m3", "sentence_transformers", True),
     ModelSpec("kokoro-82m", "tts", r"tts/kokoro-82m", "kokoro"),
     ModelSpec("piper-swahili", "tts_sw", r"tts/piper-swahili", "piper", True),
-    ModelSpec("rtdetr-v2-r50vd", "detection", r"optional/detection/rtdetr-v2-r50vd", "transformers_detection", optional=True),
-    ModelSpec("locateanything-3b", "grounding", r"optional/vision/locateanything-3b", "transformers_vlm", optional=True),
-    ModelSpec("paddleocr-vl-1.6", "ocr", r"optional/ocr/paddleocr-vl-1.6", "transformers_vlm", optional=True),
+    ModelSpec("rtdetr-v2-r50vd", "detection", r"detection/rtdetr-v2-r50vd", "transformers_detection", optional=True),
+    ModelSpec("locateanything-3b", "grounding", r"vision/locateanything-3b", "transformers_vlm", optional=True),
+    ModelSpec("paddleocr-vl-1.6", "ocr", r"ocr/paddleocr-vl-1.6", "transformers_vlm", optional=True),
 )
 
 
