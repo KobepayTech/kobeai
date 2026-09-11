@@ -10,13 +10,13 @@ echo.
 echo ==============================================================
 echo   K9 QWEN RUNTIME LINK
 echo ==============================================================
-echo Source:      %SOURCE%
+echo Source:       %SOURCE%
 echo Runtime path: %DEST%
 echo.
 
 echo This does NOT download, copy, move, replace, or delete Qwen.
 echo It creates a zero-copy NTFS hard link so the K9 runtime can see
-necho the existing Qwen through its canonical model-root path.
+echo the existing Qwen through its canonical model-root path.
 echo.
 
 if exist "%DEST%" (
