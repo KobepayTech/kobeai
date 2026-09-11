@@ -19,6 +19,7 @@ import importlib.util
 import json
 import shutil
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -42,6 +43,9 @@ def load_runtime_registry():
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Unable to import registry: {RUNTIME_REGISTRY}")
     module = importlib.util.module_from_spec(spec)
+    # Dataclasses with postponed annotations may consult sys.modules while the
+    # module body is executing, so register the module before exec_module().
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
