@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from model_registry import BY_NAME, choose_model, statuses
+from model_registry import BY_NAME, CAPABILITY_ROUTES, choose_model, statuses
 
 
 class RegistryTests(unittest.TestCase):
@@ -37,6 +37,7 @@ class RegistryTests(unittest.TestCase):
         required = {
             "qwen3-vl-8b",
             "youtu-llm-2b",
+            "hunyuan-4b-instruct",
             "youtu-vl-4b",
             "hunyuan-ocr-1.5",
             "yolo26m",
@@ -54,9 +55,18 @@ class RegistryTests(unittest.TestCase):
 
     def test_registry_uses_canonical_downloader_paths(self) -> None:
         self.assertEqual(BY_NAME["qwen-gguf"].relative_path, r"brain/existing/qwen.gguf")
+        self.assertEqual(BY_NAME["hunyuan-4b-instruct"].relative_path, r"tencent/agents/hunyuan-4b-instruct")
         self.assertEqual(BY_NAME["rtdetr-v2-r50vd"].relative_path, r"detection/rtdetr-v2-r50vd")
         self.assertEqual(BY_NAME["locateanything-3b"].relative_path, r"vision/locateanything-3b")
         self.assertEqual(BY_NAME["paddleocr-vl-1.6"].relative_path, r"ocr/paddleocr-vl-1.6")
+
+    def test_qwen3_vl_is_optional_when_using_except_qwen_installer(self) -> None:
+        self.assertTrue(BY_NAME["qwen3-vl-8b"].optional)
+
+    def test_reasoning_route_uses_downloaded_hunyuan_before_optional_qwen3_vl(self) -> None:
+        route = CAPABILITY_ROUTES["reasoning"]
+        self.assertIn("hunyuan-4b-instruct", route)
+        self.assertLess(route.index("hunyuan-4b-instruct"), route.index("qwen3-vl-8b"))
 
 
 if __name__ == "__main__":
