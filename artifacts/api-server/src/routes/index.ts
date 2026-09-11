@@ -11,6 +11,8 @@ import attendanceRouter from "./attendance";
 import presenceRouter from "./presence";
 import networkDiscoveryRouter from "./network-discovery";
 import devicesRouter from "./devices";
+import k9RuntimeRouter from "./k9-runtime";
+import tabletRouter from "./tablet";
 import parentRouter from "./parent";
 import parentPushRouter from "./parent-push";
 import adminRouter from "./admin";
@@ -42,6 +44,7 @@ router.use(teacherRouter);
 router.use(bursarRouter);
 router.use(quizzesRouter);
 router.use(walletRouter);
+
 // The OpenAI model-list route is mounted first because LiveKit may call
 // models.list() while prewarming its LLM client before any chat completion.
 router.use(voiceOpenAiModelsRouter);
@@ -49,7 +52,11 @@ router.use(voiceRouter);
 router.use(attendanceRouter);
 router.use(presenceRouter);
 router.use(networkDiscoveryRouter);
+
 router.use(devicesRouter);
+router.use(k9RuntimeRouter);
+router.use(tabletRouter);
+
 router.use(parentRouter);
 router.use(parentPushRouter);
 router.use(adminRouter);
