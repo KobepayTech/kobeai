@@ -1,11 +1,15 @@
 import { useAuth } from "@/lib/auth";
 import { Link, useLocation } from "wouter";
-import { 
-  LayoutDashboard, 
-  Users, 
-  CalendarCheck, 
+import {
+  LayoutDashboard,
+  Users,
+  CalendarCheck,
   Camera,
-  BookOpenCheck, 
+  CircleAlert,
+  MessagesSquare,
+  HardDrive,
+  Lightbulb,
+  BookOpenCheck,
   Wallet,
   FileText,
   Cpu,
@@ -30,6 +34,9 @@ const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/students", label: "Students", icon: Users },
   { href: "/attendance", label: "Attendance", icon: CalendarCheck },
+  { href: "/attendance-exceptions", label: "Attendance Exceptions", icon: CircleAlert },
+  { href: "/classroom-insights", label: "Classroom Insights", icon: MessagesSquare },
+  { href: "/student-development", label: "Student Development", icon: Lightbulb },
   { href: "/camera-network", label: "Camera Network", icon: Camera },
   { href: "/quizzes", label: "Quizzes", icon: BookOpenCheck },
   { href: "/timetable", label: "Timetable", icon: CalendarClock },
@@ -39,6 +46,7 @@ const navItems = [
   { href: "/stationery", label: "Stationery", icon: Package },
   { href: "/claim-codes", label: "Claim Codes", icon: KeyRound },
   { href: "/school-ai", label: "School AI", icon: Cpu },
+  { href: "/models", label: "K9 Models", icon: HardDrive },
   { href: "/central", label: "Central Admin", icon: Building2 },
   { href: "/central-market", label: "Question Market", icon: Target },
   { href: "/central-stationery", label: "Central Stationery", icon: Boxes },

@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"],
+    "resolveJsonModule": true,
+    "noImplicitReturns": false,
+    "allowImportingTsExtensions": false,
+    "moduleResolution": "bundler"
+  },
+  "include": ["src", "build.mjs"]
+}

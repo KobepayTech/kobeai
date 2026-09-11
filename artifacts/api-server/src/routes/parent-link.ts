@@ -3,32 +3,23 @@
 // The parent app calls these to:
 //   - List currently linked children          GET  /v1/parent/children
 //   - Add a child by claim code               POST /v1/parent/children/claim
-//   - Add a child by scanning watch QR        POST /v1/parent/children/pair
 //
-// The watch app calls:
-//   - Mint a fresh pairing token (2-min TTL)  POST /v1/watch/pairing/start
-//
-// All consumption is wrapped in a transaction with `WHERE consumed_at IS NULL`
-// CAS guards so concurrent scans / claims of the same token can't double-link.
+// Claim consumption is wrapped in a transaction with a `WHERE consumed_at IS
+// NULL` CAS guard so concurrent claims of the same code can't double-link.
 
 import { Router } from "express";
-import { and, eq, isNull, gt, desc } from "drizzle-orm";
+import { and, eq, isNull, desc } from "drizzle-orm";
 import {
   db,
   usersTable,
   parentChildrenTable,
   claimCodesTable,
-  parentPairingTokensTable,
   classMembershipsTable,
   classesTable,
   tenantsTable,
 } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
-import {
-  generatePairingToken,
-  hashCode,
-  normalizeCode,
-} from "../lib/claim-codes";
+import { hashCode, normalizeCode } from "../lib/claim-codes";
 
 const router = Router();
 
@@ -99,128 +90,6 @@ router.post(
     });
     if ("error" in linked) return res.status(linked.status).json({ error: linked.error });
     res.json({ ok: true, child: linked.child });
-  },
-);
-
-router.post(
-  "/v1/parent/children/pair",
-  requireAuth(["parent"]),
-  async (req, res) => {
-    const parentId = Number(req.auth?.user_id);
-    if (!parentId) return res.status(401).json({ error: "no parent in token" });
-    const token =
-      typeof req.body?.token === "string" ? normalizeCode(req.body.token) : "";
-    if (!token || token.length < 8) {
-      return res.status(400).json({ error: "Token missing or invalid" });
-    }
-    const tokenHash = hashCode(token);
-    const linked = await linkByLookup({
-      parentId,
-      lookup: (tx) =>
-        tx
-          .select()
-          .from(parentPairingTokensTable)
-          .where(
-            and(
-              eq(parentPairingTokensTable.token_hash, tokenHash),
-              isNull(parentPairingTokensTable.consumed_at),
-              gt(parentPairingTokensTable.expires_at, new Date()),
-            ),
-          )
-          .limit(1),
-      consume: (tx, row) =>
-        tx
-          .update(parentPairingTokensTable)
-          .set({ consumed_by: parentId, consumed_at: new Date() })
-          .where(
-            and(
-              eq(parentPairingTokensTable.id, row.id),
-              isNull(parentPairingTokensTable.consumed_at),
-            ),
-          )
-          .returning({ id: parentPairingTokensTable.id }),
-      readStudent: (row) => ({
-        student_user_id: row.student_user_id,
-        tenant_id: row.tenant_id,
-      }),
-      isExpired: (row) => row.expires_at.getTime() < Date.now(),
-    });
-    if ("error" in linked) return res.status(linked.status).json({ error: linked.error });
-    res.json({ ok: true, child: linked.child });
-  },
-);
-
-// ---------------------------------------------------------------------------
-// Watch endpoints
-// ---------------------------------------------------------------------------
-router.post(
-  "/v1/watch/pairing/start",
-  requireAuth(["student"]),
-  async (req, res) => {
-    const studentId = Number(req.auth?.user_id);
-    const studentCode = req.auth?.student_id;
-    if (!studentId || !studentCode) {
-      return res.status(401).json({ error: "no student in token" });
-    }
-    // Resolve tenant the lazy way: subscriptionCache row holds the tenant. If
-    // the student isn't synced yet we still allow pairing (tenant_id falls
-    // back to 1 — the demo school).
-    const [defaultTenant] = await db
-      .select()
-      .from(tenantsTable)
-      .orderBy(tenantsTable.id)
-      .limit(1);
-    const tenantId = defaultTenant?.id ?? 1;
-    const token = generatePairingToken();
-    const tokenHash = hashCode(token);
-    const ttlMs = 2 * 60 * 1000; // 2 minutes
-    const expiresAt = new Date(Date.now() + ttlMs);
-    await db.insert(parentPairingTokensTable).values({
-      token_hash: tokenHash,
-      student_user_id: studentId,
-      tenant_id: tenantId,
-      expires_at: expiresAt,
-    });
-    // The QR encodes a JSON envelope so a future scanner can validate the
-    // app and not just a raw string. Apps that don't recognise the JSON can
-    // still extract `t` (the token) from a regex.
-    const payload = JSON.stringify({
-      v: 1,
-      app: "kobeai",
-      kind: "parent_pair",
-      t: token,
-    });
-    res.json({
-      token,
-      qr_payload: payload,
-      expires_at: expiresAt.toISOString(),
-      ttl_seconds: Math.floor(ttlMs / 1000),
-    });
-  },
-);
-
-router.get(
-  "/v1/watch/pairing/status",
-  requireAuth(["student"]),
-  async (req, res) => {
-    // Watch polls this once per second to know when the parent has scanned.
-    // Returns the most recent token row for this student.
-    const studentId = Number(req.auth?.user_id);
-    if (!studentId) return res.status(401).json({ error: "no student" });
-    const [row] = await db
-      .select()
-      .from(parentPairingTokensTable)
-      .where(eq(parentPairingTokensTable.student_user_id, studentId))
-      .orderBy(desc(parentPairingTokensTable.created_at))
-      .limit(1);
-    if (!row) return res.json({ status: "none" });
-    if (row.consumed_at) return res.json({ status: "linked", consumed_at: row.consumed_at });
-    if (row.expires_at.getTime() < Date.now())
-      return res.json({ status: "expired" });
-    return res.json({
-      status: "pending",
-      expires_at: row.expires_at,
-    });
   },
 );
 

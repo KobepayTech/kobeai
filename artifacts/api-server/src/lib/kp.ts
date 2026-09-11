@@ -17,7 +17,7 @@ import {
  *     and claim flip — so any partial failure rolls everything back
  *
  * No-op (and cheap, indexed by `kp_pending_student_idx`) when the student
- * has no pending grants. Safe to call from any hot watch endpoint to
+ * has no pending grants. Safe to call from any hot student endpoint to
  * guarantee eventual delivery without depending on market traffic.
  *
  * Returns the number of pending rows credited.

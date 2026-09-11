@@ -1,0 +1,247 @@
+{
+  "version": 1,
+  "root": "C:\\KobeOS\\Models\\k9",
+  "notes": [
+    "Qwen is used by K9 but is not managed by the K9 downloader because it already exists under C:\\KobeOS\\Models.",
+    "Logical agents share resident models; there is not one model process per agent.",
+    "Heavy models must be lazy-loaded or served as resident workers according to available GPU memory."
+  ],
+  "models": {
+    "main_text_existing": {
+      "role": "fast general text assistant",
+      "managed": false,
+      "path": "C:\\KobeOS\\Models\\qwen.gguf"
+    },
+    "existing_deepseek": {
+      "role": "reasoning fallback",
+      "managed": false,
+      "path": "brain\\existing\\deepseek.gguf"
+    },
+    "existing_llama3": {
+      "role": "offline text fallback",
+      "managed": false,
+      "path": "brain\\existing\\llama3.gguf"
+    },
+    "existing_mistral": {
+      "role": "offline text fallback",
+      "managed": false,
+      "path": "brain\\existing\\mistral.gguf"
+    },
+    "existing_phi3": {
+      "role": "small offline text fallback",
+      "managed": false,
+      "path": "brain\\existing\\phi3.gguf"
+    },
+    "youtu_llm_2b": {
+      "role": "lightweight K9 agents",
+      "source": "tencent/Youtu-LLM-2B",
+      "path": "tencent\\agents\\youtu-llm-2b",
+      "required": true
+    },
+    "hunyuan_4b": {
+      "role": "stronger Tencent reasoning fallback",
+      "source": "tencent/Hunyuan-4B-Instruct",
+      "path": "tencent\\agents\\hunyuan-4b-instruct",
+      "required": true
+    },
+    "youtu_vl_4b": {
+      "role": "camera and visual-language worker",
+      "source": "tencent/Youtu-VL-4B-Instruct",
+      "path": "tencent\\vision\\youtu-vl-4b-instruct",
+      "required": true
+    },
+    "hunyuan_ocr_1_5": {
+      "role": "hard OCR and document understanding",
+      "source": "tencent/HunyuanOCR",
+      "path": "tencent\\ocr\\hunyuan-ocr-1.5",
+      "required": true
+    },
+    "yolo26m": {
+      "role": "always-on object/person detector",
+      "path": "detection\\yolo26m.pt",
+      "required": true
+    },
+    "yolo26m_pose": {
+      "role": "pose and activity cues",
+      "path": "pose\\yolo26m-pose.pt",
+      "required": true
+    },
+    "yolo26m_seg": {
+      "role": "segmentation worker",
+      "path": "detection\\yolo26m-seg.pt",
+      "required": false
+    },
+    "yolo_master_n": {
+      "role": "Tencent detector benchmark / low-power deployment",
+      "path": "tencent\\vision\\YOLO-Master-EsMoE-N.pt",
+      "required": false
+    },
+    "yolo_master_s": {
+      "role": "Tencent detector benchmark / balanced deployment",
+      "path": "tencent\\vision\\YOLO-Master-EsMoE-S.pt",
+      "required": false
+    },
+    "yolo_master_m": {
+      "role": "Tencent detector benchmark / high-accuracy deployment",
+      "path": "tencent\\vision\\YOLO-Master-EsMoE-M.pt",
+      "required": false
+    },
+    "yolo_world_v2_1": {
+      "role": "open-vocabulary visual search",
+      "path": "tencent\\vision\\yolo-world-v2.1-weights",
+      "required": false
+    },
+    "rtdetr_v2": {
+      "role": "alternative all-box detector",
+      "source": "PekingU/RTDetrV2_r50vd",
+      "path": "detection\\rtdetr-v2-r50vd",
+      "required": false
+    },
+    "locate_anything_3b": {
+      "role": "precision visual grounding",
+      "source": "nvidia/LocateAnything-3B",
+      "path": "vision\\locateanything-3b",
+      "required": false
+    },
+    "bytetrack": {
+      "role": "single-camera tracking",
+      "path": "tracking\\ByteTrack",
+      "required": true
+    },
+    "osnet_ain": {
+      "role": "cross-camera person re-identification",
+      "path": "reid\\osnet-ain\\osnet_ain_x1_0_msmt17.pth",
+      "required": true
+    },
+    "yunet": {
+      "role": "face detection",
+      "source": "opencv/face_detection_yunet",
+      "path": "face\\yunet",
+      "required": true
+    },
+    "sface": {
+      "role": "face recognition embedding",
+      "source": "opencv/face_recognition_sface",
+      "path": "face\\sface",
+      "required": true
+    },
+    "ppocr_v6_tiny_det": {
+      "role": "tiny edge OCR detector",
+      "source": "PaddlePaddle/PP-OCRv6_tiny_det",
+      "path": "ocr\\pp-ocr-v6-tiny-det",
+      "required": false
+    },
+    "ppocr_v6_tiny_rec": {
+      "role": "tiny edge OCR recognizer",
+      "source": "PaddlePaddle/PP-OCRv6_tiny_rec",
+      "path": "ocr\\pp-ocr-v6-tiny-rec",
+      "required": false
+    },
+    "ppocr_v6_small_det": {
+      "role": "small OCR detector",
+      "source": "PaddlePaddle/PP-OCRv6_small_det",
+      "path": "ocr\\pp-ocr-v6-small-det",
+      "required": false
+    },
+    "ppocr_v6_small_rec": {
+      "role": "small OCR recognizer",
+      "source": "PaddlePaddle/PP-OCRv6_small_rec",
+      "path": "ocr\\pp-ocr-v6-small-rec",
+      "required": false
+    },
+    "ppocr_v6_medium_det": {
+      "role": "default fast OCR detector",
+      "source": "PaddlePaddle/PP-OCRv6_medium_det",
+      "path": "ocr\\pp-ocr-v6-medium-det",
+      "required": true
+    },
+    "ppocr_v6_medium_rec": {
+      "role": "default fast OCR recognizer",
+      "source": "PaddlePaddle/PP-OCRv6_medium_rec",
+      "path": "ocr\\pp-ocr-v6-medium-rec",
+      "required": true
+    },
+    "paddleocr_vl_1_6": {
+      "role": "document/layout OCR benchmark",
+      "source": "PaddlePaddle/PaddleOCR-VL-1.6",
+      "path": "ocr\\paddleocr-vl-1.6",
+      "required": false
+    },
+    "silero_vad": {
+      "role": "voice activity detection",
+      "path": "audio\\silero-vad",
+      "required": true
+    },
+    "whisper_large_v3_turbo": {
+      "role": "speech recognition",
+      "source": "openai/whisper-large-v3-turbo",
+      "path": "audio\\whisper-large-v3-turbo",
+      "required": true
+    },
+    "titanet_large": {
+      "role": "enrolled speaker recognition",
+      "source": "nvidia/speakerverification_en_titanet_large",
+      "path": "audio\\titanet-large",
+      "required": true
+    },
+    "pyannote_segmentation": {
+      "role": "speaker segmentation",
+      "source": "pyannote/segmentation-3.0",
+      "path": "audio\\pyannote-segmentation-3.0",
+      "required": true,
+      "gated": true
+    },
+    "pyannote_diarization": {
+      "role": "speaker diarization",
+      "source": "pyannote/speaker-diarization-3.1",
+      "path": "audio\\pyannote-speaker-diarization-3.1",
+      "required": true,
+      "gated": true
+    },
+    "bge_m3": {
+      "role": "school knowledge and memory embeddings",
+      "source": "BAAI/bge-m3",
+      "path": "embeddings\\bge-m3",
+      "required": true
+    },
+    "kokoro_82m": {
+      "role": "local English voice output",
+      "source": "hexgrad/Kokoro-82M",
+      "path": "tts\\kokoro-82m",
+      "required": true
+    },
+    "piper_swahili": {
+      "role": "local Swahili voice output",
+      "source": "rhasspy/piper-voices",
+      "path": "tts\\piper-swahili",
+      "required": true
+    }
+  },
+  "software": {
+    "tencentdb_agent_memory": {
+      "role": "persistent shared agent memory",
+      "path": "tencent\\memory\\TencentDB-Agent-Memory",
+      "required": true
+    },
+    "romem": {
+      "role": "temporal memory",
+      "path": "tencent\\memory\\RoMem",
+      "required": true
+    },
+    "yolo_master": {
+      "role": "Tencent detection runtime/source",
+      "path": "tencent\\vision\\YOLO-Master",
+      "required": false
+    },
+    "yolo_world": {
+      "role": "open-vocabulary detector runtime/source",
+      "path": "tencent\\vision\\YOLO-World",
+      "required": false
+    },
+    "deep_person_reid": {
+      "role": "OSNet ReID runtime/source",
+      "path": "reid\\deep-person-reid",
+      "required": true
+    }
+  }
+}

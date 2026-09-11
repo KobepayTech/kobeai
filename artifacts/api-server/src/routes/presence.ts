@@ -344,6 +344,75 @@ router.post("/v1/presence/results/:id/review", requireStaff, async (req, res) =>
   res.json({ result: result.rows[0] });
 });
 
+/**
+ * GET /v1/presence/live
+ * Fast-path live map — one row per student showing where they were last
+ * seen and whether that agrees with their timetable. Query params:
+ *   ?since_minutes=15   (default 30) — only students seen within window
+ *   ?mismatch=1          — only rows currently flagged (wrong_location etc.)
+ *   ?limit=200           — max rows (default 200, cap 1000)
+ */
+router.get("/v1/presence/live", requireStaff, async (req, res) => {
+  await ensurePresenceTables();
+  const since = Math.max(1, Math.min(720, Number(req.query["since_minutes"] ?? 30)));
+  const mismatchOnly = req.query["mismatch"] === "1" || req.query["mismatch"] === "true";
+  const limit = Math.max(1, Math.min(1000, Number(req.query["limit"] ?? 200)));
+
+  const filters: string[] = [`p.seen_at >= NOW() - ($1::text || ' minutes')::interval`];
+  const values: unknown[] = [since];
+  if (mismatchOnly) {
+    filters.push(`p.mismatch_status IN ('wrong_location', 'configuration_missing')`);
+  }
+  values.push(limit);
+
+  const rows = await pool.query(
+    `SELECT p.student_code, u.name AS student_name,
+            p.camera_id, p.zone_id, p.zone_name, p.zone_type,
+            p.confidence::float8 AS confidence,
+            p.face_quality::float8 AS face_quality,
+            p.model_version,
+            p.expected_zone_id, p.expected_zone_type,
+            ez.name AS expected_zone_name,
+            p.mismatch_status,
+            p.seen_at, p.updated_at
+     FROM current_student_presence p
+     LEFT JOIN users u ON u.student_code = p.student_code
+     LEFT JOIN campus_zones ez ON ez.id = p.expected_zone_id
+     WHERE ${filters.join(" AND ")}
+     ORDER BY p.seen_at DESC
+     LIMIT $${values.length}`,
+    values,
+  );
+  res.json({ presence: rows.rows });
+});
+
+/**
+ * GET /v1/presence/live/mismatches
+ * Shortcut: just the currently-flagged rows, most recent first. This is the
+ * feed the classroom TV kiosk / teacher live-tile subscribes to.
+ */
+router.get("/v1/presence/live/mismatches", requireStaff, async (req, res) => {
+  await ensurePresenceTables();
+  const since = Math.max(1, Math.min(720, Number(req.query["since_minutes"] ?? 30)));
+  const rows = await pool.query(
+    `SELECT p.student_code, u.name AS student_name,
+            p.camera_id, p.zone_name, p.zone_type,
+            p.confidence::float8 AS confidence,
+            p.expected_zone_id, p.expected_zone_type,
+            ez.name AS expected_zone_name,
+            p.mismatch_status, p.seen_at
+     FROM current_student_presence p
+     LEFT JOIN users u ON u.student_code = p.student_code
+     LEFT JOIN campus_zones ez ON ez.id = p.expected_zone_id
+     WHERE p.seen_at >= NOW() - ($1::text || ' minutes')::interval
+       AND p.mismatch_status IN ('wrong_location', 'configuration_missing')
+     ORDER BY p.seen_at DESC
+     LIMIT 200`,
+    [since],
+  );
+  res.json({ mismatches: rows.rows, since_minutes: since });
+});
+
 router.get("/v1/presence/student/:studentCode/current", requireStaff, async (req, res) => {
   await ensurePresenceTables();
   const rows = await pool.query(

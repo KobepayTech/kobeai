@@ -3,6 +3,8 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Users, Target, Activity, Clock, Trophy } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts";
+import { BirthdayCard } from "@/components/birthday-card";
+import { LivePresenceCard } from "@/components/live-presence-card";
 
 export default function Dashboard() {
   const { data: stats, isLoading: statsLoading } = useGetTeacherDashboardStats();
@@ -25,6 +27,9 @@ export default function Dashboard() {
         <h1 className="text-3xl font-bold tracking-tight">Overview</h1>
         <p className="text-muted-foreground mt-1">Monitor student engagement and platform activity.</p>
       </div>
+
+      <LivePresenceCard />
+      <BirthdayCard />
 
       {statsLoading ? (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
@@ -68,7 +73,7 @@ export default function Dashboard() {
               </div>
               <div className="text-3xl font-bold">{stats.questions_today}</div>
               <p className="text-xs text-muted-foreground mt-1">
-                Today across all watches
+                Today across all classrooms
               </p>
             </CardContent>
           </Card>
@@ -76,12 +81,12 @@ export default function Dashboard() {
           <Card>
             <CardContent className="p-6 flex flex-col justify-center">
               <div className="flex items-center justify-between space-y-0 pb-2">
-                <p className="text-sm font-medium text-muted-foreground">Online Watches</p>
+                <p className="text-sm font-medium text-muted-foreground">Online Devices</p>
                 <Clock className="h-4 w-4 text-muted-foreground" />
               </div>
-              <div className="text-3xl font-bold text-chart-2">{stats.online_watches}</div>
+              <div className="text-3xl font-bold text-chart-2">{stats.online_devices}</div>
               <p className="text-xs text-muted-foreground mt-1">
-                Currently connected
+                Classroom displays and Teacher Lens
               </p>
             </CardContent>
           </Card>

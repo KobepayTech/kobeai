@@ -1,0 +1,21 @@
+# Minimal Postgres for running the kobeai-demo binary end-to-end.
+# Bring it up:
+#   docker compose -f artifacts/demo/docker-compose.yml up -d
+# Then:
+#   DATABASE_URL=postgres://postgres:demo@127.0.0.1:5433/postgres \
+#   pnpm --filter @workspace/demo run start
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: demo
+      POSTGRES_DB: postgres
+    ports:
+      - "5433:5432"
+    volumes:
+      - kobeai-demo-db:/var/lib/postgresql/data
+
+volumes:
+  kobeai-demo-db:

@@ -18,13 +18,13 @@ const router = Router();
 const ALLOW_DEMO_CREDS = (process.env["NODE_ENV"] ?? "development") === "development";
 
 // Throttle every login surface. 10 attempts per minute per source IP is plenty
-// for a real classroom (one watch per student) and stops PIN brute-force cold.
+// for a shared classroom or library PC and stops PIN brute-force cold.
 const loginLimiter = rateLimit({ windowMs: 60_000, max: 10, name: "auth-login" });
 
 /**
- * Student watch login. Keeps the legacy demo PIN ("1234") so the watch APK
- * doesn't need a rebuild, but now issues a real signed JWT instead of the
- * old `demo-student-token` string.
+ * Student login for shared school PCs — K9 has no per-student devices. The
+ * demo student keeps its development PIN ("1234"); everyone else is checked
+ * against their stored hash.
  */
 router.post("/v1/auth/login", loginLimiter, async (req, res) => {
   const parsed = LoginBody.safeParse(req.body);

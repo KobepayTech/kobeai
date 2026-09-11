@@ -1,5 +1,5 @@
 // Mini-App Store API — student-facing browse, install, purchase, review.
-// Watch app + parent app both consume these endpoints.
+// The parent app and signed-in student clients consume these endpoints.
 //
 // Pricing rules:
 //   - price_kp  = 0 AND price_tsh = 0  -> free, install via /install
@@ -8,7 +8,7 @@
 //
 // Revenue split happens at purchase time. See lib/mini-app-pricing.ts.
 //
-// Watch app calls:
+// Student clients call:
 //   GET  /v1/store/feed                 -> featured + categories
 //   GET  /v1/store/apps?category=...    -> browse
 //   GET  /v1/store/apps/:id             -> detail (with manifest if installed)

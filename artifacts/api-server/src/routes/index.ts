@@ -5,13 +5,12 @@ import teacherRouter from "./teacher";
 import bursarRouter from "./bursar";
 import quizzesRouter from "./quizzes";
 import walletRouter from "./wallet";
-import watchRouter from "./watch";
-import watchCompatRouter from "./watch-compat";
 import voiceOpenAiModelsRouter from "./voice-openai-models";
 import voiceRouter from "./voice";
 import attendanceRouter from "./attendance";
 import presenceRouter from "./presence";
 import networkDiscoveryRouter from "./network-discovery";
+import devicesRouter from "./devices";
 import k9RuntimeRouter from "./k9-runtime";
 import tabletRouter from "./tablet";
 import parentRouter from "./parent";
@@ -28,6 +27,14 @@ import centralStationeryRouter from "./central-stationery";
 import developerRouter from "./developer";
 import storeRouter from "./store";
 import moderationRouter from "./moderation";
+import learningProfileRouter from "./learning-profile";
+import classroomInsightsRouter from "./classroom-insights";
+import magazineRouter from "./magazine";
+import visionQueueRouter from "./vision-queue";
+import modelsRouter from "./models";
+import classroomRouter from "./classroom";
+import teacherLensRouter from "./teacher-lens";
+import studentDevelopmentRouter from "./student-development";
 
 const router: IRouter = Router();
 
@@ -37,10 +44,7 @@ router.use(teacherRouter);
 router.use(bursarRouter);
 router.use(quizzesRouter);
 router.use(walletRouter);
-// watch-compat must be first so /v1/watch/login (public) is matched before
-// watchRouter's path-prefix `requireAuth` middleware would block it.
-router.use(watchCompatRouter);
-router.use(watchRouter);
+
 // The OpenAI model-list route is mounted first because LiveKit may call
 // models.list() while prewarming its LLM client before any chat completion.
 router.use(voiceOpenAiModelsRouter);
@@ -48,8 +52,11 @@ router.use(voiceRouter);
 router.use(attendanceRouter);
 router.use(presenceRouter);
 router.use(networkDiscoveryRouter);
+
+router.use(devicesRouter);
 router.use(k9RuntimeRouter);
 router.use(tabletRouter);
+
 router.use(parentRouter);
 router.use(parentPushRouter);
 router.use(adminRouter);
@@ -64,5 +71,13 @@ router.use(centralStationeryRouter);
 router.use(developerRouter);
 router.use(storeRouter);
 router.use(moderationRouter);
+router.use(learningProfileRouter);
+router.use(classroomInsightsRouter);
+router.use(magazineRouter);
+router.use(visionQueueRouter);
+router.use(modelsRouter);
+router.use(classroomRouter);
+router.use(teacherLensRouter);
+router.use(studentDevelopmentRouter);
 
 export default router;

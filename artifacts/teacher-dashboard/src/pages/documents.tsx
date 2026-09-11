@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { apiGet, apiPost, uploadToPresigned, ApiError } from "@/lib/api";
-import { FileText, Upload, Loader2, Link2 } from "lucide-react";
+import { FileText, Upload, Loader2, Link2, Printer } from "lucide-react";
 
 type Doc = {
   id: number;
@@ -23,6 +23,10 @@ type Doc = {
 };
 
 type Cls = { id: number; name: string; grade: string; teacher_id: number };
+
+type PrinterInfo = { id: string; name: string; location: string; model: string };
+
+const MAX_COPIES = 60;
 
 function fmtKb(bytes: number) {
   if (!bytes) return "—";
@@ -48,6 +52,18 @@ export default function Documents() {
   const [assignScheduledAt, setAssignScheduledAt] = useState<string>("");
   const [assignExpiresAt, setAssignExpiresAt] = useState<string>("");
   const [assigning, setAssigning] = useState(false);
+
+  const [printers, setPrinters] = useState<PrinterInfo[]>([]);
+  const [printDoc, setPrintDoc] = useState<Doc | null>(null);
+  const [printerId, setPrinterId] = useState<string>("");
+  const [copies, setCopies] = useState<string>("1");
+  const [printing, setPrinting] = useState(false);
+
+  useEffect(() => {
+    apiGet<{ printers: PrinterInfo[] }>("/v1/print/printers")
+      .then((r) => setPrinters(r.printers))
+      .catch(() => setPrinters([]));
+  }, []);
 
   async function refresh() {
     setLoading(true);
@@ -124,12 +140,33 @@ export default function Documents() {
     }
   }
 
+  async function onPrint() {
+    if (!printDoc || !printerId) return;
+    setPrinting(true);
+    try {
+      await apiPost("/v1/print/jobs", {
+        printer_id: printerId,
+        document_id: printDoc.id,
+        copies: Number(copies),
+      });
+      toast({ title: "Sent to printer", description: `${printDoc.name} → ${printers.find((p) => p.id === printerId)?.name ?? "printer"}` });
+      setPrintDoc(null);
+    } catch (e) {
+      const msg = e instanceof ApiError ? `${e.status}: ${e.message.slice(0, 120)}` : String(e);
+      toast({ variant: "destructive", title: "Print failed", description: msg });
+    } finally {
+      setPrinting(false);
+    }
+  }
+
+  const copiesValid = Number.isInteger(Number(copies)) && Number(copies) >= 1 && Number(copies) <= MAX_COPIES;
+
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Documents</h1>
-          <p className="text-muted-foreground mt-1">Upload PDFs and assign them to classes. Students can tap-to-print assigned documents from their watch.</p>
+          <p className="text-muted-foreground mt-1">Upload PDFs, assign them to classes, and send them to a school printer.</p>
         </div>
         <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
           <DialogTrigger asChild>
@@ -205,9 +242,20 @@ export default function Documents() {
                     <TableCell className="text-muted-foreground">{fmtKb(d.size_bytes)}</TableCell>
                     <TableCell className="text-muted-foreground">{new Date(d.created_at).toLocaleDateString()}</TableCell>
                     <TableCell className="text-right">
-                      <Button variant="outline" size="sm" onClick={() => { setAssignDoc(d); setAssignClassId(""); }} data-testid={`button-assign-${d.id}`}>
-                        <Link2 className="h-4 w-4 mr-1" />Assign
-                      </Button>
+                      <div className="flex justify-end gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={printers.length === 0}
+                          onClick={() => { setPrintDoc(d); setPrinterId(printers[0]?.id ?? ""); setCopies("1"); }}
+                          data-testid={`button-print-${d.id}`}
+                        >
+                          <Printer className="h-4 w-4 mr-1" />Print
+                        </Button>
+                        <Button variant="outline" size="sm" onClick={() => { setAssignDoc(d); setAssignClassId(""); }} data-testid={`button-assign-${d.id}`}>
+                          <Link2 className="h-4 w-4 mr-1" />Assign
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -265,6 +313,36 @@ export default function Documents() {
             <Button variant="outline" onClick={() => setAssignDoc(null)} disabled={assigning}>Cancel</Button>
             <Button onClick={onAssign} disabled={assigning || !assignClassId} data-testid="button-confirm-assign">
               {assigning ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Assigning…</> : "Assign"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!printDoc} onOpenChange={(o) => { if (!o) setPrintDoc(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Print document</DialogTitle>
+            <DialogDescription>{printDoc?.name}</DialogDescription>
+          </DialogHeader>
+          <div className="py-2 space-y-4">
+            <div className="space-y-2">
+              <Label>Printer</Label>
+              <Select value={printerId} onValueChange={setPrinterId}>
+                <SelectTrigger data-testid="select-printer"><SelectValue placeholder="Pick a printer" /></SelectTrigger>
+                <SelectContent>
+                  {printers.map((p) => (<SelectItem key={p.id} value={p.id}>{p.name} — {p.location}</SelectItem>))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="print-copies">Copies</Label>
+              <Input id="print-copies" type="number" min={1} max={MAX_COPIES} value={copies} onChange={(e) => setCopies(e.target.value)} data-testid="input-print-copies" />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPrintDoc(null)} disabled={printing}>Cancel</Button>
+            <Button onClick={onPrint} disabled={printing || !printerId || !copiesValid} data-testid="button-confirm-print">
+              {printing ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Sending…</> : "Print"}
             </Button>
           </DialogFooter>
         </DialogContent>

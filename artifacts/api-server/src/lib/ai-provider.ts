@@ -49,7 +49,7 @@ function ollamaConfig(): { baseUrl: string; model: string; timeoutMs: number } {
   };
 }
 
-// Cap concurrent Ollama generations so a thundering herd of /watch/ask calls
+// Cap concurrent Ollama generations so a thundering herd of classroom /ask calls
 // can't exhaust the on-prem GPU. Excess callers wait briefly for a slot, then
 // fall back to canned answers via the `Slot` semaphore's timeout path.
 const OLLAMA_MAX_CONCURRENCY = Math.max(
@@ -128,7 +128,7 @@ async function askOllama(question: string, systemOverride?: string): Promise<Ask
  * Answer a student question. Tries Ollama when AI_PROVIDER=ollama,
  * silently falls back to canned answers when the on-prem LLM is unreachable
  * (matches the offline-first design: a school with no power for the LLM box
- * still gets a useful response on the watch).
+ * still gets a useful response in the classroom).
  */
 export async function askAI(question: string, systemOverride?: string): Promise<AskResult> {
   const provider = (process.env["AI_PROVIDER"] ?? "canned").toLowerCase();

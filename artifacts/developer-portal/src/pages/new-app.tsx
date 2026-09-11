@@ -79,7 +79,7 @@ export default function NewAppPage() {
     }
   }
 
-  async function submit() {
+  async function submit(sendForModeration: boolean) {
     setErr(null);
     let manifest: unknown;
     try {
@@ -101,7 +101,7 @@ export default function NewAppPage() {
         price_tsh: priceMode === "tsh" ? priceTsh : 0,
         manifest,
       });
-      if (submitNow) {
+      if (sendForModeration) {
         await apiPost(`/v1/dev/apps/${created.app.id}/submit`, {});
       }
       qc.invalidateQueries({ queryKey: ["dev-apps"] });
@@ -112,6 +112,10 @@ export default function NewAppPage() {
       setBusy(false);
     }
   }
+
+  // Enabled once the wizard has enough to form a legal draft — the API
+  // requires a name and a slug, everything else has a sensible default.
+  const canSaveDraft = name.trim().length > 1 && /^[a-z0-9-]+$/.test(slug);
 
   return (
     <div className="max-w-3xl mx-auto px-6 py-8">
@@ -215,7 +219,7 @@ export default function NewAppPage() {
               spellCheck={false}
             />
             <p className="text-xs text-gray-500 mt-2">
-              The runtime on the watch reads this manifest and renders the experience.
+              The KobeAI mini-app runtime reads this manifest and renders the experience.
               We pre-filled a template for <code>{type}</code> — edit to taste.
             </p>
           </div>
@@ -283,7 +287,7 @@ export default function NewAppPage() {
           </div>
         )}
 
-        <div className="flex justify-between mt-6">
+        <div className="flex justify-between items-center mt-6">
           <button
             className="btn-ghost"
             onClick={() => setStep((s) => Math.max(1, s - 1))}
@@ -291,19 +295,35 @@ export default function NewAppPage() {
           >
             Back
           </button>
-          {step < 4 ? (
-            <button
-              className="btn-primary"
-              onClick={() => setStep((s) => s + 1)}
-              disabled={!canNext}
-            >
-              Next
-            </button>
-          ) : (
-            <button className="btn-primary" onClick={submit} disabled={busy}>
-              {busy ? "Creating…" : submitNow ? "Create & submit" : "Save as draft"}
-            </button>
-          )}
+          <div className="flex gap-2">
+            {step < 4 && (
+              <button
+                className="btn-ghost"
+                onClick={() => submit(false)}
+                disabled={!canSaveDraft || busy}
+                title={
+                  canSaveDraft
+                    ? "Save the current fields as a draft and return to the dashboard"
+                    : "Enter a name and slug first"
+                }
+              >
+                {busy ? "Saving…" : "Save draft"}
+              </button>
+            )}
+            {step < 4 ? (
+              <button
+                className="btn-primary"
+                onClick={() => setStep((s) => s + 1)}
+                disabled={!canNext}
+              >
+                Next
+              </button>
+            ) : (
+              <button className="btn-primary" onClick={() => submit(submitNow)} disabled={busy}>
+                {busy ? "Creating…" : submitNow ? "Create & submit" : "Save as draft"}
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>

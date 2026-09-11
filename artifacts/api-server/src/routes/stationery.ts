@@ -1,4 +1,4 @@
-// Stationery ordering — parent, teacher, watch, and student-shared endpoints.
+// Stationery ordering — parent and teacher endpoints.
 //
 // Workflow recap (status_machine):
 //   draft -> pending_parent_approval -> approved (-> packed)
@@ -97,8 +97,8 @@ function sanitizeLines(input: unknown): LineInput[] {
       out.push({ item_id, qty: Math.floor(qty) });
     }
   }
-  // Dedup by item_id, summing quantities — protects against a watch glitching
-  // and submitting the same item twice.
+  // Dedup by item_id, summing quantities — protects against a client
+  // double-submitting the same item.
   const merged = new Map<number, number>();
   for (const l of out) merged.set(l.item_id, (merged.get(l.item_id) ?? 0) + l.qty);
   return Array.from(merged.entries()).map(([item_id, qty]) => ({ item_id, qty }));
@@ -114,7 +114,7 @@ async function persistOrder(opts: {
   class_id: number | null;
   class_name: string | null;
   parent_user_id: number | null;
-  placed_by: "teacher" | "student_watch" | "parent";
+  placed_by: "teacher" | "parent";
   status: "draft" | "pending_parent_approval" | "approved";
   notes?: string | null;
   lines: LineInput[];
@@ -328,7 +328,7 @@ router.post(
   },
 );
 
-// Approve / reject an existing pending order (from teacher or watch flow).
+// Approve / reject an existing pending order (from the teacher flow).
 router.post(
   "/v1/parent/stationery/order/:id/approve",
   requireAuth(["parent"]),
@@ -496,73 +496,6 @@ router.get(
       .where(eq(usersTable.role, "student"))
       .orderBy(asc(usersTable.name));
     res.json({ students: rows });
-  },
-);
-
-// ---------------------------------------------------------------------------
-// Watch endpoints
-// ---------------------------------------------------------------------------
-router.get(
-  "/v1/watch/stationery/drive",
-  requireAuth(["student"]),
-  async (_req, res) => {
-    const drive = await getOpenDrive();
-    if (!drive) return res.json({ drive: null, items: [] });
-    const tenantId = await defaultTenantId();
-    const items = await catalogForTenant(tenantId);
-    res.json({ drive, items });
-  },
-);
-
-router.post(
-  "/v1/watch/stationery/order",
-  requireAuth(["student"]),
-  async (req, res) => {
-    const studentId = Number(req.auth?.user_id);
-    const studentCode = req.auth?.student_id ?? "";
-    if (!studentId) return res.status(401).json({ error: "no student" });
-    const drive = await getOpenDrive();
-    if (!drive) return res.status(409).json({ error: "No open drive" });
-    const [student] = await db
-      .select()
-      .from(usersTable)
-      .where(eq(usersTable.id, studentId));
-    if (!student) return res.status(404).json({ error: "Student missing" });
-    const tenantId = await defaultTenantId();
-    const [membership] = await db
-      .select({
-        class_id: classesTable.id,
-        class_name: classesTable.name,
-      })
-      .from(classMembershipsTable)
-      .innerJoin(classesTable, eq(classesTable.id, classMembershipsTable.class_id))
-      .where(eq(classMembershipsTable.student_id, studentId))
-      .limit(1);
-    const lines = sanitizeLines(req.body?.lines);
-    try {
-      const result = await persistOrder({
-        drive_id: drive.id,
-        tenant_id: tenantId,
-        student_user_id: studentId,
-        student_code: studentCode || student.student_code || "",
-        student_name: student.name,
-        class_id: membership?.class_id ?? null,
-        class_name: membership?.class_name ?? null,
-        parent_user_id: null,
-        placed_by: "student_watch",
-        status: "pending_parent_approval",
-        lines,
-      });
-      if ("error" in result) return res.status(400).json({ error: result.error });
-      sendApprovalPushToParents(studentId, {
-        title: "Stationery order needs your approval",
-        body: `${student.name} placed an order for TSh ${result.total_tsh.toLocaleString()} from their watch.`,
-        url: "/stationery",
-      }).catch((err) => logger.warn({ err }, "stationery push (watch) failed"));
-      res.json(result);
-    } catch (e) {
-      res.status(400).json({ error: (e as Error).message });
-    }
   },
 );
 

@@ -49,7 +49,7 @@ export default function DashboardPage() {
         <div>
           <h1 className="text-2xl font-bold">My Apps</h1>
           <p className="text-sm text-gray-600">
-            Manage your mini-apps for the KobeAI watch AppStore.
+            Manage your mini-apps for the KobeAI AppStore.
           </p>
         </div>
         <Link href="/apps/new">

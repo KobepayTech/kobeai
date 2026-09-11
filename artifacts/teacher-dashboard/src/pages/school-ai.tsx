@@ -110,7 +110,7 @@ export default function SchoolAi() {
             School AI
           </h1>
           <p className="text-muted-foreground mt-1">
-            On-prem Ollama instance powering the watch tutor. Runs entirely offline on your school server.
+            On-prem Ollama instance powering the classroom assistant and Teacher Lens. Runs entirely offline on your school server.
           </p>
         </div>
         <Button variant="outline" onClick={refreshHealth} disabled={healthLoading} data-testid="btn-refresh">
@@ -160,7 +160,7 @@ export default function SchoolAi() {
           {health && health.configured_provider === "ollama" && !health.ollama_reachable && (
             <div className="mt-4 p-3 rounded-md bg-amber-50 border border-amber-200 text-sm text-amber-900">
               <p className="font-medium mb-1">The on-prem LLM is offline.</p>
-              <p>Students can still ask questions — the watch will silently fall back to a small canned answer set so the classroom keeps moving. Bring Ollama back up to restore full responses.</p>
+              <p>Classrooms can still ask questions — K9 will silently fall back to a small canned answer set so the classroom keeps moving. Bring Ollama back up to restore full responses.</p>
               <p className="mt-2 font-mono text-xs">scripts/setup-ollama.sh</p>
             </div>
           )}

@@ -1,35 +1,24 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import crypto from "node:crypto";
-import { db, usersTable, classMembershipsTable, documentAssignmentsTable, documentsTable, printJobsTable } from "@workspace/db";
-import { eq, and, inArray } from "drizzle-orm";
-import { getPrintStore, type Pairing, type PrintJob } from "../lib/print-store";
+import { db, documentsTable, printJobsTable, usersTable } from "@workspace/db";
+import { eq } from "drizzle-orm";
+import { getPrintStore, type PrintJob } from "../lib/print-store";
 import { ObjectStorageService, ObjectNotFoundError } from "../lib/objectStorage";
 import { requireAuth } from "../lib/auth";
-import { rateLimit } from "../lib/rate-limit";
-import { listDocumentsForStudent } from "../lib/student-documents";
 import { recordPrintJob } from "../lib/usage-counter";
-import { getActiveWatchHceSecret } from "../lib/watch-secret";
-import { Readable } from "node:stream";
 
 const router: IRouter = Router();
 
-const PAIRING_TTL_MS = 60_000;
-const JOB_TTL_MS = 5 * 60_000;
-const NONCE_TTL_MS = 5 * 60_000;
-// Bound on how stale a watch-signed HCE payload can be when the tap-box
-// presents it to /v1/print/pair. Replays beyond this window are rejected even
-// if the nonce hasn't been seen.
-const HCE_PAYLOAD_MAX_AGE_MS = 60_000;
+// Staff often queue a handout before the lesson starts, so a job waits for
+// its print agent for a while before it is dropped from the live store.
+const JOB_TTL_MS = 30 * 60_000;
+const MAX_COPIES = 60;
 const NODE_ENV = process.env["NODE_ENV"] ?? "development";
 const ALLOW_DEV_SECRETS = NODE_ENV === "development" || NODE_ENV === "test";
 const RAW_TAP_BOX_SECRET = process.env["TAP_BOX_SECRET"];
 if (!RAW_TAP_BOX_SECRET && !ALLOW_DEV_SECRETS) {
   throw new Error("TAP_BOX_SECRET must be set in non-development environments");
 }
-// WATCH_HCE_SECRET resolution is now per-tenant via getActiveWatchHceSecret()
-// — see lib/watch-secret.ts. The env-var fallback is still honoured for
-// legacy deploys; non-dev environments without either configured will throw
-// when /v1/print/pair tries to verify.
 const TAP_BOX_SECRET = RAW_TAP_BOX_SECRET ?? "dev-tap-box-secret";
 
 const store = getPrintStore();
@@ -46,7 +35,7 @@ function randId(prefix: string): string {
 
 const TAP_BOX_SECRET_BUF = Buffer.from(TAP_BOX_SECRET, "utf8");
 
-/** Tap-box → server auth: shared secret in `x-tap-box-secret` header. */
+/** Print agent (tap-box) → server auth: shared secret in `x-tap-box-secret` header. */
 function requireTapBox(req: Request, res: Response, next: NextFunction): void {
   const provided = req.header("x-tap-box-secret");
   const providedBuf = provided ? Buffer.from(provided, "utf8") : null;
@@ -61,264 +50,121 @@ function requireTapBox(req: Request, res: Response, next: NextFunction): void {
   next();
 }
 
-type WatchPayload = {
-  student_id: string;
-  watch_session_id: string;
-  nonce: string;
-  ts_ms: number;
-  signature: string;
-};
+const requireStaff = requireAuth(["teacher", "admin", "super_admin"]);
 
-type WatchPayloadVerdict =
-  | { ok: true }
-  | { ok: false; reason: "bad_signature" | "stale" | "future" | "malformed" };
-
-async function verifyWatchPayload(payload: WatchPayload, nowMs: number): Promise<WatchPayloadVerdict> {
-  if (
-    typeof payload.student_id !== "string" ||
-    typeof payload.watch_session_id !== "string" ||
-    typeof payload.nonce !== "string" ||
-    typeof payload.signature !== "string" ||
-    !Number.isFinite(payload.ts_ms)
-  ) {
-    return { ok: false, reason: "malformed" };
-  }
-  const { secret } = await getActiveWatchHceSecret();
-  const mac = crypto
-    .createHmac("sha256", secret)
-    .update(
-      `${payload.student_id}|${payload.watch_session_id}|${payload.nonce}|${payload.ts_ms}`,
-    )
-    .digest("hex");
-  if (mac.length !== payload.signature.length) return { ok: false, reason: "bad_signature" };
-  const sigOk = crypto.timingSafeEqual(Buffer.from(mac), Buffer.from(payload.signature));
-  if (!sigOk) return { ok: false, reason: "bad_signature" };
-  const age = nowMs - payload.ts_ms;
-  if (age > HCE_PAYLOAD_MAX_AGE_MS) return { ok: false, reason: "stale" };
-  // Permit a small forward skew (10s) to absorb watch/server clock drift.
-  if (age < -10_000) return { ok: false, reason: "future" };
-  return { ok: true };
+function isAdmin(req: Request): boolean {
+  return req.auth?.role === "admin" || req.auth?.role === "super_admin";
 }
+
+// ---------------------------------------------------------------------------
+// Staff routes
+// ---------------------------------------------------------------------------
+
+router.get("/v1/print/printers", requireStaff, (_req, res) => {
+  res.json({ printers: Object.values(PRINTERS) });
+});
 
 /**
- * Resolve the document catalogue for a student by joining
- *   class_memberships → document_assignments → documents
- * for whichever classes the student is in.
+ * POST /v1/print/jobs
+ * Staff-initiated print: a teacher sends a document to a school printer from
+ * the Teacher Dashboard. The print agent beside that printer picks the job up
+ * via GET /v1/print/next.
+ *
+ * Body: { printer_id, document_id, copies?, student_code? }
+ * Set `student_code` for a personal handout (e.g. a retest sheet) so it shows
+ * in that child's parent print history.
  */
-async function listFilesForStudent(studentCode: string) {
-  const docs = await listDocumentsForStudent(studentCode);
-  return docs.map((d) => ({
-    id: `doc-${d.id}`,
-    name: d.name,
-    subject: d.subject,
-    size_kb: Math.max(1, Math.round(d.size_bytes / 1024)),
-    pages: d.pages,
-  }));
-}
-
-async function findDocumentForStudent(studentCode: string, documentId: string) {
-  const numericId = Number(documentId.replace(/^doc-/, ""));
-  if (!Number.isFinite(numericId)) return null;
-
-  const student = (await db.select().from(usersTable).where(eq(usersTable.student_code, studentCode)))[0];
-  if (!student) return null;
-  const memberships = await db.select().from(classMembershipsTable).where(eq(classMembershipsTable.student_id, student.id));
-  if (memberships.length === 0) return null;
-
-  const allowed = await db.select().from(documentAssignmentsTable).where(
-    and(
-      eq(documentAssignmentsTable.document_id, numericId),
-      inArray(documentAssignmentsTable.class_id, memberships.map((m) => m.class_id)),
-    ),
-  );
-  if (allowed.length === 0) return null;
-
-  const doc = (await db.select().from(documentsTable).where(eq(documentsTable.id, numericId)))[0];
-  return doc ?? null;
-}
-
-// ---------------------------------------------------------------------------
-// Routes
-// ---------------------------------------------------------------------------
-
-// Cap pair attempts per source IP. Tap-box is on a school LAN; legitimate
-// taps are 1/sec at most. Anything higher is a guessing attack on student_ids.
-const pairLimiter = rateLimit({ windowMs: 60_000, max: 60, name: "print-pair" });
-
-router.post("/v1/print/pair", pairLimiter, requireTapBox, async (req, res) => {
-  const { tap_box_id, printer_id, watch_payload } = req.body ?? {};
-  if (!tap_box_id || !printer_id || !watch_payload) {
-    res.status(400).json({ error: "missing fields" });
-    return;
-  }
-  if (!PRINTERS[printer_id]) {
+router.post("/v1/print/jobs", requireStaff, async (req, res) => {
+  const { printer_id, document_id, student_code } = req.body ?? {};
+  const printer = typeof printer_id === "string" ? PRINTERS[printer_id] : undefined;
+  if (!printer) {
     res.status(404).json({ error: "unknown printer" });
     return;
   }
-  // Watch may send ts_ms as a string (JSON safe-int avoidance). Coerce here so
-  // the downstream HMAC math always sees a number.
-  const wp: WatchPayload = {
-    student_id: String(watch_payload.student_id ?? ""),
-    watch_session_id: String(watch_payload.watch_session_id ?? ""),
-    nonce: String(watch_payload.nonce ?? ""),
-    ts_ms: Number(watch_payload.ts_ms ?? watch_payload.tsMs ?? NaN),
-    signature: String(watch_payload.signature ?? ""),
-  };
-  const now = Date.now();
-  const verdict = await verifyWatchPayload(wp, now);
-  if (!verdict.ok) {
-    res.status(401).json({ error: `invalid watch payload: ${verdict.reason}` });
+  const docId = Number(String(document_id ?? "").replace(/^doc-/, ""));
+  if (!Number.isInteger(docId) || docId <= 0) {
+    res.status(400).json({ error: "document_id required" });
     return;
   }
-
-  const nonceKey = `${wp.student_id}:${wp.nonce}`;
-  const fresh = await store.checkAndStoreNonce(nonceKey, NONCE_TTL_MS);
-  if (!fresh) {
-    res.status(409).json({ error: "replayed nonce" });
+  const copies = req.body?.copies == null ? 1 : Number(req.body.copies);
+  if (!Number.isInteger(copies) || copies < 1 || copies > MAX_COPIES) {
+    res.status(400).json({ error: `copies must be between 1 and ${MAX_COPIES}` });
     return;
   }
-  const pairing: Pairing = {
-    id: randId("pair"),
-    student_id: wp.student_id,
-    watch_session_id: wp.watch_session_id,
-    printer_id,
-    tap_box_id,
-    created_at: now,
-    expires_at: now + PAIRING_TTL_MS,
-    job_id: null,
-  };
-  await store.putPairing(pairing, PAIRING_TTL_MS);
-
-  res.json({
-    pairing_id: pairing.id,
-    expires_in_ms: PAIRING_TTL_MS,
-    student_id: pairing.student_id,
-    printer: PRINTERS[printer_id],
-  });
-});
-
-const requireStudent = requireAuth(["student"]);
-
-router.get("/v1/print/pairing-for-session/:watchSessionId", requireStudent, async (req, res) => {
-  const latest = await store.findPairingByWatchSession(String(req.params.watchSessionId));
-  if (!latest) {
-    res.status(204).end();
-    return;
-  }
-  if (req.auth?.student_id && latest.student_id !== req.auth.student_id) {
-    res.status(403).json({ error: "pairing belongs to another student" });
-    return;
-  }
-  res.json({ pairing_id: latest.id, expires_at: latest.expires_at });
-});
-
-router.get("/v1/print/pairing/:id", requireStudent, async (req, res) => {
-  const pairing = await store.getPairing(String(req.params.id));
-  if (!pairing) {
-    res.status(404).json({ error: "pairing not found or expired" });
-    return;
-  }
-  if (req.auth?.student_id && pairing.student_id !== req.auth.student_id) {
-    res.status(403).json({ error: "pairing belongs to another student" });
-    return;
-  }
-  const files = await listFilesForStudent(pairing.student_id);
-  res.json({
-    pairing_id: pairing.id,
-    student_id: pairing.student_id,
-    printer: PRINTERS[pairing.printer_id],
-    files,
-    expires_at: pairing.expires_at,
-    job_id: pairing.job_id,
-  });
-});
-
-router.post("/v1/print/submit", requireStudent, async (req, res) => {
-  const { pairing_id, document_id, watch_signature } = req.body ?? {};
-  if (!pairing_id || !document_id || !watch_signature) {
-    res.status(400).json({ error: "missing fields" });
-    return;
-  }
-  const pairing = await store.getPairing(pairing_id);
-  if (!pairing) {
-    res.status(404).json({ error: "pairing not found or expired" });
-    return;
-  }
-  if (req.auth?.student_id && pairing.student_id !== req.auth.student_id) {
-    res.status(403).json({ error: "pairing belongs to another student" });
-    return;
-  }
-  const { secret: hceSecret } = await getActiveWatchHceSecret();
-  const expected = crypto
-    .createHmac("sha256", hceSecret)
-    .update(`${pairing_id}|${document_id}`)
-    .digest("hex");
-  if (
-    expected.length !== String(watch_signature).length ||
-    !crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(String(watch_signature)))
-  ) {
-    res.status(401).json({ error: "invalid watch signature" });
-    return;
-  }
-  const doc = await findDocumentForStudent(pairing.student_id, document_id);
+  const [doc] = await db.select().from(documentsTable).where(eq(documentsTable.id, docId));
   if (!doc) {
-    res.status(404).json({ error: "document not found for this student" });
+    res.status(404).json({ error: "document not found" });
     return;
   }
+  // Teachers print their own uploads; admins can print any document.
+  if (!isAdmin(req) && doc.uploaded_by !== req.auth?.user_id) {
+    res.status(403).json({ error: "document not owned by this teacher" });
+    return;
+  }
+  let student: typeof usersTable.$inferSelect | undefined;
+  if (student_code != null && student_code !== "") {
+    [student] = await db.select().from(usersTable).where(eq(usersTable.student_code, String(student_code)));
+    if (!student || student.role !== "student") {
+      res.status(404).json({ error: "student not found" });
+      return;
+    }
+  }
+
   recordPrintJob();
   const now = Date.now();
   const job: PrintJob = {
     id: randId("job"),
-    pairing_id,
-    student_id: pairing.student_id,
-    printer_id: pairing.printer_id,
-    document_id,
+    printer_id: printer.id,
+    document_id: `doc-${doc.id}`,
     document_name: doc.name,
+    copies,
+    student_code: student?.student_code ?? null,
+    requested_by: req.auth!.user_id,
     status: "queued",
     status_message: "Waiting for printer to pick up",
     created_at: now,
     expires_at: now + JOB_TTL_MS,
   };
   await store.putJob(job, JOB_TTL_MS);
-  await store.updatePairingJob(pairing_id, job.id);
 
-  // Persist a long-term audit record. The student_code on the job is the
-  // student.user.student_code (set at session creation), so we resolve the
-  // numeric user.id for FK linkage.
+  // Long-term audit record — the live store entry expires after JOB_TTL_MS.
   try {
-    const studentRow = (
-      await db.select().from(usersTable).where(eq(usersTable.student_code, pairing.student_id))
-    )[0];
     await db.insert(printJobsTable).values({
       job_ref: job.id,
-      student_code: pairing.student_id,
-      student_id: studentRow?.id ?? null,
+      student_code: job.student_code,
+      student_id: student?.id ?? null,
+      requested_by: job.requested_by,
       document_id: doc.id,
       document_name: doc.name,
       pages: doc.pages ?? 1,
-      printer_id: pairing.printer_id,
-      printer_name: PRINTERS[pairing.printer_id]?.name ?? null,
+      copies,
+      printer_id: printer.id,
+      printer_name: printer.name,
       status: "queued",
     });
   } catch (err) {
     req.log?.error({ err }, "failed to persist print job audit row");
   }
 
-  res.json({ job_id: job.id, status: job.status, document_name: doc.name });
+  res.status(201).json({ job_id: job.id, status: job.status, document_name: doc.name, copies, printer });
 });
 
-router.get("/v1/print/jobs/:id", requireStudent, async (req, res) => {
+router.get("/v1/print/jobs/:id", requireStaff, async (req, res) => {
   const job = await store.getJob(String(req.params.id));
   if (!job) {
     res.status(404).json({ error: "job not found or expired" });
     return;
   }
-  if (req.auth?.student_id && job.student_id !== req.auth.student_id) {
-    res.status(403).json({ error: "job belongs to another student" });
+  if (!isAdmin(req) && job.requested_by !== req.auth?.user_id) {
+    res.status(403).json({ error: "job belongs to another teacher" });
     return;
   }
   res.json(job);
 });
+
+// ---------------------------------------------------------------------------
+// Print agent routes
+// ---------------------------------------------------------------------------
 
 router.get("/v1/print/next", requireTapBox, async (req, res) => {
   const printerId = String(req.query["printer_id"] ?? "");
@@ -357,7 +203,7 @@ router.get("/v1/print/jobs/:id/document", requireTapBox, async (req, res) => {
       res.status(404).json({ error: "document bytes missing in storage" });
       return;
     }
-    req.log?.error({ err }, "failed to fetch document bytes for tap-box");
+    req.log?.error({ err }, "failed to fetch document bytes for print agent");
     if (!res.headersSent) {
       res.status(502).json({ error: "object_storage_unavailable" });
     } else {

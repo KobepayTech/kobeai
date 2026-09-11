@@ -264,7 +264,7 @@ router.get("/v1/ads/serve", async (req, res) => {
   });
 
   // NOTE: response shape is consumed verbatim by the parent web banner
-  // (`ad-banner.tsx`) and the watch `AdPayload` Kotlin model. Keep the
+  // (`ad-banner.tsx`) and any other ad client. Keep the
   // nested `creative` + top-level `impression_token` exactly as is.
   return res.json({
     ad: {

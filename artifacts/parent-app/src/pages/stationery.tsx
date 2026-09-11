@@ -20,7 +20,7 @@ import {
 
 // Stationery picker page.
 //
-// UX (matching watch flow): the user sees a scrollable list. They tap an
+// UX: the user sees a scrollable list. They tap an
 // item to open a quantity sheet (+/- with a checkmark). Once confirmed, the
 // item disappears from the main list and shows up in the Cart with a count.
 // They can re-open Cart to edit/remove (which puts the item back in the
@@ -197,7 +197,7 @@ export default function StationeryPage() {
                   </p>
                   <p className="font-bold text-gray-900">{o.student_name}</p>
                   <p className="text-xs text-gray-600">
-                    {o.placed_by === "teacher" ? "Submitted by teacher" : "Submitted from watch"}
+                    {o.placed_by === "teacher" ? "Submitted by teacher" : "Submitted for your approval"}
                   </p>
                 </div>
                 <p className="text-lg font-bold">TSh {o.total_tsh.toLocaleString()}</p>
@@ -298,7 +298,7 @@ export default function StationeryPage() {
           </button>
         )}
 
-        {/* Item list (hides items already in cart, like the watch flow) */}
+        {/* Item list (hides items already in cart) */}
         {drive && (
           <Card className="p-2 rounded-3xl border-gray-100">
             {loading ? (

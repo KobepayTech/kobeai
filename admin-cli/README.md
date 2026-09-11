@@ -81,7 +81,7 @@ kobeai-admin models export                 # writes ~/kobeai-models-YYYYMMDD.tar
 # On the offline school server (USB stick / SD card transfer):
 kobeai-admin models import /media/usb/kobeai-models-20260416.tar.gz
 
-# Tell the watches where the API server lives on the school LAN
+# Tell LAN clients (classroom displays, Teacher Lens, print agents) where the API lives
 kobeai-admin server-url http://192.168.1.100:8000
 
 # Backups + logs
@@ -100,9 +100,9 @@ kobeai-admin system logs api
 
 ## Pointing the API at Ollama
 
-The API server in this repo (`artifacts/api-server`) currently returns
-canned responses for `/v1/watch/ask`. To make it call Ollama in an on-prem
-deployment, add an env var to the `kobeai-backend` container, e.g.
+The API server (`artifacts/api-server`) returns canned answers unless
+`AI_PROVIDER=ollama` is set. For an on-prem deployment, add these env vars
+to the `kobeai-backend` container:
 
 ```env
 AI_PROVIDER=ollama
@@ -110,11 +110,9 @@ OLLAMA_BASE_URL=http://kobeai-ollama:11434
 OLLAMA_MODEL=mistral:7b
 ```
 
-…and update the watch / parent ask endpoints to forward to
-`POST {OLLAMA_BASE_URL}/api/generate`. I haven't wired this in yet — say the
-word and I'll add an Ollama provider module to the API server gated on
-`AI_PROVIDER=ollama` so the same codebase works in both modes (cloud
-provider when deployed to Replit, Ollama when deployed on-prem).
+The classroom assistant (`/v1/classroom/ask`), Teacher Lens and the admin
+AI tester then call `POST {OLLAMA_BASE_URL}/api/generate`, falling back to
+canned answers if Ollama is unreachable.
 
 ## Hardware budget for the school server
 

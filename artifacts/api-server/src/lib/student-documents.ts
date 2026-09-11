@@ -23,7 +23,6 @@ export type StudentDocument = {
  * for whichever classes the student is enrolled in.
  *
  * Used by:
- *   - the watch print picker (`/print/pairing/:id`)
  *   - the parent app "Assigned documents" page
  */
 export async function listDocumentsForStudent(studentCode: string): Promise<StudentDocument[]> {

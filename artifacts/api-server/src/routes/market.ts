@@ -13,7 +13,7 @@ import { drainPendingGrants } from "../lib/kp";
 
 const router = Router();
 
-router.use("/v1/watch/market", requireAuth(["student"]));
+router.use("/v1/student/market", requireAuth(["student"]));
 
 const LOCK_DURATION_MS = 5 * 60 * 1000; // 5 minutes
 const LOCK_KP_COST = 10;
@@ -55,10 +55,10 @@ async function resolveStudent(req: any): Promise<{ user_id: number; balance: num
 }
 
 /**
- * GET /v1/watch/market/me
+ * GET /v1/student/market/me
  * Returns the calling student's KP balance and the last 20 ledger entries.
  */
-router.get("/v1/watch/market/me", async (req, res) => {
+router.get("/v1/student/market/me", async (req, res) => {
   const me = await resolveStudent(req);
   if (!me) return void res.status(401).json({ error: "no student" });
   const ledger = await db
@@ -71,11 +71,11 @@ router.get("/v1/watch/market/me", async (req, res) => {
 });
 
 /**
- * GET /v1/watch/market/questions
+ * GET /v1/student/market/questions
  * Lists open + locked questions (locked ones still visible so others can see
  * what's being worked on), with the active lock's owner + expiry attached.
  */
-router.get("/v1/watch/market/questions", async (_req, res) => {
+router.get("/v1/student/market/questions", async (_req, res) => {
   const rows = await db
     .select({
       q: marketQuestionsTable,
@@ -119,13 +119,13 @@ router.get("/v1/watch/market/questions", async (_req, res) => {
 });
 
 /**
- * POST /v1/watch/market/questions/:id/lock
+ * POST /v1/student/market/questions/:id/lock
  * Buy an exclusive 5-minute lock on a question. Costs LOCK_KP_COST KP.
  * - 404 if question not found
  * - 409 if not 'open' or another active lock exists
  * - 402 if balance < cost
  */
-router.post("/v1/watch/market/questions/:id/lock", async (req, res) => {
+router.post("/v1/student/market/questions/:id/lock", async (req, res) => {
   const me = await resolveStudent(req);
   if (!me) return void res.status(401).json({ error: "no student" });
   const qid = Number.parseInt(req.params.id, 10);
@@ -236,7 +236,7 @@ router.post("/v1/watch/market/questions/:id/lock", async (req, res) => {
 });
 
 /**
- * POST /v1/watch/market/questions/:id/answer
+ * POST /v1/student/market/questions/:id/answer
  * Body: { choice_index: number }
  * Rules:
  *  - Question must be 'open' or 'locked'.
@@ -246,7 +246,7 @@ router.post("/v1/watch/market/questions/:id/lock", async (req, res) => {
  *  - Wrong answer by lock owner: release the lock so others can compete.
  *  - Wrong answer by anyone else on an open question: just record nothing.
  */
-router.post("/v1/watch/market/questions/:id/answer", async (req, res) => {
+router.post("/v1/student/market/questions/:id/answer", async (req, res) => {
   const me = await resolveStudent(req);
   if (!me) return void res.status(401).json({ error: "no student" });
   const qid = Number.parseInt(req.params.id, 10);

@@ -71,7 +71,7 @@ export const GetTeacherDashboardStatsResponse = zod.object({
   total_points: zod.number(),
   avg_performance: zod.number(),
   questions_today: zod.number(),
-  online_watches: zod.number(),
+  online_devices: zod.number(),
   recent_activity: zod.array(
     zod.object({
       id: zod.string(),
@@ -291,36 +291,6 @@ export const GetWalletBalanceResponse = zod.object({
       created_at: zod.string(),
     }),
   ),
-});
-
-/**
- * @summary Ask AI a question
- */
-export const AskQuestionBody = zod.object({
-  question: zod.string(),
-  subject: zod.string().optional(),
-  conversation_id: zod.string().optional(),
-});
-
-export const AskQuestionResponse = zod.object({
-  answer: zod.string(),
-  points_earned: zod.number(),
-  new_balance: zod.number(),
-  follow_up_suggestions: zod.array(zod.string()),
-  conversation_id: zod.string(),
-  model_used: zod.string(),
-});
-
-/**
- * @summary Check in for attendance
- */
-export const CheckInResponse = zod.object({
-  success: zod.boolean(),
-  message: zod.string(),
-  points_earned: zod.number(),
-  check_in_time: zod.string(),
-  already_checked_in: zod.boolean(),
-  new_balance: zod.number(),
 });
 
 /**

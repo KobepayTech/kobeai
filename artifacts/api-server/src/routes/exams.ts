@@ -27,7 +27,7 @@ async function teacherOwnsClass(req: Request, classId: number): Promise<boolean>
  * One open exam per class is enforced by a partial unique index.
  *
  * Server-of-truth model:
- *   - When `active`,  `ends_at` is the wall-clock deadline. Watch shows
+ *   - When `active`,  `ends_at` is the wall-clock deadline. Clients show
  *     (ends_at - now) as the countdown. Adding seconds moves ends_at forward.
  *   - When `paused`,  `remaining_seconds` is the captured remainder. Adding
  *     seconds while paused increases remaining_seconds. Resuming sets
@@ -316,13 +316,13 @@ router.post("/v1/teacher/exams/:id/finish", teacherAuth, async (req, res) => {
   res.json({ exam: shape(updated) });
 });
 
-// -------- Student watch --------
+// -------- Student-facing --------
 
 /**
- * Returns the active or paused exam for the caller's class, if any.
- * Watch app uses this to switch into fullscreen countdown mode.
+ * Returns the active or paused exam for the caller's class, if any, so a
+ * student client can show the countdown.
  */
-router.get("/v1/watch/exam/active", studentAuth, async (req, res) => {
+router.get("/v1/student/exam/active", studentAuth, async (req, res) => {
   const studentCode = req.auth!.student_id!;
   const [me] = await db.select({ id: usersTable.id }).from(usersTable).where(eq(usersTable.student_code, studentCode)).limit(1);
   if (!me) {

@@ -12,10 +12,11 @@ import Profile from "@/pages/profile";
 import PrintPage from "@/pages/print";
 import PrintHistoryPage from "@/pages/print-history";
 import SubscriptionPage from "@/pages/subscription";
-import WatchSettings from "@/pages/watch-settings";
 import NotificationsPage from "@/pages/notifications";
 import AddChildPage from "@/pages/add-child";
 import StationeryPage from "@/pages/stationery";
+import MagazinePage from "@/pages/magazine";
+import DevelopmentPage from "@/pages/development";
 import { InstallPrompt } from "@/components/install-prompt";
 
 const queryClient = new QueryClient({
@@ -39,10 +40,11 @@ function Router() {
       <Route path="/print/history" component={PrintHistoryPage} />
       <Route path="/subscription" component={SubscriptionPage} />
       <Route path="/profile" component={Profile} />
-      <Route path="/profile/watch" component={WatchSettings} />
       <Route path="/profile/notifications" component={NotificationsPage} />
       <Route path="/add-child" component={AddChildPage} />
       <Route path="/stationery" component={StationeryPage} />
+      <Route path="/magazine/:childId" component={MagazinePage} />
+      <Route path="/development/:childId" component={DevelopmentPage} />
       <Route component={NotFound} />
     </Switch>
   );

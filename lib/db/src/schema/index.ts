@@ -82,8 +82,8 @@ export const documentAssignmentsTable = pgTable(
       .notNull()
       .references(() => classesTable.id, { onDelete: "cascade" }),
     assigned_at: timestamp("assigned_at").defaultNow().notNull(),
-    // Optional scheduling window. The watch print picker, parent app, and
-    // tap-box only show the document when (now >= scheduled_at OR null) AND
+    // Optional scheduling window. Student-facing document lists (parent app)
+    // only show the document when (now >= scheduled_at OR null) AND
     // (now < expires_at OR null). Lets teachers queue homework in advance and
     // auto-retire stale worksheets without manual cleanup.
     scheduled_at: timestamp("scheduled_at"),
@@ -94,37 +94,486 @@ export const documentAssignmentsTable = pgTable(
 
 /**
  * Persistent record of every print job. The in-memory `print_store` keeps
- * the live job state (queued / printing / done) for the tap-box flow, but it
- * evicts entries after JOB_TTL_MS. This table is the long-term audit log so
- * parents can see history and bursars can spot abuse.
+ * the live job state (queued / printing / done) for the print-agent flow, but
+ * it evicts entries after JOB_TTL_MS. This table (`print_jobs`, defined below)
+ * is the long-term audit log so parents can see history and bursars can spot
+ * abuse.
  */
+
 /**
- * Per-student watch device preferences. The parent app writes these via
- * /v1/parent/child/:childId/settings; the watch reads them on login (and on
- * each app launch) and mirrors them into local DataStore so they survive
- * being offline. Defaults assume both audio and keyboard are enabled — a
- * fresh student gets the full experience until a parent dials it back.
+ * Aggregated learning profile per student — the "brain" surface for the K9
+ * school-AI experience. Values are AI-suggested but every field can be
+ * overridden or cleared by a teacher via the /v1/staff/learning-profile
+ * endpoints. The nightly rollup writes to `computed_*` shadow fields and the
+ * teacher's overrides live in `override_*` fields; the served view merges
+ * them, giving human corrections precedence.
+ *
+ * We deliberately keep the schema flat + JSONB-y instead of exploding every
+ * signal into its own table — this is a slowly-changing summary, not an
+ * event log. The upstream events (attendance, quizzes, questions) already
+ * live in their own tables and remain the source of truth.
  */
-export const studentSettingsTable = pgTable("student_settings", {
+export const studentLearningProfileTable = pgTable("student_learning_profile", {
   student_code: text("student_code").primaryKey(),
-  audio_enabled: boolean("audio_enabled").notNull().default(true),
-  keyboard_enabled: boolean("keyboard_enabled").notNull().default(true),
-  // Parent-controlled. When false the watch suppresses the AdHomeTile and
-  // AdInterstitialScreen. The build-time BuildConfig.ENABLE_ADS flag is the
-  // operator-level off-switch; this is the per-family runtime override.
-  ads_enabled: boolean("ads_enabled").notNull().default(true),
+  student_user_id: integer("student_user_id").references(() => usersTable.id, {
+    onDelete: "cascade",
+  }),
+  // Static / low-cadence facts. Birthday drives K9 birthday automation.
+  birthday: text("birthday"), // "MM-DD" — year-agnostic for classroom celebrations
+  // Rolled-up learning signals (nightly cron). `topics_*` are string arrays.
+  computed_topics_strong: jsonb("computed_topics_strong").notNull().default(sql`'[]'::jsonb`),
+  computed_topics_weak: jsonb("computed_topics_weak").notNull().default(sql`'[]'::jsonb`),
+  computed_questions_asked_count: integer("computed_questions_asked_count").notNull().default(0),
+  computed_achievements: jsonb("computed_achievements").notNull().default(sql`'[]'::jsonb`),
+  computed_attendance_rate: integer("computed_attendance_rate"), // 0-100
+  // Concrete remediation suggestions mined from paper-marking (topic +
+  // example misconception). Shape: [{ topic, urgency, evidence }].
+  computed_remediations: jsonb("computed_remediations").notNull().default(sql`'[]'::jsonb`),
+  // Teacher overrides — the merged view prefers these when non-null.
+  override_topics_strong: jsonb("override_topics_strong"),
+  override_topics_weak: jsonb("override_topics_weak"),
+  override_achievements: jsonb("override_achievements"),
+  override_notes: text("override_notes"),
+  updated_by: integer("updated_by"), // teacher user id of the last edit
+  computed_at: timestamp("computed_at"),
   updated_at: timestamp("updated_at").defaultNow().notNull(),
 });
-export type StudentSettings = typeof studentSettingsTable.$inferSelect;
+export type StudentLearningProfile = typeof studentLearningProfileTable.$inferSelect;
+
+/**
+ * One row per (student, calendar day) when a birthday is detected. Seeded
+ * by the daily birthday-ensure job. Teachers approve or dismiss; when
+ * approved, the classroom kiosk polls `/v1/classroom/celebrations/pending`
+ * and marks it as `played` once the celebration has been shown.
+ */
+export const birthdayCelebrationsTable = pgTable(
+  "birthday_celebrations",
+  {
+    id: serial("id").primaryKey(),
+    student_code: text("student_code").notNull(),
+    // Calendar date the celebration is FOR — in the school timezone.
+    celebration_date: text("celebration_date").notNull(), // "YYYY-MM-DD"
+    status: text("status").notNull().default("pending"), // pending | approved | dismissed | played
+    approved_by: integer("approved_by").references(() => usersTable.id, {
+      onDelete: "set null",
+    }),
+    approved_at: timestamp("approved_at"),
+    played_at: timestamp("played_at"),
+    // Which classroom TV played it, when the kiosk claims a celebration.
+    played_by_kiosk: text("played_by_kiosk"),
+    created_at: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    student_date_uk: uniqueIndex("birthday_celebrations_student_date_uk").on(
+      t.student_code,
+      t.celebration_date,
+    ),
+    date_idx: index("birthday_celebrations_date_idx").on(t.celebration_date),
+  }),
+);
+export type BirthdayCelebration = typeof birthdayCelebrationsTable.$inferSelect;
+
+/**
+ * Captured signals from classroom microphone sessions. The voice gateway
+ * (services/kobevoice + routes/voice.ts) posts a batch of parsed insights
+ * here at the end of each listening window. student_code is nullable —
+ * when speaker attribution isn't reliable, the insight stays class-level
+ * ("Several Form 2A students struggled with acceleration").
+ *
+ * These are inputs to the learning-profile rollup and to the classroom
+ * TV client. They are NEVER used to change grades or discipline students
+ * automatically — teachers see them, teachers act on them.
+ */
+export const classroomDiscussionInsightsTable = pgTable(
+  "classroom_discussion_insights",
+  {
+    id: serial("id").primaryKey(),
+    class_id: integer("class_id").references(() => classesTable.id, {
+      onDelete: "set null",
+    }),
+    student_code: text("student_code"),
+    subject: text("subject"),
+    period_id: integer("period_id"),
+    // "question" | "answer" | "misunderstanding" | "theme"
+    insight_type: text("insight_type").notNull(),
+    text: text("text").notNull(),
+    // 0..1 speaker-attribution confidence; > threshold means we're willing
+    // to store this at student level rather than class level.
+    attribution_confidence: integer("attribution_confidence"),
+    source_kiosk: text("source_kiosk"),
+    captured_at: timestamp("captured_at").notNull().defaultNow(),
+    created_at: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    class_time_idx: index("classroom_insights_class_time_idx").on(t.class_id, t.captured_at),
+    student_time_idx: index("classroom_insights_student_time_idx").on(t.student_code, t.captured_at),
+    subject_idx: index("classroom_insights_subject_idx").on(t.subject),
+  }),
+);
+export type ClassroomDiscussionInsight =
+  typeof classroomDiscussionInsightsTable.$inferSelect;
+
+/**
+ * Teacher-lens sessions. The teacher taps "start" on the lens app when
+ * they're about to mark papers or walk around the class. The session
+ * groups paper-graded events + whisper queue + vision-frame requests so
+ * we can attribute them all back to one teacher + one moment.
+ */
+export const teacherLensSessionsTable = pgTable(
+  "teacher_lens_sessions",
+  {
+    id: serial("id").primaryKey(),
+    teacher_user_id: integer("teacher_user_id").references(() => usersTable.id, {
+      onDelete: "set null",
+    }),
+    // "marking" | "lookup" | "ambient"
+    mode: text("mode").notNull().default("marking"),
+    device: text("device"), // "android-phone" | "xreal-glasses" | "browser" | ...
+    started_at: timestamp("started_at").notNull().defaultNow(),
+    ended_at: timestamp("ended_at"),
+    metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
+  },
+  (t) => ({
+    teacher_idx: index("teacher_lens_sessions_teacher_idx").on(t.teacher_user_id, t.started_at),
+  }),
+);
+export type TeacherLensSession = typeof teacherLensSessionsTable.$inferSelect;
+
+/**
+ * One row per marked exam / homework paper the teacher processed through
+ * the lens. The paper-graded ingest endpoint accepts the whole payload in
+ * one shot (envelope + per-question items) so a stack of marked papers
+ * becomes a stack of graded_papers rows — with the individual questions
+ * living in graded_paper_items.
+ */
+export const gradedPapersTable = pgTable(
+  "graded_papers",
+  {
+    id: serial("id").primaryKey(),
+    session_id: integer("session_id").references(() => teacherLensSessionsTable.id, {
+      onDelete: "set null",
+    }),
+    teacher_user_id: integer("teacher_user_id").references(() => usersTable.id, {
+      onDelete: "set null",
+    }),
+    student_code: text("student_code").notNull(),
+    class_id: integer("class_id").references(() => classesTable.id, { onDelete: "set null" }),
+    subject: text("subject"),
+    // The paper's own title / assignment name if the teacher wrote one at
+    // the top and the OCR pass caught it.
+    assessment_title: text("assessment_title"),
+    total_questions: integer("total_questions").notNull().default(0),
+    correct_count: integer("correct_count").notNull().default(0),
+    incorrect_count: integer("incorrect_count").notNull().default(0),
+    score_percent: integer("score_percent"), // 0..100
+    graded_at: timestamp("graded_at").notNull().defaultNow(),
+    // Optional image reference in object storage if the lens saved the
+    // paper for review.
+    paper_image_key: text("paper_image_key"),
+    // Free-form OCR/AI extraction metadata (model version, confidence).
+    metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
+  },
+  (t) => ({
+    student_time_idx: index("graded_papers_student_time_idx").on(t.student_code, t.graded_at),
+    subject_idx: index("graded_papers_subject_idx").on(t.subject, t.graded_at),
+  }),
+);
+export type GradedPaper = typeof gradedPapersTable.$inferSelect;
+
+/**
+ * One row per question on a graded paper. This is the primary feed into
+ * the "concrete misconception" side of the learning profile — patterns
+ * like "student consistently gets multiplication basics wrong" fall out
+ * of aggregating on question_topic + is_correct.
+ */
+export const gradedPaperItemsTable = pgTable(
+  "graded_paper_items",
+  {
+    id: serial("id").primaryKey(),
+    paper_id: integer("paper_id")
+      .notNull()
+      .references(() => gradedPapersTable.id, { onDelete: "cascade" }),
+    question_number: integer("question_number"),
+    question_text: text("question_text"),
+    // Free-form categorisation the OCR/AI pass may or may not fill in
+    // (e.g. "multiplication basics", "cell biology definitions").
+    question_topic: text("question_topic"),
+    student_answer: text("student_answer"),
+    expected_answer: text("expected_answer"),
+    is_correct: boolean("is_correct").notNull(),
+    marks_awarded: integer("marks_awarded"),
+    marks_possible: integer("marks_possible"),
+    metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
+  },
+  (t) => ({
+    paper_idx: index("graded_paper_items_paper_idx").on(t.paper_id),
+    topic_correct_idx: index("graded_paper_items_topic_correct_idx").on(t.question_topic, t.is_correct),
+  }),
+);
+export type GradedPaperItem = typeof gradedPaperItemsTable.$inferSelect;
+
+/**
+ * Outgoing whisper queue — messages the teacher-lens client polls and
+ * plays through the paired earbud via TTS. Kept minimal on purpose: text
+ * only, kiosk claims one at a time with SKIP LOCKED to avoid two lenses
+ * on the same session double-playing.
+ */
+export const teacherLensWhispersTable = pgTable(
+  "teacher_lens_whispers",
+  {
+    id: serial("id").primaryKey(),
+    session_id: integer("session_id").references(() => teacherLensSessionsTable.id, {
+      onDelete: "cascade",
+    }),
+    teacher_user_id: integer("teacher_user_id").references(() => usersTable.id, {
+      onDelete: "set null",
+    }),
+    text: text("text").notNull(),
+    priority: integer("priority").notNull().default(5), // 1 = urgent, 10 = idle
+    status: text("status").notNull().default("pending"), // pending | played | dismissed
+    created_at: timestamp("created_at").notNull().defaultNow(),
+    played_at: timestamp("played_at"),
+  },
+  (t) => ({
+    session_status_idx: index("teacher_lens_whispers_session_status_idx").on(
+      t.session_id,
+      t.status,
+      t.priority,
+    ),
+  }),
+);
+export type TeacherLensWhisper = typeof teacherLensWhispersTable.$inferSelect;
+
+/**
+ * Curated notes per student. Every time a paper is graded, for each
+ * distinct wrong-answer topic we generate a short expansion the
+ * student can read: "here's what you got wrong, here's the fuller
+ * answer, here's an example". The generator today is rule-based; the
+ * `body_markdown` will later be produced by an on-prem Qwen worker
+ * with the same shape.
+ */
+export const studentCuratedNotesTable = pgTable(
+  "student_curated_notes",
+  {
+    id: serial("id").primaryKey(),
+    student_code: text("student_code").notNull(),
+    source_paper_id: integer("source_paper_id").references(() => gradedPapersTable.id, {
+      onDelete: "cascade",
+    }),
+    subject: text("subject"),
+    topic: text("topic").notNull(),
+    // The bit that was wrong — for context when the student reads it.
+    student_answer: text("student_answer"),
+    // The teacher-provided or AI-suggested ideal answer.
+    ideal_answer: text("ideal_answer"),
+    // The main explanation, markdown, one page or less.
+    body_markdown: text("body_markdown").notNull(),
+    // Which model / rule wrote this — helps track regressions.
+    generator: text("generator").notNull().default("rule-based-v1"),
+    // A teacher can flag "this note isn't accurate" and it's hidden until fixed.
+    status: text("status").notNull().default("published"), // published | flagged | archived
+    created_at: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    student_time_idx: index("student_curated_notes_student_time_idx").on(t.student_code, t.created_at),
+    topic_idx: index("student_curated_notes_topic_idx").on(t.topic),
+  }),
+);
+export type StudentCuratedNote = typeof studentCuratedNotesTable.$inferSelect;
+
+/**
+ * Adaptive retests. When a graded paper is ingested, the server builds a
+ * follow-up test using only the wrong topics. The teacher schedules and
+ * administers it — usually paper-based — and later feeds the results
+ * back through `POST /v1/teacher-lens/paper-graded` referencing this
+ * retest session so the improvement is tracked.
+ */
+export const retestSessionsTable = pgTable(
+  "retest_sessions",
+  {
+    id: serial("id").primaryKey(),
+    student_code: text("student_code").notNull(),
+    source_paper_id: integer("source_paper_id").references(() => gradedPapersTable.id, {
+      onDelete: "set null",
+    }),
+    subject: text("subject"),
+    // "wrong-only" (v1), "difficulty-band" (end-of-term), "mixed" (hybrid).
+    strategy: text("strategy").notNull().default("wrong-only"),
+    // Difficulty band 1..5. Advances when the student passes at the
+    // current level; end-of-term exams draw from the student's current
+    // level, not the classroom baseline.
+    difficulty_level: integer("difficulty_level").notNull().default(1),
+    // pending | administered | passed | failed | archived
+    status: text("status").notNull().default("pending"),
+    generated_at: timestamp("generated_at").notNull().defaultNow(),
+    administered_at: timestamp("administered_at"),
+    result_paper_id: integer("result_paper_id"),
+    score_percent: integer("score_percent"),
+  },
+  (t) => ({
+    student_idx: index("retest_sessions_student_idx").on(t.student_code, t.status),
+  }),
+);
+export type RetestSession = typeof retestSessionsTable.$inferSelect;
+
+export const retestItemsTable = pgTable(
+  "retest_items",
+  {
+    id: serial("id").primaryKey(),
+    session_id: integer("session_id")
+      .notNull()
+      .references(() => retestSessionsTable.id, { onDelete: "cascade" }),
+    topic: text("topic").notNull(),
+    question_text: text("question_text").notNull(),
+    expected_answer: text("expected_answer"),
+    // If the item was authored by a real Qwen worker, this is set — helps
+    // us later score which topics the generator handles well.
+    generator: text("generator").notNull().default("rule-based-v1"),
+    difficulty_level: integer("difficulty_level").notNull().default(1),
+  },
+  (t) => ({
+    session_idx: index("retest_items_session_idx").on(t.session_id),
+  }),
+);
+export type RetestItem = typeof retestItemsTable.$inferSelect;
+
+/**
+ * Behavior observations during prep time / free periods. Cameras
+ * remain, audio-eavesdrop drops off (per the K9 design). The Youtu-VL
+ * worker emits observation rows via POST /v1/behavior/event; the
+ * weekly lesson-plan generator reads them to tailor advice per student.
+ * Category is a bounded enum so the UI can render without guessing.
+ */
+export const studentBehaviorObservationsTable = pgTable(
+  "student_behavior_observations",
+  {
+    id: serial("id").primaryKey(),
+    student_code: text("student_code").notNull(),
+    camera_id: text("camera_id"),
+    // FK to campus_zones is intentionally omitted — that table is
+    // maintained via raw SQL in presence-monitor.ts, not Drizzle.
+    zone_id: integer("zone_id"),
+    // "attentive" | "reading" | "writing" | "sleeping" | "idle" |
+    // "collaborating" | "drawing" | "restless" | "distracted"
+    category: text("category").notNull(),
+    // 0..100 — how confident the vision worker is about this classification.
+    confidence: integer("confidence").notNull().default(70),
+    // Short human-readable description ("appeared to be reading a textbook").
+    description: text("description"),
+    // The lesson context, if we know it (period_id + subject).
+    period_id: integer("period_id"),
+    subject: text("subject"),
+    // Free-form generator metadata (model version, frame refs).
+    metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
+    captured_at: timestamp("captured_at").notNull().defaultNow(),
+    created_at: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    student_time_idx: index("student_behavior_student_time_idx").on(t.student_code, t.captured_at),
+    category_idx: index("student_behavior_category_idx").on(t.category),
+  }),
+);
+export type StudentBehaviorObservation =
+  typeof studentBehaviorObservationsTable.$inferSelect;
+
+/**
+ * Personalized lesson plan the teacher can print. Weekly cadence —
+ * generated by aggregating the student's learning profile,
+ * curated notes, behavior observations, and open retests.
+ */
+export const personalizedLessonPlansTable = pgTable(
+  "personalized_lesson_plans",
+  {
+    id: serial("id").primaryKey(),
+    student_code: text("student_code").notNull(),
+    week_start: text("week_start").notNull(), // "YYYY-MM-DD" Monday
+    // Bullet list, markdown; sections are ["focus", "practice", "watch_out"].
+    plan_markdown: text("plan_markdown").notNull(),
+    // Data snapshot the plan was built from — reproducible + auditable.
+    snapshot: jsonb("snapshot").notNull().default(sql`'{}'::jsonb`),
+    generator: text("generator").notNull().default("rule-based-v1"),
+    generated_at: timestamp("generated_at").notNull().defaultNow(),
+    generated_by: integer("generated_by"),
+  },
+  (t) => ({
+    week_student_uk: uniqueIndex("personalized_lesson_plans_week_student_uk").on(
+      t.week_start,
+      t.student_code,
+    ),
+  }),
+);
+export type PersonalizedLessonPlan = typeof personalizedLessonPlansTable.$inferSelect;
+
+/**
+ * Auto-authored question bank. Every time a wrong-answer topic appears
+ * on graded_paper_items and doesn't have enough questions in the bank,
+ * a rule-based generator (later swapped for a Qwen worker) adds 3–5
+ * new questions on that topic at increasing difficulty. Feeds the
+ * retest builder + gives teachers a pool they can reuse.
+ */
+export const generatedQuestionsTable = pgTable(
+  "generated_questions",
+  {
+    id: serial("id").primaryKey(),
+    topic: text("topic").notNull(),
+    subject: text("subject"),
+    difficulty_level: integer("difficulty_level").notNull().default(1),
+    question_text: text("question_text").notNull(),
+    expected_answer: text("expected_answer"),
+    generator: text("generator").notNull().default("rule-based-v1"),
+    // How many times a teacher has used this question in a real retest —
+    // helps demote low-quality autogen entries over time.
+    used_count: integer("used_count").notNull().default(0),
+    created_at: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    topic_diff_idx: index("generated_questions_topic_diff_idx").on(t.topic, t.difficulty_level),
+  }),
+);
+export type GeneratedQuestion = typeof generatedQuestionsTable.$inferSelect;
+
+/**
+ * One row per generated magazine edition. `edition_type = "school"` is the
+ * whole-school newsletter (student_code IS NULL); `edition_type = "student"`
+ * is the personalised per-child version (student_code set). `week_start`
+ * anchors to the ISO Monday in the school TZ so re-runs during the same
+ * week update the same row.
+ */
+export const magazineEditionsTable = pgTable(
+  "magazine_editions",
+  {
+    id: serial("id").primaryKey(),
+    edition_type: text("edition_type").notNull(), // "school" | "student"
+    student_code: text("student_code"),
+    week_start: text("week_start").notNull(), // "YYYY-MM-DD" (Monday)
+    // Structured content — arrays of sections the UI can render.
+    content: jsonb("content").notNull().default(sql`'{}'::jsonb`),
+    generated_at: timestamp("generated_at").notNull().defaultNow(),
+    generated_by: integer("generated_by"),
+  },
+  (t) => ({
+    type_week_uk: uniqueIndex("magazine_editions_type_week_student_uk").on(
+      t.edition_type,
+      t.week_start,
+      t.student_code,
+    ),
+    week_idx: index("magazine_editions_week_idx").on(t.week_start),
+    student_idx: index("magazine_editions_student_idx").on(t.student_code, t.week_start),
+  }),
+);
+export type MagazineEdition = typeof magazineEditionsTable.$inferSelect;
 
 export const printJobsTable = pgTable("print_jobs", {
   id: serial("id").primaryKey(),
   job_ref: text("job_ref").notNull().unique(),
-  student_code: text("student_code").notNull(),
+  // Null for class handouts; set when staff print for one student.
+  student_code: text("student_code"),
   student_id: integer("student_id").references(() => usersTable.id, { onDelete: "set null" }),
+  requested_by: integer("requested_by").references(() => usersTable.id, { onDelete: "set null" }),
   document_id: integer("document_id"),
   document_name: text("document_name").notNull(),
   pages: integer("pages").notNull().default(1),
+  copies: integer("copies").notNull().default(1),
   printer_id: text("printer_id").notNull(),
   printer_name: text("printer_name"),
   status: text("status").notNull().default("queued"),
@@ -160,13 +609,6 @@ export const tenantsTable = pgTable(
     contact_phone: text("contact_phone"),
     active: boolean("active").notNull().default(true),
     students_cap: integer("students_cap").notNull().default(500),
-    // 32-byte hex secret used to verify watch HCE payloads for this school.
-    // When null, the api-server falls back to the WATCH_HCE_SECRET env var
-    // (legacy single-tenant deploys). Rotated via the admin secret-rotate
-    // endpoint; rotation requires re-building the watch APK for this school
-    // with the new value passed as `-PWATCH_HCE_SECRET=...`.
-    watch_hce_secret: text("watch_hce_secret"),
-    watch_hce_secret_rotated_at: timestamp("watch_hce_secret_rotated_at"),
     last_sync_at: timestamp("last_sync_at"),
     last_sync_ip: text("last_sync_ip"),
     created_at: timestamp("created_at").defaultNow().notNull(),
@@ -281,7 +723,7 @@ export type TenantUsageSnapshot = typeof tenantUsageSnapshotsTable.$inferSelect;
 //
 // Replaces the original hardcoded QUIZZES list in routes/quizzes.ts. The
 // route falls back to the legacy hardcoded set when the table is empty so
-// existing demos and watch builds keep working out of the box.
+// existing demos keep working out of the box.
 // ---------------------------------------------------------------------------
 
 export const quizzesTable = pgTable(
@@ -291,7 +733,7 @@ export const quizzesTable = pgTable(
     title: text("title").notNull(),
     subject: text("subject").notNull(),
     // Optional class scoping: if null, the quiz is globally visible. If set,
-    // /v1/watch/quizzes filters to quizzes whose class matches one of the
+    // /v1/quizzes filters to quizzes whose class matches one of the
     // student's enrolled classes.
     class_id: integer("class_id").references(() => classesTable.id, {
       onDelete: "set null",
@@ -331,7 +773,7 @@ export const quizQuestionsTable = pgTable(
 export type QuizQuestion = typeof quizQuestionsTable.$inferSelect;
 
 /**
- * Persistent record of one student's attempt at one quiz. Powers the watch
+ * Persistent record of one student's attempt at one quiz. Powers the quiz
  * leaderboard and the teacher's "who attempted what" view. Only the most
  * recent attempt counts toward leaderboard ranking (we MAX(score) per
  * student in the SELECT — a re-take that scored worse doesn't penalize them).
@@ -386,8 +828,8 @@ export type PushSubscription = typeof pushSubscriptionsTable.$inferSelect;
 
 // ---------------------------------------------------------------------------
 // Class timetable. Admins/teachers populate one row per period in a class's
-// weekly schedule. The watch app polls /v1/watch/timetable/current to learn
-// which subject is happening *right now* and vibrates when it changes.
+// weekly schedule. K9's presence monitor compares camera sightings against it
+// to know where each student should be *right now*.
 //
 // Time-of-day is stored as `start_minute` / `end_minute` (minutes from
 // midnight, 0..1439) — keeps comparisons trivial in SQL/JS without dragging
@@ -418,8 +860,8 @@ export type TimetablePeriod = typeof timetablePeriodsTable.$inferSelect;
 
 // ---------------------------------------------------------------------------
 // Exam sessions. A teacher acting as supervisor creates an exam against a
-// class. While it is `active`, every student watch in that class polls
-// /v1/watch/exam/active and switches to a fullscreen countdown until
+// class. While it is `active`, student clients in that class can read
+// /v1/student/exam/active and show a fullscreen countdown until
 // `ends_at`. The supervisor can pause (status=paused, remaining_seconds
 // captured), resume (recomputes ends_at), add time (pushes ends_at forward
 // or grows remaining_seconds when paused), and finish.
@@ -567,7 +1009,7 @@ export type StudentKp = typeof studentKpTable.$inferSelect;
 // provisioned yet. We can't look up a `user_id` and we can't fail the
 // payment over it, so we park the grant here keyed by `student_code` and
 // drain it the next time that student touches a KP-aware endpoint
-// (currently `GET /v1/watch/market/me`).
+// (currently `GET /v1/student/market/me`).
 //
 // Each row is at-most-once: when claimed, `claimed_at` and the resulting
 // `kp_ledger.id` are set in the same transaction that credits the
@@ -596,28 +1038,16 @@ export const kpPendingGrantsTable = pgTable(
 export type KpPendingGrant = typeof kpPendingGrantsTable.$inferSelect;
 
 // ===========================================================================
-// Parent ↔ Student linking + watch QR pairing
+// Parent ↔ Student linking
 // ===========================================================================
 //
 // A parent has its own user row (role="parent") and is linked to one or more
-// students via `parent_children`. Linking happens through one of:
-//
-//   1. CLAIM CODE: school issues a globally-unique code shaped like
-//      `<school-prefix>-XXXX-XXXX` (e.g. "MARI-7K3P-9XQ2"). Parent types or
-//      pastes the code, server hashes + looks up the row in `claim_codes`,
-//      consumes it, and inserts into `parent_children`. The school prefix
-//      means a parent with kids in 5 different schools never has collisions
-//      and the code is self-describing.
-//
-//   2. WATCH QR: the kid opens "Link Parent" on their watch, which calls
-//      POST /v1/watch/pairing/start. Server stores a fresh row in
-//      `parent_pairing_tokens` (random short token, 2-min TTL, single-use,
-//      bound to that student). Watch displays the token as a QR. Parent
-//      scans → POST /v1/parent/pairing/scan { token } consumes the row and
-//      links. Static QR on watch face would let bus passengers steal a
-//      child link; on-demand + short TTL kills that attack.
-//
-// Both paths converge on the same `parent_children` join table.
+// students via `parent_children`. Linking uses a CLAIM CODE: the school
+// issues a globally-unique code shaped like `<school-prefix>-XXXX-XXXX`
+// (e.g. "MARI-7K3P-9XQ2"). Parent types or pastes the code, server hashes +
+// looks up the row in `claim_codes`, consumes it, and inserts into
+// `parent_children`. The school prefix means a parent with kids in 5
+// different schools never has collisions and the code is self-describing.
 // ---------------------------------------------------------------------------
 
 export const parentChildrenTable = pgTable(
@@ -677,32 +1107,6 @@ export const claimCodesTable = pgTable(
   }),
 );
 export type ClaimCode = typeof claimCodesTable.$inferSelect;
-
-// Watch → parent pairing tokens. Random ~12-char base32 string. Hash stored.
-// 2-minute TTL by default; consumed_at flips on first successful scan.
-export const parentPairingTokensTable = pgTable(
-  "parent_pairing_tokens",
-  {
-    id: serial("id").primaryKey(),
-    token_hash: text("token_hash").notNull(),
-    student_user_id: integer("student_user_id")
-      .notNull()
-      .references(() => usersTable.id, { onDelete: "cascade" }),
-    tenant_id: integer("tenant_id")
-      .notNull()
-      .references(() => tenantsTable.id, { onDelete: "cascade" }),
-    expires_at: timestamp("expires_at").notNull(),
-    consumed_by: integer("consumed_by").references(() => usersTable.id, {
-      onDelete: "set null",
-    }),
-    consumed_at: timestamp("consumed_at"),
-    created_at: timestamp("created_at").defaultNow().notNull(),
-  },
-  (t) => ({
-    hash_idx: uniqueIndex("pairing_tokens_hash_idx").on(t.token_hash),
-  }),
-);
-export type ParentPairingToken = typeof parentPairingTokensTable.$inferSelect;
 
 // ===========================================================================
 // Stationery ordering
@@ -803,7 +1207,7 @@ export const stationeryOrdersTable = pgTable(
     parent_user_id: integer("parent_user_id").references(() => usersTable.id, {
       onDelete: "set null",
     }),
-    // Who drafted it: "teacher" | "student_watch" | "parent"
+    // Who drafted it: "teacher" | "parent"
     placed_by: text("placed_by").notNull().default("parent"),
     // draft | pending_parent_approval | approved | rejected | packed
     status: text("status").notNull().default("draft"),
@@ -853,7 +1257,7 @@ export type StationeryOrderItem = typeof stationeryOrderItemsTable.$inferSelect;
 // ===========================================================================
 // MINI-APP STORE — developer accounts, mini-apps, installs, purchases.
 // Apps are tiny JSON-defined experiences (flashcards, quizzes, readings,
-// counters, timers) rendered by a built-in runtime on the watch. Devs pay
+// counters, timers) rendered by the built-in KobeAI mini-app runtime. Devs pay
 // for an account and get revenue share when students pay for their apps.
 // ===========================================================================
 
@@ -1038,7 +1442,7 @@ export type MiniAppReview = typeof miniAppReviewsTable.$inferSelect;
 
 // =====================================================================
 // Ad Exchange — self-serve advertiser portal + cross-surface ad serving
-// (parent PWA banners, watch home tile, watch mini-app interstitials).
+// (parent PWA banners, mini-app interstitials).
 // =====================================================================
 
 /**
@@ -1107,7 +1511,7 @@ export type AdCampaign = typeof adCampaignsTable.$inferSelect;
 
 /**
  * Creatives (the actual rendered units). One campaign can have multiple,
- * one per format (banner image, native title+body, watch tile, etc.).
+ * one per format (banner image, native title+body, interstitial, etc.).
  * `format` matches placement.allowed_formats so the engine picks the right
  * creative per slot.
  */
@@ -1119,7 +1523,7 @@ export const adCreativesTable = pgTable(
       .notNull()
       .references(() => adCampaignsTable.id, { onDelete: "cascade" }),
     format: text("format").notNull(),
-    // banner|native|watch_tile|interstitial
+    // banner|native|interstitial
     title: text("title").notNull(),
     body: text("body"),
     image_url: text("image_url"),
@@ -1141,7 +1545,7 @@ export type AdCreative = typeof adCreativesTable.$inferSelect;
  */
 export const adPlacementsTable = pgTable("ad_placements", {
   id: text("id").primaryKey(), // e.g. parent_app_home
-  surface: text("surface").notNull(), // parent_app | watch | watch_miniapp
+  surface: text("surface").notNull(), // parent_app | miniapp
   description: text("description").notNull(),
   allowed_formats: jsonb("allowed_formats").notNull(), // string[]
   floor_bid_tsh: integer("floor_bid_tsh").default(0).notNull(),
@@ -1152,7 +1556,7 @@ export type AdPlacement = typeof adPlacementsTable.$inferSelect;
 /**
  * Every served ad creates an impression row. `charged_tsh` is non-zero only
  * for CPM and flat campaigns (clicks for CPC charge on the click event).
- * `user_id` is nullable since some surfaces (e.g. watch home) may serve
+ * `user_id` is nullable since some surfaces (e.g. shared displays) may serve
  * pre-login.
  */
 export const adImpressionsTable = pgTable(

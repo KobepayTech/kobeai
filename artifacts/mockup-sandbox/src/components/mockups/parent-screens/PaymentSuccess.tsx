@@ -141,7 +141,7 @@ function PaymentSuccessScreen() {
             </div>
             <div className="text-[20px] font-bold leading-tight">+100 KP</div>
             <div className="text-[10px] opacity-90">
-              Your child will see this on their watch instantly.
+              Credited to your child's KobeAI account instantly.
             </div>
           </div>
         </div>

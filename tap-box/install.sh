@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# KobeAI Tap-Box installer for Raspberry Pi OS (Debian 12+)
+# KobeAI print agent (tap-box) installer for Raspberry Pi OS (Debian 12+)
 # Run as root on a fresh Pi:   sudo bash install.sh
 # =============================================================================
 set -euo pipefail
@@ -18,8 +18,7 @@ echo "==> Installing system packages"
 apt-get update
 apt-get install -y --no-install-recommends \
   python3 python3-venv python3-pip \
-  cups cups-bsd cups-client printer-driver-all \
-  libusb-1.0-0 libnfc-bin libnfc-dev pcscd pcsc-tools
+  cups cups-bsd cups-client printer-driver-all
 
 echo "==> Allowing 'pi' user to manage CUPS"
 usermod -aG lpadmin pi 2>/dev/null || true
@@ -31,18 +30,17 @@ cp "$SCRIPT_DIR/tap_box_daemon.py" "$INSTALL_DIR/"
 echo "==> Creating Python virtualenv"
 python3 -m venv "$INSTALL_DIR/venv"
 "$INSTALL_DIR/venv/bin/pip" install --upgrade pip
-"$INSTALL_DIR/venv/bin/pip" install requests nfcpy
+"$INSTALL_DIR/venv/bin/pip" install requests
 
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "==> Writing default config to $ENV_FILE (edit before starting)"
   cat > "$ENV_FILE" <<EOF
-# KobeAI Tap-Box configuration
+# KobeAI print agent configuration
 KOBEAI_API_BASE=http://192.168.1.100:8000
 KOBEAI_TAP_BOX_ID=tap-lib-1
 KOBEAI_PRINTER_ID=printer-lib-01
 KOBEAI_CUPS_PRINTER=Epson_L3250
 KOBEAI_TAP_BOX_SECRET=change-me-to-match-the-server
-KOBEAI_NFC_PATH=usb
 KOBEAI_POLL_INTERVAL_S=1.5
 EOF
 fi
@@ -50,7 +48,7 @@ fi
 echo "==> Installing systemd service"
 cat > /etc/systemd/system/kobeai-tap-box.service <<EOF
 [Unit]
-Description=KobeAI Tap-Box NFC + Print daemon
+Description=KobeAI print agent
 After=network-online.target cups.service
 Wants=network-online.target cups.service
 
@@ -72,7 +70,7 @@ systemctl enable kobeai-tap-box.service
 cat <<DONE
 
 ================================================================
-KobeAI Tap-Box installed.
+KobeAI print agent installed.
 
 Next steps:
   1. Edit  $ENV_FILE  with your real API URL, secrets, and printer name.

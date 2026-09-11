@@ -1,6 +1,6 @@
 # Overview
 
-KobeAI is a pnpm workspace monorepo using TypeScript, designed to build a comprehensive educational ecosystem. The project aims to provide an integrated solution for schools, including a teacher dashboard, parent application, and a Wear OS watch app for students. Key features include AI-powered tutoring, quiz management, attendance tracking, secure printing, and a multi-tenant control plane for managing schools and student subscriptions. The business vision is to empower schools with modern, accessible tools for enhanced learning and administration, with market potential in educational technology sectors.
+KobeAI is a pnpm workspace monorepo using TypeScript, designed to build a comprehensive educational ecosystem. The project aims to provide an integrated solution for schools, including a teacher dashboard, parent application, classroom TV displays, and the teacher-worn Teacher Lens. Students do not carry devices: K9 identifies them through school cameras. Key features include AI-powered classroom assistance, quiz management, camera-based attendance, staff-initiated printing, and a multi-tenant control plane for managing schools and student subscriptions. The business vision is to empower schools with modern, accessible tools for enhanced learning and administration, with market potential in educational technology sectors.
 
 # User Preferences
 
@@ -12,11 +12,11 @@ I prefer iterative development, with a focus on delivering functional components
 
 ## Question market (KP economy)
 - Tables: `market_questions`, `question_locks`, `kp_ledger`, `student_kp` (see `lib/db/src/schema/index.ts`).
-- Routes mounted at `/api/v1/watch/market/*` (student JWT). Lock cost = 10 KP, lock duration = 5 min, configurable in `routes/market.ts`.
+- Routes mounted at `/api/v1/student/market/*` (student JWT). Lock cost = 10 KP, lock duration = 5 min, configurable in `routes/market.ts`.
 - Atomicity: every KP write happens inside a Drizzle transaction that updates `student_kp` AND inserts a `kp_ledger` row in the same tx. The ledger is the audit trail; `student_kp.balance` is the denormalized fast-read.
 - Stale locks (expired but not released) are self-healed on the next lock attempt against that question, and hidden by `/questions` reads.
 - Membership KP grant: every successful M-Pesa payment in `central.ts:completePayment` credits `MEMBERSHIP_KP_GRANT` (default 100 KP) inside the same transaction that flips the payment to `success`. If the `users` row doesn't exist yet (student paid for but not provisioned), the grant is parked in `kp_pending_grants` keyed by `student_code` and drained later — see below.
-- Pending-grant drain (`lib/kp.ts:drainPendingGrants`): at-most-once, race-safe via `FOR UPDATE SKIP LOCKED` + a `WHERE claimed_at IS NULL` CAS. Triggered from two places: (a) `GET /v1/watch/market/me` so the student sees credits the moment they open the market, and (b) fire-and-forget on `GET /v1/watch/subscription` so polling watches deliver pending grants even if the student never opens the market. Both are no-ops (one indexed pre-check) when nothing is pending.
+- Pending-grant drain (`lib/kp.ts:drainPendingGrants`): at-most-once, race-safe via `FOR UPDATE SKIP LOCKED` + a `WHERE claimed_at IS NULL` CAS. Triggered from `GET /v1/student/market/me` so the student sees credits the moment they open the market. It is a no-op (one indexed pre-check) when nothing is pending.
 
 # System Architecture
 
@@ -28,10 +28,10 @@ The project is a pnpm workspace monorepo, with each package managing its own dep
 - **Database**: PostgreSQL with Drizzle ORM for schema management.
 - **Validation**: Zod for schema validation.
 - **API Codegen**: Orval is used to generate API hooks and Zod schemas from an OpenAPI specification.
-- **Authentication**: JWT bearer tokens are used for most routes, with role-based access control managed by `requireAuth` middleware. Tap-box endpoints use `x-tap-box-secret`.
+- **Authentication**: JWT bearer tokens are used for most routes, with role-based access control managed by `requireAuth` middleware. Print-agent (tap-box) endpoints use `x-tap-box-secret`.
 - **Data Model**: Core entities include `users`, `classes`, `class_memberships`, `documents`, and `document_assignments`.
 - **Document Management**: Teachers upload documents via presigned object-storage URLs, register them, and assign them to classes with optional scheduling (`scheduled_at`, `expires_at`).
-- **PrintStore**: Pluggable store for print pairings, jobs, and nonces. `RedisStore` provides persistence and atomic operations, while `MemoryStore` serves as an in-process fallback for development.
+- **PrintStore**: Pluggable store for live print jobs queued by staff (`POST /v1/print/jobs`). `RedisStore` provides persistence and atomic operations, while `MemoryStore` serves as an in-process fallback for development.
 - **Payment System**: Integrates with M-Pesa STK push for subscription payments. The system handles payment initiation, status tracking, and subscription renewal with idempotency.
 - **Object Storage**: Requires configuration for `DEFAULT_OBJECT_STORAGE_BUCKET_ID`, `PUBLIC_OBJECT_SEARCH_PATHS`, and `PRIVATE_OBJECT_DIR`.
 
@@ -57,9 +57,8 @@ The project is a pnpm workspace monorepo, with each package managing its own dep
 ## Parent App
 - **Technology**: React-based frontend.
 - **Features**:
-    - **Print Page**: Shows documents assigned to children's classes, mirroring the watch app's print picker. Includes print history.
-    - **Print History Page**: Displays a chronological log of print jobs with status and page counts.
-    - **Watch Settings Page**: Allows parents to control child-specific watch settings like `audio_enabled` and `keyboard_enabled`.
+    - **Print Page**: Shows documents assigned to children's classes. Includes print history.
+    - **Print History Page**: Displays a chronological log of handouts staff printed for the child, with status and page counts.
 - **UI/UX**: Features a bottom-nav tab for "Print" and a "View print history" pill.
 
 ## Offline AI (Ollama Integration)
@@ -80,16 +79,10 @@ The project is a pnpm workspace monorepo, with each package managing its own dep
     - `GET /central/v1/admin/kp/ledger?limit=&tenant_id=` — append-only ledger with school resolution via a `LATERAL` subquery on `student_subscriptions` (tenant filter is applied in SQL so paging stays correct).
 - **Parent app payment success**: `GET /central/v1/payments/:id` returns `kp_granted` (defaults to `MEMBERSHIP_KP_GRANT=100` env var when payment status is `success`) so the parent app can render a "+100 KP Bonus" card after a successful subscription.
 
-## Wear OS Watch App (`watch-app/`)
-- **Technology**: Kotlin / Jetpack Compose for Wear OS. This component does not build within the Replit environment.
-- **Backend Contract**: Interacts with `/api/v1/watch/*` endpoints for login, AI, quizzes, attendance, wallet, subscriptions, and settings.
-- **Features**:
-    - **Quizzes**: DB-backed quizzes with class-scoped visibility, submission persistence, and leaderboard functionality.
-    - **AI Chat**: AI tutor with text input (Bluetooth keyboard support) and spoken replies (TTS, Swahili-first).
-    - **Timetable Tile**: Home-screen entry showing today's periods with NOW highlight (`/v1/watch/timetable/today`).
-    - **Exam Takeover**: Background poller (10s) checks `/v1/watch/exam/active`; when a supervisor starts an exam, ANY screen auto-navigates to a fullscreen countdown (color shifts at 5min / 1min thresholds, ticks locally between server polls).
-    - **Bluetooth Setup**: Wizard for pairing earbuds and keyboards.
-    - **Parent-Controlled Settings**: `student_settings` table allows parents to toggle `audio_enabled` and `keyboard_enabled` on the watch.
+## K9 clients
+- **No student devices**: the Wear OS watch app and `/api/v1/watch/*` were removed. Students are identified by cameras and served through the classroom PC + TV.
+- **Classroom TV** (`artifacts/classroom-tv`), **Teacher Lens** (`artifacts/teacher-lens`), and the **print agent** (`tap-box/`) are the LAN clients. Non-camera clients register via `/api/v1/devices/*`.
+- Student-JWT reads that remain (timetable, active exam, question market) live under `/api/v1/student/*` for shared school PCs.
 
 ## Ad Exchange (self-serve)
 
@@ -115,8 +108,6 @@ accepted by the ads-server's admin endpoints.
 - **Clients**:
     - Advertiser Portal artifact (`artifacts/advertiser-portal`).
     - Parent app `<AdBanner>` mounted on dashboard + stationery pages.
-    - Watch `AdHomeTile` on home menu + `AdInterstitialScreen` shown before
-      mini-app launch via `ads/interstitial/{appId}` route.
     - Developer Portal `/ads-admin` page (admin login → moderate campaigns +
       view exchange revenue).
 
@@ -136,9 +127,7 @@ accepted by the ads-server's admin endpoints.
 - **Ollama**: Local LLM provider for offline AI capabilities.
 - **M-Pesa STK Push**: Mobile payment gateway for subscription payments.
 - **GitHub**: Version control system and CI/CD integration.
-- **Android Studio**: IDE for Wear OS watch app development.
-- **Kotlin / Jetpack Compose**: Technologies for Wear OS watch app development.
-- **`x-tap-box-secret`**: Custom authentication mechanism for tap-box endpoints.
+- **`x-tap-box-secret`**: Custom authentication mechanism for print-agent (tap-box) endpoints.
 - **JWT**: JSON Web Tokens for authentication.
 
 # Planned KobeAI Distributed Runtime
@@ -160,7 +149,7 @@ KobeAI should **not** replace its model/intent router with PAIR. The responsibil
 Proposed request path:
 
 ```text
-Watch / Teacher Dashboard / School TV / API client
+Teacher Lens / Teacher Dashboard / Classroom TV / API client
                     |
                     v
               KobeAI AI Router
@@ -325,7 +314,7 @@ The longer-term router should support the following behavior without forcing eve
 - Add a PAIR provider using its compatible proxy API rather than embedding the PAIR source tree.
 - Add health/fallback logic and School AI admin diagnostics.
 - Test one-node, two-node, node-offline, missing-model, and overloaded-node scenarios.
-- Confirm streaming behavior end-to-end from PAIR through Express to the watch/dashboard clients.
+- Confirm streaming behavior end-to-end from PAIR through Express to the classroom/dashboard clients.
 
 ### Phase 3 — Router v2
 - Add intent/capability routing, parallel tool execution, caching, latency telemetry, and model-warmth awareness.

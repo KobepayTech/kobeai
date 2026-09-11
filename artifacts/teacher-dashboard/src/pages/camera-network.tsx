@@ -78,11 +78,11 @@ export default function CameraNetwork() {
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Camera Network</h1>
         <p className="text-muted-foreground mt-1">
-          K-9 discovers the school LAN; KobeVision uses claimed camera streams for live attendance and location evidence.
+          Camera Network Discovery finds NVRs and cameras on the school LAN; claimed streams feed the live attendance engine.
         </p>
         {summary.data?.last_scan?.scanned_at && (
           <p className="text-xs text-muted-foreground mt-2">
-            Last K-9 scan {new Date(summary.data.last_scan.scanned_at).toLocaleString()}
+            Last discovery scan {new Date(summary.data.last_scan.scanned_at).toLocaleString()}
             {summary.data.last_scan.cidr ? ` · ${summary.data.last_scan.cidr}` : ""}
           </p>
         )}
@@ -114,7 +114,7 @@ export default function CameraNetwork() {
                   <TableHead>Vendor / type</TableHead>
                   <TableHead>Flags</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead>KobeVision</TableHead>
+                  <TableHead>Attendance stream</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -169,16 +169,16 @@ export default function CameraNetwork() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Why K-9 and KobeVision are separate</CardTitle>
+          <CardTitle>How the camera network is used</CardTitle>
         </CardHeader>
         <CardContent className="grid gap-4 md:grid-cols-2 text-sm">
           <div className="rounded-lg border p-4">
-            <div className="font-semibold mb-1">K-9 · network truth</div>
-            <p className="text-muted-foreground">Finds devices, identifies cameras/NVRs, tracks online/offline state, new devices, exposed services and CCTV-network security changes.</p>
+            <div className="font-semibold mb-1">Network discovery</div>
+            <p className="text-muted-foreground">Finds devices, identifies cameras and recorders, tracks online / offline state, new devices, exposed services and CCTV-network security changes.</p>
           </div>
           <div className="rounded-lg border p-4">
-            <div className="font-semibold mb-1">KobeVision · video truth</div>
-            <p className="text-muted-foreground">Opens the claimed live stream, checks frames, detects/recognizes faces and sends student sightings to the timetable-aware presence engine.</p>
+            <div className="font-semibold mb-1">Attendance stream</div>
+            <p className="text-muted-foreground">Opens the claimed live stream, checks frames, detects and recognises faces, and sends student sightings to the timetable-aware presence engine.</p>
           </div>
         </CardContent>
       </Card>
