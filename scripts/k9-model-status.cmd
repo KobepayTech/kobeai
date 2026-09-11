@@ -21,11 +21,12 @@ if not exist "%ROOT%" (
   exit /b 2
 )
 
-REM Existing local text models
-call :REQFILE "DeepSeek" "C:\KobeOS\Models\deepseek.gguf"
-call :REQFILE "Llama3" "C:\KobeOS\Models\llama3.gguf"
-call :REQFILE "Mistral" "C:\KobeOS\Models\mistral.gguf"
-call :REQFILE "Phi3" "C:\KobeOS\Models\phi3.gguf"
+REM Runtime-local text models. These are the exact paths used by k9-runtime.
+call :REQFILE "Qwen"     "%ROOT%\brain\existing\qwen.gguf"
+call :REQFILE "DeepSeek" "%ROOT%\brain\existing\deepseek.gguf"
+call :REQFILE "Llama3"   "%ROOT%\brain\existing\llama3.gguf"
+call :REQFILE "Mistral"  "%ROOT%\brain\existing\mistral.gguf"
+call :REQFILE "Phi3"     "%ROOT%\brain\existing\phi3.gguf"
 
 REM Tencent agents / vision / memory / OCR
 call :REQDIR "Tencent Youtu-LLM-2B" "%ROOT%\tencent\agents\youtu-llm-2b"
@@ -60,6 +61,7 @@ call :REQDIR "Kokoro-82M" "%ROOT%\tts\kokoro-82m"
 call :REQDIR "Piper Swahili" "%ROOT%\tts\piper-swahili"
 
 REM Optional / benchmark / hardware-tier models
+call :OPTDIR "Qwen3-VL-8B" "%ROOT%\brain\qwen3-vl-8b"
 call :OPTDIR "PP-OCRv6 tiny detector" "%ROOT%\ocr\pp-ocr-v6-tiny-det"
 call :OPTDIR "PP-OCRv6 tiny recognizer" "%ROOT%\ocr\pp-ocr-v6-tiny-rec"
 call :OPTDIR "PP-OCRv6 small detector" "%ROOT%\ocr\pp-ocr-v6-small-det"
@@ -78,10 +80,14 @@ echo Required ready: %REQUIRED_READY% / %REQUIRED_TOTAL%
 echo Optional ready: %OPTIONAL_READY% / %OPTIONAL_TOTAL%
 
 if %REQUIRED_READY% EQU %REQUIRED_TOTAL% (
-  echo [READY] Required K9 model stack is present.
+  echo [READY] Required K9 model stack is present at runtime paths.
   exit /b 0
 ) else (
-  echo [NOT READY] One or more required K9 components are missing.
+  echo [NOT READY] One or more required K9 runtime components are missing.
+  if not exist "%ROOT%\brain\existing\qwen.gguf" if exist "C:\KobeOS\Models\qwen.gguf" (
+    echo [FIX ] Existing Qwen found outside runtime root.
+    echo        Run scripts\link-k9-qwen-runtime.cmd
+  )
   echo Check C:\KobeOS\Models\k9\download_failures.txt
   exit /b 1
 )
