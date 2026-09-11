@@ -1,0 +1,3 @@
+# Optional: only required when K9 should load TitaNet or pyannote locally.
+nemo_toolkit[asr]>=2.0,<3
+pyannote.audio>=3.3,<5
