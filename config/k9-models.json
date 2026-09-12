@@ -35,7 +35,10 @@
     "ollama": {
       "note": "K9's brain runs through Ollama, built from the registry files below by `node scripts/k9-models.mjs ollama-sync`. The api-server uses the first of these that Ollama has; OLLAMA_MODEL pins one instead.",
       "text_model": "qwen3_vl_8b",
-      "text_fallbacks": ["qwen", "mistral", "llama3", "phi3", "deepseek"]
+      "text_fallbacks": ["qwen", "mistral", "llama3", "phi3", "deepseek"],
+      "vision_note": "Models that can read a picture. The paper reader (photographed class lists and subject-option sheets) and any image question go here; a school without one types the names in by hand instead.",
+      "vision_model": "qwen3_vl_8b",
+      "vision_fallbacks": []
     }
   },
   "layout": {

@@ -37,6 +37,9 @@ import studentDevelopmentRouter from "./student-development";
 import localObjectsRouter from "./local-objects";
 import resultsRouter from "./results";
 import facesRouter from "./faces";
+import setupRouter from "./setup";
+import onboardingRouter from "./onboarding";
+import marketAgentRouter from "./market-agent";
 
 const router: IRouter = Router();
 
@@ -83,5 +86,8 @@ router.use(studentDevelopmentRouter);
 router.use(localObjectsRouter);
 router.use(resultsRouter);
 router.use(facesRouter);
+router.use(setupRouter);
+router.use(onboardingRouter);
+router.use(marketAgentRouter);
 
 export default router;

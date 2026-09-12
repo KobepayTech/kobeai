@@ -936,10 +936,30 @@ export const marketQuestionsTable = pgTable(
     released_at: timestamp("released_at").defaultNow().notNull(),
     expires_at: timestamp("expires_at"), // null = no global deadline
     created_at: timestamp("created_at").defaultNow().notNull(),
+
+    // --- Market-maker agent provenance -------------------------------------
+    // Everything below is written by the question-market agent
+    // (artifacts/api-server/src/lib/market-agent.ts). Rows an operator typed
+    // by hand keep `source = 'admin'` and leave the rest null.
+    topic: text("topic"), // "Newton's laws", "quadratic equations", …
+    difficulty: text("difficulty"), // 'easy' | 'medium' | 'hard'
+    form_level: text("form_level"), // "Form 1".."Form 6", null = any
+    source: text("source").notNull().default("admin"), // 'admin' | 'agent'
+    model: text("model"), // model that wrote it, e.g. "k9-qwen3-vl:latest"
+    agent_run_id: integer("agent_run_id"),
+    explanation: text("explanation"), // shown after a student answers
+    // Normalised hash of the prompt, so the agent never mints the same
+    // question twice. Null for legacy/admin rows (unique allows many nulls).
+    fingerprint: text("fingerprint"),
+    // 'approved' goes straight to the floor; 'pending' waits for a human;
+    // 'rejected' failed the agent's own verification pass.
+    review_status: text("review_status").notNull().default("approved"),
   },
   (t) => ({
     status_idx: index("market_q_status_idx").on(t.status),
     subject_idx: index("market_q_subject_idx").on(t.subject),
+    fingerprint_idx: uniqueIndex("market_q_fingerprint_idx").on(t.fingerprint),
+    review_idx: index("market_q_review_idx").on(t.review_status),
   }),
 );
 export type MarketQuestion = typeof marketQuestionsTable.$inferSelect;
@@ -1648,3 +1668,222 @@ export const adFrequencyCapsTable = pgTable(
   }),
 );
 export type AdFrequencyCap = typeof adFrequencyCapsTable.$inferSelect;
+
+// ===========================================================================
+// Question-market agent
+// ===========================================================================
+//
+// The market is no longer hand-stocked. A K9 agent (see
+// artifacts/api-server/src/lib/market-agent.ts) runs a cycle every few
+// minutes against the school's own models and:
+//
+//   1. reads the floor          — how many open questions per subject, how
+//                                 fast they are being won, which ones nobody
+//                                 has touched;
+//   2. reads the school         — weak topics rolled up in
+//                                 student_learning_profile, subjects the
+//                                 roster actually takes (student_subjects);
+//   3. plans                    — how many questions to mint, per subject,
+//                                 topic and difficulty;
+//   4. writes and verifies      — generates each question, re-solves it in a
+//                                 second pass, drops anything the two passes
+//                                 disagree on;
+//   5. prices                   — kp_reward from difficulty × scarcity;
+//   6. sweeps                   — expires stale questions and releases dead
+//                                 locks so the floor never silts up.
+//
+// One row per cycle, so an operator can see exactly what the agent did and
+// why — the market spends real KP, so it is never a black box.
+// ---------------------------------------------------------------------------
+export const marketAgentRunsTable = pgTable(
+  "market_agent_runs",
+  {
+    id: serial("id").primaryKey(),
+    // 'schedule' (the in-process timer) | 'manual' (an operator pressed Run)
+    // | 'restock' (floor dropped below the per-subject floor mid-cycle)
+    trigger: text("trigger").notNull().default("schedule"),
+    // 'running' | 'ok' | 'partial' | 'failed'
+    status: text("status").notNull().default("running"),
+    model: text("model"), // model the generation pass used, null when rule-based
+    plan: jsonb("plan"), // [{ subject, topic, difficulty, count, reason }]
+    generated: integer("generated").notNull().default(0),
+    accepted: integer("accepted").notNull().default(0),
+    rejected: integer("rejected").notNull().default(0),
+    expired: integer("expired").notNull().default(0),
+    locks_released: integer("locks_released").notNull().default(0),
+    notes: text("notes"),
+    error: text("error"),
+    started_at: timestamp("started_at").defaultNow().notNull(),
+    finished_at: timestamp("finished_at"),
+  },
+  (t) => ({
+    started_idx: index("market_agent_runs_started_idx").on(t.started_at),
+  }),
+);
+export type MarketAgentRun = typeof marketAgentRunsTable.$inferSelect;
+
+// Operator-tunable knobs for the agent. Singleton row (id = 1) so the
+// dashboard can edit it without a deploy; defaults below are what a school
+// gets on first boot.
+export const marketAgentSettingsTable = pgTable("market_agent_settings", {
+  id: integer("id").primaryKey().default(1),
+  enabled: boolean("enabled").notNull().default(true),
+  // How many open, approved questions the agent tries to keep per subject.
+  floor_per_subject: integer("floor_per_subject").notNull().default(6),
+  // Hard ceiling on the whole open floor, so a runaway loop can't mint forever.
+  max_open_questions: integer("max_open_questions").notNull().default(120),
+  // Minutes between scheduled cycles. 0 disables the timer (manual only).
+  cycle_minutes: integer("cycle_minutes").notNull().default(15),
+  // Questions nobody has won after this many hours get expired by the sweep.
+  stale_hours: integer("stale_hours").notNull().default(48),
+  // KP band the pricing step is allowed to use.
+  reward_min: integer("reward_min").notNull().default(50),
+  reward_max: integer("reward_max").notNull().default(1500),
+  // When true the agent parks new questions at review_status='pending' and a
+  // human approves them before students ever see them.
+  human_review: boolean("human_review").notNull().default(false),
+  subjects: jsonb("subjects").notNull().default(sql`'[]'::jsonb`), // string[]; empty = derive from the roster
+  updated_at: timestamp("updated_at").defaultNow().notNull(),
+});
+export type MarketAgentSettings = typeof marketAgentSettingsTable.$inferSelect;
+
+// ===========================================================================
+// School setup, staff onboarding and paper intake
+// ===========================================================================
+//
+// A school server ships with NO accounts. The person installing it opens the
+// dashboard, types the school name and picks a setup password, and that call
+// creates the tenant plus the first school administrator. The operator
+// (KobepayTech) console is a different thing entirely: it is never part of
+// the school install, and only appears when the server was started with
+// K9_OPERATOR_SECRET and someone presents it (see routes/setup.ts).
+// ---------------------------------------------------------------------------
+export const schoolSetupTable = pgTable("school_setup", {
+  id: integer("id").primaryKey().default(1),
+  school_name: text("school_name").notNull(),
+  // Argon/bcrypt hash of the setup password chosen during install. It is the
+  // break-glass credential for re-running setup steps, NOT a login.
+  setup_password_hash: text("setup_password_hash").notNull(),
+  tenant_id: integer("tenant_id").references(() => tenantsTable.id, { onDelete: "set null" }),
+  region: text("region"),
+  motto: text("motto"),
+  // Set once the install wizard finished. While null the dashboard shows the
+  // wizard instead of the app.
+  completed_at: timestamp("completed_at"),
+  completed_by: integer("completed_by").references(() => usersTable.id, { onDelete: "set null" }),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
+export type SchoolSetup = typeof schoolSetupTable.$inferSelect;
+
+// A QR code a teacher scans with their own phone. Scanning opens the
+// personalisation form (name, age band, subjects, nickname, how K9 should
+// talk to them); submitting it mints the teacher's account. The token itself
+// is never stored — only its SHA-256 hash — so a database dump can't be
+// turned into working staff logins.
+export const teacherInvitesTable = pgTable(
+  "teacher_invites",
+  {
+    id: serial("id").primaryKey(),
+    token_hash: text("token_hash").notNull(),
+    label: text("label"), // "Form 2 staff room", printed under the QR
+    role: text("role").notNull().default("teacher"), // 'teacher' | 'admin'
+    issued_by: integer("issued_by").references(() => usersTable.id, { onDelete: "set null" }),
+    max_uses: integer("max_uses").notNull().default(1),
+    uses: integer("uses").notNull().default(0),
+    expires_at: timestamp("expires_at").notNull(),
+    revoked_at: timestamp("revoked_at"),
+    last_used_at: timestamp("last_used_at"),
+    created_at: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    token_idx: uniqueIndex("teacher_invites_token_idx").on(t.token_hash),
+  }),
+);
+export type TeacherInvite = typeof teacherInvitesTable.$inferSelect;
+
+// What the teacher chose on the QR form. K9 reads this every time it speaks
+// to them: the nickname it calls them, the language it briefs them in, how
+// long the whisper should be.
+export const staffProfilesTable = pgTable("staff_profiles", {
+  user_id: integer("user_id")
+    .primaryKey()
+    .references(() => usersTable.id, { onDelete: "cascade" }),
+  nickname: text("nickname"), // "Mwalimu Stephen" — what K9 calls them out loud
+  age_band: text("age_band"), // '18-24' | '25-34' | '35-44' | '45-54' | '55+'
+  language: text("language").notNull().default("sw"), // 'sw' | 'en'
+  // How they teach — the agent uses it to pitch explanations and lesson plans.
+  teaching_style: text("teaching_style"), // 'examples' | 'drill' | 'discussion' | 'visual'
+  subjects: jsonb("subjects").notNull().default(sql`'[]'::jsonb`), // string[]
+  classes: jsonb("classes").notNull().default(sql`'[]'::jsonb`), // string[] e.g. ["Form 2A"]
+  briefing_length: text("briefing_length").notNull().default("short"), // 'short' | 'normal' | 'detailed'
+  voice: text("voice"), // preferred TTS voice id
+  // Where they are in the onboarding walk: 'profile' → 'roster' → 'faces'
+  // → 'subjects' → 'done'.
+  onboarding_step: text("onboarding_step").notNull().default("profile"),
+  invite_id: integer("invite_id").references(() => teacherInvitesTable.id, { onDelete: "set null" }),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+  updated_at: timestamp("updated_at").defaultNow().notNull(),
+});
+export type StaffProfile = typeof staffProfilesTable.$inferSelect;
+
+// A photo (or scanned page) of a printed class list or subject-option sheet
+// that the teacher shot with their phone. The vision model reads it, the
+// agent structures it into rows, the teacher checks the preview, then
+// commits — which is what actually creates students / subject rows.
+//
+// Nothing is written into `users` until `committed_at` is set: the OCR pass
+// is always a proposal a human approves.
+export const paperImportsTable = pgTable(
+  "paper_imports",
+  {
+    id: serial("id").primaryKey(),
+    kind: text("kind").notNull(), // 'roster' | 'subjects'
+    // 'uploaded' → 'reading' → 'parsed' → 'committed', or 'failed'
+    status: text("status").notNull().default("uploaded"),
+    uploaded_by: integer("uploaded_by").references(() => usersTable.id, { onDelete: "set null" }),
+    class_name: text("class_name"), // "Form 2A" — the class the sheet belongs to
+    form_level: text("form_level"), // "Form 2"
+    page_count: integer("page_count").notNull().default(1),
+    ocr_text: text("ocr_text"), // raw text the vision model read back
+    // Structured proposal the teacher edits before committing.
+    // roster:   [{ name, student_code?, sex?, stream?, confidence }]
+    // subjects: [{ name, subjects: string[], confidence }]
+    parsed: jsonb("parsed").notNull().default(sql`'[]'::jsonb`),
+    model: text("model"),
+    error: text("error"),
+    created_count: integer("created_count").notNull().default(0),
+    updated_count: integer("updated_count").notNull().default(0),
+    committed_at: timestamp("committed_at"),
+    created_at: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    kind_idx: index("paper_imports_kind_idx").on(t.kind, t.status),
+  }),
+);
+export type PaperImport = typeof paperImportsTable.$inferSelect;
+
+// Which subjects a student actually takes. Form 3 splits into science / arts
+// streams, so "everyone sits every paper" is wrong from Form 3 up: the
+// timetable engine, the exam results view and the market agent all read this
+// so a student is never quizzed on a subject they dropped.
+export const studentSubjectsTable = pgTable(
+  "student_subjects",
+  {
+    student_id: integer("student_id")
+      .notNull()
+      .references(() => usersTable.id, { onDelete: "cascade" }),
+    subject: text("subject").notNull(),
+    // 'manual' (typed by staff) | 'paper' (read off a photographed sheet)
+    source: text("source").notNull().default("manual"),
+    paper_import_id: integer("paper_import_id").references(() => paperImportsTable.id, {
+      onDelete: "set null",
+    }),
+    confidence: integer("confidence"), // 0-100, how sure the reader was
+    created_at: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.student_id, t.subject] }),
+    subject_idx: index("student_subjects_subject_idx").on(t.subject),
+  }),
+);
+export type StudentSubject = typeof studentSubjectsTable.$inferSelect;

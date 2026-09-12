@@ -9,6 +9,7 @@ import { startPresenceMonitor } from "./lib/presence-monitor";
 import { startLearningProfileScheduler } from "./lib/learning-profile";
 import { startMagazineScheduler } from "./lib/magazine";
 import { startLessonPlanScheduler } from "./lib/student-development";
+import { startMarketAgent } from "./lib/market-agent";
 import { startDailyDigest } from "./routes/parent-push";
 import { bootstrapK9School } from "./lib/k9-bootstrap";
 import { mountWebSurfaces } from "./lib/web-host";
@@ -88,4 +89,5 @@ app.listen(port, async (err) => {
   startLearningProfileScheduler();
   startMagazineScheduler();
   startLessonPlanScheduler();
+  startMarketAgent();
 });

@@ -1,11 +1,12 @@
 import { Router } from "express";
-import { and, desc, eq, gt, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import {
   db,
   marketQuestionsTable,
   questionLocksTable,
   kpLedgerTable,
   studentKpTable,
+  studentSubjectsTable,
   usersTable,
 } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
@@ -74,8 +75,25 @@ router.get("/v1/student/market/me", async (req, res) => {
  * GET /v1/student/market/questions
  * Lists open + locked questions (locked ones still visible so others can see
  * what's being worked on), with the active lock's owner + expiry attached.
+ *
+ * Two filters the market-maker agent depends on:
+ *   - only `review_status = 'approved'` questions are ever shown, so a school
+ *     running the agent in human-review mode holds drafts back from students;
+ *   - once a student's subject options have been recorded (the Form 3+ split
+ *     between science and arts), they only see subjects they actually take.
+ *     A student with no recorded options sees everything, which is the right
+ *     default for Form 1 and 2.
  */
-router.get("/v1/student/market/questions", async (_req, res) => {
+router.get("/v1/student/market/questions", async (req, res) => {
+  const me = await resolveStudent(req);
+  if (!me) return void res.status(401).json({ error: "no student" });
+  const mySubjects = (
+    await db
+      .select({ subject: studentSubjectsTable.subject })
+      .from(studentSubjectsTable)
+      .where(eq(studentSubjectsTable.student_id, me.user_id))
+  ).map((r) => r.subject);
+
   const rows = await db
     .select({
       q: marketQuestionsTable,
@@ -91,7 +109,15 @@ router.get("/v1/student/market/questions", async (_req, res) => {
         isNull(questionLocksTable.released_at),
       ),
     )
-    .where(sql`${marketQuestionsTable.status} IN ('open', 'locked')`)
+    .where(
+      and(
+        sql`${marketQuestionsTable.status} IN ('open', 'locked')`,
+        eq(marketQuestionsTable.review_status, "approved"),
+        mySubjects.length > 0
+          ? inArray(marketQuestionsTable.subject, mySubjects)
+          : sql`true`,
+      ),
+    )
     .orderBy(desc(marketQuestionsTable.released_at))
     .limit(50);
   const now = new Date();
@@ -109,6 +135,11 @@ router.get("/v1/student/market/questions", async (_req, res) => {
         prompt: r.q.prompt,
         choices: r.q.choices,
         kp_reward: r.q.kp_reward,
+        topic: r.q.topic,
+        difficulty: r.q.difficulty,
+        // Students see whether a question came off the agent's desk or an
+        // operator's, so "who set this?" is never a mystery.
+        source: r.q.source,
         status: lockActive ? r.q.status : "open",
         lock: lockActive
           ? { owner_user_id: r.lock_owner, expires_at: r.lock_expires_at }
@@ -164,11 +195,18 @@ router.post("/v1/student/market/questions/:id/lock", async (req, res) => {
             ),
           );
       }
-      // Atomic CAS: only flip 'open' → 'locked'.
+      // Atomic CAS: only flip 'open' → 'locked'. A question the agent parked
+      // for human review is not on the floor, so it can't be rented either.
       const flipped = await tx
         .update(marketQuestionsTable)
         .set({ status: "locked" })
-        .where(and(eq(marketQuestionsTable.id, qid), eq(marketQuestionsTable.status, "open")))
+        .where(
+          and(
+            eq(marketQuestionsTable.id, qid),
+            eq(marketQuestionsTable.status, "open"),
+            eq(marketQuestionsTable.review_status, "approved"),
+          ),
+        )
         .returning({ id: marketQuestionsTable.id, kp_reward: marketQuestionsTable.kp_reward });
       if (flipped.length === 0) {
         const exists = await tx
@@ -266,6 +304,7 @@ router.post("/v1/student/market/questions/:id/answer", async (req, res) => {
           .limit(1)
       )[0];
       if (!q) return { kind: "notfound" } as const;
+      if (q.review_status !== "approved") return { kind: "notfound" } as const;
       if (q.status === "won") return { kind: "already_won" } as const;
       if (q.status === "expired") return { kind: "expired" } as const;
 
@@ -367,7 +406,12 @@ router.post("/v1/student/market/questions/:id/answer", async (req, res) => {
           .set({ released_at: now })
           .where(eq(questionLocksTable.id, activeLock.id));
       }
-      return { kind: "won", new_balance: newBalance, kp_awarded: q.kp_reward } as const;
+      return {
+        kind: "won",
+        new_balance: newBalance,
+        kp_awarded: q.kp_reward,
+        explanation: q.explanation,
+      } as const;
     });
 
     switch (result.kind) {
@@ -387,6 +431,9 @@ router.post("/v1/student/market/questions/:id/answer", async (req, res) => {
           correct: true,
           kp_awarded: result.kp_awarded,
           new_balance: result.new_balance,
+          // The agent writes one line of "why" with every question it mints,
+          // so winning teaches something instead of just paying.
+          explanation: result.explanation ?? null,
         });
     }
   } catch (e: any) {
