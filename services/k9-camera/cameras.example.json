@@ -1,0 +1,31 @@
+{
+  "//": "Copy this somewhere OUTSIDE the repository (e.g. C:\\KobeOS\\k9-cameras.json), fill it in, and point K9_CAMERAS_FILE at it. RTSP URLs contain camera passwords: never commit this file and never paste it into chat.",
+
+  "api_base": "http://127.0.0.1:8088",
+  "api_secret": "<the api-server's KOBEVISION_SHARED_SECRET>",
+  "runtime_url": "http://127.0.0.1:8766",
+  "runtime_secret": "<the K9 runtime secret>",
+
+  "dedup_seconds": 15,
+  "gallery_ttl_seconds": 30,
+  "min_face_score": 0.8,
+
+  "cameras": [
+    {
+      "camera_id": "PHONE_TEST",
+      "name": "Phone test camera",
+      "zone_code": "FORM1A",
+      "url": "rtsp://172.20.10.1:8554/live",
+      "sample_fps": 1.0,
+      "//": "A phone RTSP/IP-webcam app on the same network. Some apps serve MJPEG instead: http://172.20.10.1:8080/video"
+    },
+    {
+      "camera_id": "NVR_CH01",
+      "name": "Corridor A (NVR channel 1)",
+      "zone_code": "CORRIDOR_A",
+      "url": "rtsp://k9viewer:<password>@192.168.1.50:554/cam/realmonitor?channel=1&subtype=1",
+      "sample_fps": 0.5,
+      "//": "Dahua-style path. Hikvision looks like rtsp://user:pass@ip:554/Streaming/Channels/102 — check your NVR's manual. Use the sub-stream (lower resolution) for analysis."
+    }
+  ]
+}
