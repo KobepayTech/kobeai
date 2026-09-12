@@ -1,9 +1,9 @@
 import { Router } from "express";
-import { AddDepositBody } from "@workspace/api-zod";
 import PDFDocument from "pdfkit";
-import { eq, sql } from "drizzle-orm";
-import { db, usersTable, studentKpTable, kpLedgerTable } from "@workspace/db";
+import { and, eq, inArray } from "drizzle-orm";
+import { db, usersTable } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
+import { parentPhones } from "../lib/fees";
 import { logger } from "../lib/logger";
 
 const router = Router();
@@ -159,134 +159,6 @@ router.get("/v1/bursar/subscription-payments/:id/receipt.pdf", requireAuth(["adm
   doc.end();
 });
 
-const AI_QUESTION_COST = 50;
-const QUIZ_COST = 100;
-
-type StudentSpend = {
-  id: string;
-  student_id: string;
-  name: string;
-  grade: string;
-  total_deposited: number;
-  questions_count: number;
-  quizzes_count: number;
-  status: string;
-};
-
-const STUDENTS: StudentSpend[] = [
-  { id: "1", student_id: "DSS001", name: "Amina Hassan", grade: "Form 1", total_deposited: 80000, questions_count: 412, quizzes_count: 73, status: "healthy" },
-  { id: "2", student_id: "DSS002", name: "Brian Mwenda", grade: "Form 2", total_deposited: 25000, questions_count: 358, quizzes_count: 53, status: "low" },
-  { id: "3", student_id: "DSS003", name: "Fatuma Ali", grade: "Form 1", total_deposited: 60000, questions_count: 264, quizzes_count: 86, status: "healthy" },
-  { id: "4", student_id: "DSS004", name: "James Oloo", grade: "Form 3", total_deposited: 15000, questions_count: 161, quizzes_count: 24, status: "medium" },
-  { id: "5", student_id: "DSS005", name: "Neema Kibwe", grade: "Form 2", total_deposited: 95000, questions_count: 380, quizzes_count: 90, status: "healthy" },
-  { id: "6", student_id: "DSS006", name: "Omar Suleiman", grade: "Form 4", total_deposited: 10000, questions_count: 124, quizzes_count: 30, status: "low" },
-  { id: "7", student_id: "DSS007", name: "Pendo Makame", grade: "Form 1", total_deposited: 45000, questions_count: 248, quizzes_count: 35, status: "medium" },
-  { id: "8", student_id: "DSS008", name: "Rashidi Juma", grade: "Form 3", total_deposited: 30000, questions_count: 230, quizzes_count: 65, status: "medium" },
-];
-
-function buildBalances() {
-  return STUDENTS.map((s) => {
-    const ai_questions_spend = s.questions_count * AI_QUESTION_COST;
-    const quiz_spend = s.quizzes_count * QUIZ_COST;
-    const total_spent = ai_questions_spend + quiz_spend;
-    const balance = s.total_deposited - total_spent;
-    return {
-      id: s.id,
-      student_id: s.student_id,
-      name: s.name,
-      grade: s.grade,
-      balance,
-      total_deposited: s.total_deposited,
-      total_spent,
-      ai_questions_spend,
-      quiz_spend,
-      questions_count: s.questions_count,
-      quizzes_count: s.quizzes_count,
-      status: s.status,
-    };
-  });
-}
-
-router.get("/v1/bursar/students/balances", (_req, res) => {
-  const students = buildBalances();
-  res.json({
-    students,
-    summary: {
-      total_accounts: 1247,
-      total_balance: 45892000,
-      low_balance_count: 23,
-    },
-  });
-});
-
-/**
- * POST /v1/bursar/deposit
- * Bursar manually credits a student account (cash/M-Pesa STK confirmation that
- * landed outside the standard flow). When the student exists in our DB we
- * credit the real `student_kp` ledger so the student wallet, leaderboard, and
- * KP totals all reflect the deposit. Falls back to mock balance display only
- * when the student_id can't be matched (legacy demo IDs).
- *
- * Conversion: TSh amount is credited as KP at 1:1 for now (matches what
- * subscription-grants do). Real prod swaps in a school-specific FX rate.
- */
-router.post("/v1/bursar/deposit", requireAuth(["admin", "teacher", "super_admin"]), async (req, res) => {
-  const parsed = AddDepositBody.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: "Invalid request" });
-    return;
-  }
-  const { student_id, amount } = parsed.data;
-  const reviewer = Number(req.auth?.user_id) || null;
-  const [student] = await db
-    .select()
-    .from(usersTable)
-    .where(eq(usersTable.student_code, student_id));
-  let newBalance: number;
-  if (student && student.role === "student") {
-    // Real credit — atomic SQL increment so concurrent deposits to the same
-    // student can never lost-update each other. The upsert handles the
-    // first-deposit case (no row yet) without a TOCTOU read. We derive
-    // balance_after from the COMMITTED row returned by the upsert and
-    // insert the ledger entry inside the same transaction so the audit
-    // row and the wallet snapshot always agree.
-    newBalance = await db.transaction(async (tx) => {
-      const [row] = await tx
-        .insert(studentKpTable)
-        .values({ user_id: student.id, balance: amount })
-        .onConflictDoUpdate({
-          target: studentKpTable.user_id,
-          set: {
-            balance: sql`${studentKpTable.balance} + ${amount}`,
-            updated_at: new Date(),
-          },
-        })
-        .returning({ balance: studentKpTable.balance });
-      const next = row!.balance;
-      await tx.insert(kpLedgerTable).values({
-        user_id: student.id,
-        delta: amount,
-        reason: "admin_adjust",
-        balance_after: next,
-      });
-      return next;
-    });
-    logger.info({ student_id, amount, by: reviewer }, "bursar deposit credited");
-  } else {
-    // Legacy / unknown student — display only.
-    const students = buildBalances();
-    const mock = students.find((b) => b.student_id === student_id);
-    newBalance = (mock?.balance ?? 0) + amount;
-  }
-  res.json({
-    success: true,
-    deposit_id: `dep_${Date.now()}`,
-    receipt_number: `RCP-${new Date().toISOString().split("T")[0].replace(/-/g, "")}-${Math.floor(Math.random() * 999).toString().padStart(3, "0")}`,
-    new_balance: newBalance,
-    message: `Successfully deposited TSh ${amount.toLocaleString()}`,
-  });
-});
-
 /**
  * GET /v1/admin/cheat-sheet.pdf
  * Single-page PDF that school IT can print and pin near the on-prem server
@@ -373,7 +245,8 @@ router.get("/v1/admin/cheat-sheet.pdf", (_req, res) => {
  * phone). Rate limit is implicit — central enforces idempotency by
  * checkout_request_id.
  *
- * Body: { student_ids: string[], amount_tsh: number }
+ * Body: { student_ids: string[] }   — student_code values, e.g. ["STU0007"]
+ *       { amount_tsh: number }
  * Response: { successes, failures, results: [{ student_id, ok, payment_id?, error? }] }
  */
 router.post("/v1/bursar/invoices/bulk", requireAuth(["admin", "teacher", "super_admin"]), async (req, res) => {
@@ -397,21 +270,31 @@ router.post("/v1/bursar/invoices/bulk", requireAuth(["admin", "teacher", "super_
     res.status(503).json({ error: "central server not configured" });
     return;
   }
-  // We need a phone per student. The local mock STUDENTS list doesn't carry
-  // phone numbers, so we fall back to a deterministic demo phone derived from
-  // the student_id. Real prod swaps this for a JOIN against the parents
-  // table. Documented loudly in the response so a real bursar wouldn't ship
-  // this against live numbers without wiring a real phone source.
-  const balances = buildBalances();
+  // A phone per student, from `parent_children` → the parent's user row.
+  // This used to derive one from the student id, which meant a real STK push
+  // at a real stranger's phone every time a bursar pressed "Bulk invoice".
+  // A student with no linked parent is reported, never guessed at.
+  const wanted = studentIds.map((sid) => String(sid));
+  const students = await db
+    .select({ id: usersTable.id, name: usersTable.name, student_code: usersTable.student_code })
+    .from(usersTable)
+    .where(and(eq(usersTable.role, "student"), inArray(usersTable.student_code, wanted)));
+  const phones = await parentPhones(students.map((s) => s.id));
+
   const results = await Promise.all(
-    studentIds.map(async (sid) => {
-      const idStr = String(sid);
-      const student = balances.find((b) => b.student_id === idStr || b.id === idStr);
+    wanted.map(async (idStr) => {
+      const student = students.find((s) => s.student_code === idStr);
       if (!student) {
         return { student_id: idStr, ok: false, error: "student not found" };
       }
-      // Demo-only phone derivation. Replace with parents.phone JOIN in prod.
-      const phone = `2557${String(student.id).padStart(8, "0").slice(-8)}`;
+      const phone = phones.get(student.id)?.[0]?.phone;
+      if (!phone) {
+        return {
+          student_id: idStr,
+          ok: false,
+          error: "no parent phone linked — send this family a claim code first",
+        };
+      }
       try {
         const upstream = await fetch(`${base}/api/central/v1/payments/initiate`, {
           method: "POST",
@@ -420,7 +303,7 @@ router.post("/v1/bursar/invoices/bulk", requireAuth(["admin", "teacher", "super_
             "x-tenant-license-key": key,
           },
           body: JSON.stringify({
-            student_code: student.student_id,
+            student_code: student.student_code,
             phone,
             amount_tsh: amount,
           }),
@@ -443,22 +326,6 @@ router.post("/v1/bursar/invoices/bulk", requireAuth(["admin", "teacher", "super_
     successes,
     failures: results.length - successes,
     results,
-    note: "Demo: parent phone numbers were derived from student_id. Wire a real parent phone source before production use.",
-  });
-});
-
-router.get("/v1/bursar/billing/summary", (_req, res) => {
-  const now = new Date();
-  const period = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-  res.json({
-    period,
-    total_ai_questions: 3421,
-    total_quizzes: 156,
-    ai_cost: 171050,
-    quiz_cost: 15600,
-    subscription_fee: 6235000,
-    total_amount: 6421650,
-    status: "pending",
   });
 });
 

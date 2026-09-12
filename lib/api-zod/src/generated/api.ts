@@ -149,65 +149,6 @@ export const GetLeaderboardResponse = zod.object({
 });
 
 /**
- * @summary Get all student wallet balances
- */
-export const GetStudentBalancesResponse = zod.object({
-  students: zod.array(
-    zod.object({
-      id: zod.string(),
-      student_id: zod.string(),
-      name: zod.string(),
-      grade: zod.string(),
-      balance: zod.number(),
-      total_deposited: zod.number(),
-      total_spent: zod.number(),
-      ai_questions_spend: zod.number(),
-      quiz_spend: zod.number(),
-      questions_count: zod.number(),
-      quizzes_count: zod.number(),
-      status: zod.string(),
-    }),
-  ),
-  summary: zod.object({
-    total_accounts: zod.number(),
-    total_balance: zod.number(),
-    low_balance_count: zod.number(),
-  }),
-});
-
-/**
- * @summary Add deposit to student wallet
- */
-export const AddDepositBody = zod.object({
-  student_id: zod.string(),
-  amount: zod.number(),
-  deposit_method: zod.string().optional(),
-  notes: zod.string().optional(),
-});
-
-export const AddDepositResponse = zod.object({
-  success: zod.boolean(),
-  deposit_id: zod.string(),
-  receipt_number: zod.string(),
-  new_balance: zod.number(),
-  message: zod.string(),
-});
-
-/**
- * @summary Get monthly billing summary
- */
-export const GetBillingSummaryResponse = zod.object({
-  period: zod.string(),
-  total_ai_questions: zod.number(),
-  total_quizzes: zod.number(),
-  ai_cost: zod.number(),
-  quiz_cost: zod.number(),
-  subscription_fee: zod.number(),
-  total_amount: zod.number(),
-  status: zod.string(),
-});
-
-/**
  * @summary Get available quizzes
  */
 export const GetQuizzesResponse = zod.object({

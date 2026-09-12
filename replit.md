@@ -25,6 +25,14 @@ I prefer iterative development, with a focus on delivering functional components
 - Students only see `review_status = 'approved'` questions, and only subjects they take once `student_subjects` has rows for them.
 - Operator console at `/central/v1/admin/market-agent` (`super_admin` only) — dry-run plan, settings, review queue, run history.
 
+## School fees (money, NOT KP)
+- `student_kp` is a REWARDS balance and must never be used as an account receivable. School fees live in `fee_structures`, `fee_accounts`, `fee_transactions`, `payment_matches`; full design in `docs/K9_BURSAR_AI.md`.
+- Every write goes through `lib/fees.ts:post()` — routes never touch the tables directly. It takes `SELECT … FOR UPDATE` on the account and writes the ledger row and the cached balance in one transaction, so `fee_accounts.balance_tsh == SUM(fee_transactions.delta_tsh)` always holds. `GET /v1/fees/verify` recomputes and reports drift.
+- Sign convention: a balance is what the student OWES. charge +, payment −, waiver −, reversal = the opposite of the row it undoes. Nothing is edited or deleted.
+- Partial unique indexes are the controls: one payment per `reference`, one charge per `(student_id, fee_structure_id)`.
+- Reconciliation (`lib/payment-reader.ts`, `/v1/fees/reconcile/*`) reads M-Pesa confirmations with a regex first and the vision model second, proposes a student with a stated reason, and posts nothing until a human confirms. Two plausible candidates → no proposal.
+- Removed in this change: `buildBalances()` and the fabricated student list, the hard-coded billing summary, and `/v1/bursar/deposit` (which credited the KP ledger with shillings). Bulk invoicing now uses real parent phones from `parent_children` instead of deriving them from the student id.
+
 ## School setup and the operator boundary
 - A school server ships with no accounts. `POST /v1/setup/school` (public, once) creates the tenant, the `school_setup` row and the school's own administrator — always role `admin`.
 - **The install flow has no path to `super_admin`.** The operator console requires `K9_OPERATOR_SECRET` in the environment AND the school's setup password at `/v1/setup/operator/unlock`; without the env var that route answers 404. Never set it on a school's server.

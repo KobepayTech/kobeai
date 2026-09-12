@@ -1891,3 +1891,142 @@ export const studentSubjectsTable = pgTable(
   }),
 );
 export type StudentSubject = typeof studentSubjectsTable.$inferSelect;
+
+// ===========================================================================
+// School fees — the money ledger
+// ===========================================================================
+//
+// `student_kp` is a REWARDS balance. It is not, and must never become, an
+// account receivable: one is points a child won answering a physics question,
+// the other is shillings the school is owed. They are counted in different
+// units, owed to different people, and audited by different rules.
+//
+// School fees live here instead, on the same discipline the KP ledger already
+// follows: `fee_transactions` is append-only and signed, `fee_accounts` is the
+// denormalised fast read, and every mutation writes both inside one
+// transaction so the sum of the ledger always equals the cached balance. A
+// bursar's trust in this is worth more than any feature built on top of it,
+// and it is lost the first time two screens disagree.
+//
+// Sign convention, stated once: a balance is what the student OWES.
+//   charge  → delta positive (the school is owed more)
+//   payment → delta negative (the debt shrinks)
+//   waiver  → delta negative (the school forgives it)
+//   reversal→ the opposite sign of whatever it reverses
+// Nothing is ever deleted or edited; a mistake is corrected by a reversal,
+// so the history of a disputed account is always reconstructable.
+// ---------------------------------------------------------------------------
+
+export const feeStructuresTable = pgTable(
+  "fee_structures",
+  {
+    id: serial("id").primaryKey(),
+    name: text("name").notNull(), // "Form 2 — Term 1 2026"
+    form_level: text("form_level"), // "Form 2"; null = every student
+    term: text("term").notNull(), // "2026-T1"
+    // [{ label: "Tuition", amount_tsh: 180000 }, …] — what the parent is shown
+    // on the invoice, so "what am I paying for" always has an answer.
+    items: jsonb("items").notNull().default(sql`'[]'::jsonb`),
+    total_tsh: integer("total_tsh").notNull(), // validated against items on write
+    active: boolean("active").notNull().default(true),
+    created_by: integer("created_by").references(() => usersTable.id, { onDelete: "set null" }),
+    created_at: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    term_idx: index("fee_structures_term_idx").on(t.term, t.form_level),
+  }),
+);
+export type FeeStructure = typeof feeStructuresTable.$inferSelect;
+
+export const feeAccountsTable = pgTable("fee_accounts", {
+  student_id: integer("student_id")
+    .primaryKey()
+    .references(() => usersTable.id, { onDelete: "cascade" }),
+  charged_tsh: integer("charged_tsh").notNull().default(0),
+  paid_tsh: integer("paid_tsh").notNull().default(0),
+  waived_tsh: integer("waived_tsh").notNull().default(0),
+  // charged - paid - waived. Positive = the student owes it.
+  balance_tsh: integer("balance_tsh").notNull().default(0),
+  last_transaction_at: timestamp("last_transaction_at"),
+  updated_at: timestamp("updated_at").defaultNow().notNull(),
+});
+export type FeeAccount = typeof feeAccountsTable.$inferSelect;
+
+export const feeTransactionsTable = pgTable(
+  "fee_transactions",
+  {
+    id: serial("id").primaryKey(),
+    student_id: integer("student_id")
+      .notNull()
+      .references(() => usersTable.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(), // 'charge' | 'payment' | 'waiver' | 'reversal'
+    delta_tsh: integer("delta_tsh").notNull(), // signed, see the convention above
+    balance_after_tsh: integer("balance_after_tsh").notNull(),
+    method: text("method"), // 'mpesa' | 'cash' | 'bank' | 'waiver' | null on charges
+    // The M-Pesa receipt, bank slip or cash-book number. For payments this is
+    // the anti-double-post key: see the partial unique index below.
+    reference: text("reference"),
+    term: text("term"),
+    fee_structure_id: integer("fee_structure_id").references(() => feeStructuresTable.id, {
+      onDelete: "set null",
+    }),
+    note: text("note"),
+    // When the money actually moved, which is not when we typed it in. A
+    // fortnight-old M-Pesa confirmation read off a statement backdates here.
+    received_at: timestamp("received_at").defaultNow().notNull(),
+    entered_by: integer("entered_by").references(() => usersTable.id, { onDelete: "set null" }),
+    reverses_id: integer("reverses_id"), // the fee_transactions.id this undoes
+    created_at: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    student_idx: index("fee_tx_student_idx").on(t.student_id, t.created_at),
+    term_idx: index("fee_tx_term_idx").on(t.term),
+    // One M-Pesa receipt, one payment. The single most important control in
+    // this table: a statement photographed twice, or a confirmation the bursar
+    // already typed in, cannot be posted again.
+    reference_idx: uniqueIndex("fee_tx_reference_idx")
+      .on(t.reference)
+      .where(sql`kind = 'payment' AND reference IS NOT NULL`),
+    // A fee structure is charged to a student at most once, so re-running the
+    // term's billing is safe.
+    charge_once_idx: uniqueIndex("fee_tx_charge_once_idx")
+      .on(t.student_id, t.fee_structure_id)
+      .where(sql`kind = 'charge' AND fee_structure_id IS NOT NULL`),
+  }),
+);
+export type FeeTransaction = typeof feeTransactionsTable.$inferSelect;
+
+// How a payment came to be attached to a student. Every posted payment that
+// the reconciliation agent proposed carries one of these, so "why is this
+// parent's money on this child's account" always has a recorded answer and a
+// named human who agreed with it.
+export const paymentMatchesTable = pgTable(
+  "payment_matches",
+  {
+    id: serial("id").primaryKey(),
+    transaction_id: integer("transaction_id")
+      .notNull()
+      .references(() => feeTransactionsTable.id, { onDelete: "cascade" }),
+    paper_import_id: integer("paper_import_id").references(() => paperImportsTable.id, {
+      onDelete: "set null",
+    }),
+    // The central `subscription_payments` row, when the money came through
+    // M-Pesa via the control plane rather than off a statement.
+    central_payment_id: integer("central_payment_id"),
+    payer_name: text("payer_name"),
+    payer_phone: text("payer_phone"),
+    amount_tsh: integer("amount_tsh").notNull(),
+    receipt: text("receipt"),
+    // 'phone' | 'name' | 'name+amount' | 'manual' — how the candidate was found
+    matched_by: text("matched_by").notNull(),
+    confidence: integer("confidence"), // 0-100
+    reason: text("reason"), // "parent phone +255 7xx xxx 123, exact balance"
+    confirmed_by: integer("confirmed_by").references(() => usersTable.id, { onDelete: "set null" }),
+    confirmed_at: timestamp("confirmed_at"),
+    created_at: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    tx_idx: index("payment_matches_tx_idx").on(t.transaction_id),
+  }),
+);
+export type PaymentMatch = typeof paymentMatchesTable.$inferSelect;

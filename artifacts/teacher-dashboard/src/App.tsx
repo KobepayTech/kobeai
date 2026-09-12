@@ -37,6 +37,7 @@ import ModerationPayments from "@/pages/moderation-payments";
 import SetupPage from "@/pages/setup";
 import OnboardingPage from "@/pages/onboarding";
 import MarketAgentPage from "@/pages/market-agent";
+import ReconcilePage from "@/pages/reconcile";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -97,6 +98,9 @@ function Router() {
       </Route>
       <Route path="/bursar">
         <Shell><Bursar /></Shell>
+      </Route>
+      <Route path="/reconcile">
+        <Shell><ReconcilePage /></Shell>
       </Route>
       <Route path="/documents">
         <Shell><Documents /></Shell>

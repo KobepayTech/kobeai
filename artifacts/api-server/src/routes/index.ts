@@ -40,6 +40,7 @@ import facesRouter from "./faces";
 import setupRouter from "./setup";
 import onboardingRouter from "./onboarding";
 import marketAgentRouter from "./market-agent";
+import feesRouter from "./fees";
 
 const router: IRouter = Router();
 
@@ -89,5 +90,6 @@ router.use(facesRouter);
 router.use(setupRouter);
 router.use(onboardingRouter);
 router.use(marketAgentRouter);
+router.use(feesRouter);
 
 export default router;

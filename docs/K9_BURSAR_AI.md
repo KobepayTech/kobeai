@@ -1,221 +1,267 @@
-# The bursar's desk, and what AI should actually do there
+# The bursar's desk
 
-Status: proposed • Owner: KobeAI school-server team • Last updated: 2026-09-12
+Status: phases 0–1 adopted, 2–5 proposed • Owner: KobeAI school-server team •
+Last updated: 2026-09-12
 
-This is a design discussion, not a description of shipped code. It exists
-because the question came up as "make the cashier and master systems more
-seamless with AI", and the honest answer starts one step earlier than the AI.
+This started as a discussion of how to make the cashier side "more seamless
+with AI". The honest answer began one step earlier than the AI, and that step
+is now built.
 
-## Where the money surfaces stand today
+## What the money surfaces used to be
 
-An audit, so the proposal is not built on a misunderstanding.
+An audit, kept here because it explains why the rest of this document is
+shaped the way it is.
 
-| Surface | Real or mock |
+| Surface | Was |
 |---|---|
-| `GET /v1/bursar/subscription-payments` | **Real.** Proxies central over the tenant licence key; M-Pesa collections with status and receipt |
-| `GET /v1/bursar/subscription-payments/:id/receipt.pdf` | **Real.** Renders from the canonical central row |
-| `POST /v1/bursar/deposit` | **Half real.** Credits `student_kp` + `kp_ledger` atomically when the student exists; display-only otherwise |
-| `GET /v1/bursar/students/balances` | **Mock.** `buildBalances()` fabricates the list and the summary |
-| `POST /v1/bursar/invoices/bulk` | **Real call, fake inputs.** Initiates real STK pushes against phone numbers *derived from the student id* |
+| `GET /v1/bursar/subscription-payments` | **Real.** M-Pesa collections proxied from central over the tenant licence key |
+| `…/:id/receipt.pdf` | **Real.** Rendered from the canonical central row |
+| `POST /v1/bursar/deposit` | **Wrong ledger.** Credited `student_kp` — the *rewards* balance — at 1:1 with shillings |
+| `GET /v1/bursar/students/balances` | **Mock.** `buildBalances()` fabricated eight students and the summary |
+| `POST /v1/bursar/invoices/bulk` | **Real call, invented inputs.** Fired real STK pushes at phone numbers *derived from the student id* |
 | `GET /v1/bursar/billing/summary` | **Mock.** Hard-coded totals |
-| Stationery drives | **Real.** Orders, parent approval, per-school compilation |
-| KP economy | **Real,** and deliberately separate from money |
 
-So the bursar page today is a convincing demo of a system that does not yet
-hold the school's money. Two things follow.
+Two things followed. There was no school fee ledger: `student_kp` is points a
+child won answering a physics question, not shillings the school is owed, and
+conflating them is not a shortcut, it is a category error. And an AI layer on
+top of that would have been worse than none — a reconciliation agent that
+confidently matches a payment to a fabricated balance produces a number a
+bursar acts on. The failure mode of a half-built money system is not
+"unhelpful", it is "wrong receipt, angry parent, missing shillings".
 
-**First: there is no school fee ledger.** `student_kp` is a rewards balance,
-not an account receivable. Crediting a TSh deposit into it at 1:1 (which
-`/v1/bursar/deposit` does, with a comment saying as much) conflates two
-different things that must never be conflated — one is a promise the school
-owes a supplier, the other is points a child won answering a physics question.
+Hence: **the ledger first, then the agent.** Both are now in.
 
-**Second: an AI layer on top of that is worse than no AI layer.** A
-reconciliation agent that confidently matches a payment to a fabricated
-balance produces a number a bursar will act on. The failure mode of a
-half-built money system is not "unhelpful", it is "wrong receipt, angry
-parent, missing shillings".
+---
 
-So: **the ledger first, then the agent.** Everything below assumes that
-order.
+## Phase 0 — the ledger (shipped, no AI)
 
-## Step 0 — the ledger (no AI)
-
-Four tables, no cleverness:
+`lib/fees.ts` and `routes/fees.ts`. Four tables:
 
 ```
-fee_structures     what a Form 2 day student owes this term, by line item
-fee_accounts       one per student: charged, paid, balance, as of when
-fee_transactions   append-only, signed: charge, payment, reversal, waiver,
-                   with method (mpesa | cash | bank | waiver), reference,
-                   received_at, entered_by
-payment_matches    which fee_transaction a central payment row settled,
-                   with how the match was made and who confirmed it
+fee_structures     what a Form 2 owes this term, as named line items
+fee_accounts       one per student: charged, paid, waived, balance
+fee_transactions   append-only, signed: charge, payment, waiver, reversal
+payment_matches    which transaction settled what, how it was matched, who agreed
 ```
 
-The same rule the KP ledger already follows applies: every mutation writes a
-transaction row and updates the cached balance **inside one transaction**, so
-the sum of the ledger always equals the balance. A bursar's trust in this
-system is worth more than any feature on top of it, and it is lost the first
-time two screens disagree.
+**Sign convention, stated once:** a balance is what the student owes. A charge
+is positive, a payment and a waiver are negative, a reversal takes the
+opposite sign of the row it undoes.
 
-`buildBalances()` dies here. `/v1/bursar/deposit` stops writing to
-`student_kp` and starts writing to `fee_transactions`. Bulk invoicing joins
-against a real parent phone (`parent_children` → the parent user row) instead
-of deriving one from a student id — that one is a live-fire hazard today and
-should be fixed whether or not any of the rest happens.
+The rules that make it a ledger rather than a spreadsheet:
 
-## Step 1 — the reconciliation agent
+- **Everything goes through `post()`.** Routes never touch `fee_accounts` or
+  `fee_transactions`. A second place that knows how to move money is a second
+  place that can get the balance wrong.
+- **One transaction, both writes.** `post()` takes `SELECT … FOR UPDATE` on
+  the account, then writes the ledger row and the cached balance together, so
+  `fee_accounts.balance_tsh == SUM(fee_transactions.delta_tsh)` always holds.
+  Two bursars posting to the same student serialise instead of racing.
+- **`GET /v1/fees/verify`** recomputes every balance from the signed history
+  and reports disagreements. It should always be empty. It exists because
+  "should always" is not a control, and because the first thing anyone asks of
+  a computer ledger is how they would know if it were wrong.
+- **Nothing is edited or deleted.** A mistake is corrected by a reversal, and
+  both rows stay. A reversal states the amount it believes it is undoing and
+  is refused if the ledger disagrees — that mismatch means the screen and the
+  database are out of step, which is exactly when not to write.
+- **One receipt, one payment.** A partial unique index on
+  `(reference) WHERE kind = 'payment'` makes double-posting an M-Pesa receipt
+  impossible, whether it arrives from a re-photographed statement or a bursar
+  who already typed it in.
+- **One structure, one charge.** A partial unique index on
+  `(student_id, fee_structure_id) WHERE kind = 'charge'` means re-running a
+  term's billing is safe.
+- **The invoice total comes from its line items,** never from the request, so
+  what a parent is shown and what they are charged cannot differ.
+- **A waiver needs a stated reason.** It is the one entry an auditor always
+  asks about, so it is not writable without one.
 
-This is where the bursar's day actually goes, and where AI earns its place
-first.
+Also retired in this phase: `buildBalances()` and the fabricated student list;
+the hard-coded billing summary; and the deposit endpoint that wrote to the KP
+rewards ledger. Their OpenAPI operations went with them, so no generated
+client still points at a fiction.
 
-What happens now in a Tanzanian school office: M-Pesa confirmations arrive as
-SMS on a school phone. Somebody reads them off the screen and types the name,
-the amount and the receipt number into a ledger book or a spreadsheet. Names
-arrive mangled — the parent's own name, not the child's; a first name and a
-clan name in either order; a nickname. Amounts arrive short, or as three
-payments across a fortnight. Matching them to students is a skilled, tedious,
-error-prone afternoon.
+And bulk invoicing now joins `parent_children` → the parent's user row for a
+real phone. A student with no linked parent is **reported, not guessed at** —
+that endpoint used to send a real M-Pesa prompt to a real stranger every time
+someone pressed the button.
 
-K9 already has the machinery:
+## Phase 1 — the reconciliation agent (shipped)
 
-- **Reading.** A photograph of the M-Pesa statement or the phone screen goes
-  through the same `paper-reader` pipeline the class lists use: vision model
-  → text, then a structuring pass into `{payer_name, phone, amount, receipt,
-  paid_at}` rows, with a deterministic regex fallback. M-Pesa confirmation
-  text is far more regular than a handwritten class list, so the regex path
-  alone handles the common case.
-- **Matching.** For each row, candidates from: exact phone against
-  `parent_children`, the same-words-different-order name match the roster
-  importer already uses, amount against the exact outstanding balance, and
-  recent invoice history. Each candidate gets a score and a stated reason.
-- **Deciding.** A single unambiguous candidate over a high threshold is
-  proposed as a match. Everything else goes into a queue the bursar clears in
-  a few taps.
+`lib/payment-reader.ts`, surfaced at **Reconcile** in the dashboard.
 
-The agent's output is a **proposal list**, never a posting. The bursar sees
-"Asha Juma Mwangi — TSh 120,000 — receipt QGH4K2LM9 — matched on parent phone
-+255 7xx and exact balance", presses Confirm, and *that* writes the
-`fee_transaction` and the `payment_match`. Same shape as the roster commit:
-the model reads, the human decides.
+What happens in a school office: confirmations arrive as SMS on the school
+phone; somebody reads them off the screen and copies the name, the amount and
+the receipt into a book. Names arrive mangled — the parent's name, not the
+child's; a first name and a clan name in either order. Amounts arrive short,
+or in three instalments. It is a skilled, tedious, error-prone afternoon.
 
-Realistic effect: an afternoon becomes a quarter of an hour, and the
-unmatched pile — the part that actually needs a human — is the only part a
-human touches.
+```
+paste or photograph
+        │
+        ▼
+   read     regex first, model second   →  {receipt, payer, phone, amount, date}
+        │
+        ▼
+   match    phone · name · amount       →  one candidate, with a reason
+        │
+        ▼
+  propose   on screen, per row
+        │
+        ▼
+  CONFIRM   ← a named human, and only then does the ledger move
+```
 
-## Step 2 — arrears triage
+**Reading.** The regex path is primary, not a fallback: M-Pesa text is
+machine-generated and highly regular, so the deterministic reader gets the
+common case exactly, strips the running balance M-Pesa appends, normalises
+every phone shape to `255…`, and dedupes a confirmation forwarded twice. The
+vision model is there for printed statement layouts it does not know, and its
+rows are **unioned** with the regex rows rather than replacing them — a
+payment the regex found for certain must not vanish because a model
+reformatted the page. A school with no model box reconciles exactly as well.
 
-Once there is a real ledger and real matches, the question "who do I chase and
-how" becomes answerable with a model rather than a spreadsheet sort.
+**Matching.** Three signals, strongest first:
 
-The agent drafts, per family:
+1. the sending phone is a registered parent's phone (60);
+2. the payer's name — the whole of it inside a known name scores 45, two
+   shared names 30, one shared name 10, because half a village shares a single
+   name;
+3. the amount exactly clears one student's balance (20), which corroborates
+   but never identifies: on its own it matches every student who owes the same
+   termly figure, which in a school is most of a form.
 
-- the amount, the term, and what it is for;
-- a message in the parent's own language (`staff_profiles.language` shows the
-  pattern; parents get the same field), in the register a Tanzanian parent
-  actually reads;
-- the channel — the parent app push, SMS, or "the bursar should call this
-  one", because a family three terms behind is a conversation, not a push
-  notification;
-- and, importantly, a **do-not-chase** flag on families where the pattern says
-  hardship rather than neglect: consistent partial payments, a recent waiver,
-  a sibling's account in credit.
+A single candidate over 45, at least 20 clear of the runner-up, is proposed
+with the reason spelled out ("Matched on parent phone +255712345678, exactly
+clears TSh 120,000"). **Two plausible candidates produce no proposal at all** —
+one parent phone and two siblings has no defensible answer, and returning the
+slightly-better one would be the worst outcome available: confidently wrong,
+and confirmed by a tired human who trusted it. Confidence is capped below 100,
+because a number that reads as certainty is how people stop checking.
 
-The bursar reviews a list of drafts and sends the ones they agree with. No
-message leaves the school unsent by a human. A school that lets an agent
-dun parents automatically will lose a parent, and deserve to.
+**Posting.** The confirm endpoint is the only thing in reconciliation that
+writes. Rows are posted one at a time on purpose: one duplicate receipt in a
+batch of forty must not roll back the thirty-nine good ones, so failures come
+back per row. Every posted payment keeps its `payment_matches` row — the
+payer, the phone, how it was matched, why, and which human agreed — so "why is
+this parent's money on this child's account" always has a recorded answer.
 
-## Step 3 — forecasting and the term view
+**Arrears** (`GET /v1/fees/arrears`) lists families worst first with the
+parent's phone, whether they are paying-but-behind or have paid nothing, and a
+message ready to copy. The wording is deliberately **rule-based, not
+generated**: a school speaking to a parent about money should say the same
+thing every time, be checkable before it goes, and read identically whether or
+not the model box is switched on. Copy sends nothing — a person pastes it and
+presses send.
 
-With a term of matched transactions the cheap statistical work pays better
-than the model does:
+---
 
-- expected collections for the rest of the term, from this school's own
-  payment curve (Tanzanian school fees arrive in a very particular shape
-  around term start and exam weeks);
-- the gap against committed spend — salaries, the stationery drive, the
-  exam fees;
-- "if collections track last term, you are TSh 4.2M short in week 9" — which
-  is the number a head of school needs in week 3, not week 9.
+## Still proposed
 
-The model's job here is not the arithmetic. It is turning the arithmetic into
-three sentences the head of school reads without a finance background, in the
-weekly magazine the system already generates.
+### Phase 2 — arrears triage with review
 
-## Step 4 — asking the ledger questions
+What phase 1 ships is a list and a fixed message. The next step is per-family
+judgement: the channel (push, SMS, or "the bursar should telephone this one",
+because a family three terms behind is a conversation), the register, and a
+**do-not-chase** flag where the pattern says hardship rather than neglect —
+consistent partial payments, a recent waiver, a sibling's account in credit.
+Drafts go into a review queue the bursar clears, exactly like the market
+agent's human-review mode. No message leaves the school unsent by a person; a
+school that lets an agent dun parents automatically will lose a parent, and
+deserve to.
 
-"How much has Form 3 paid this term?" "Which families paid in full before
-week 2?" "What did we spend on exercise books last year?"
+Needs a term of phase-1 data before it is worth anything.
 
-A narrow natural-language layer over the ledger, restricted to a small set of
-parameterised queries — not generated SQL. The agent picks a query and fills
-its parameters; it never writes the query. That constraint is the difference
-between a useful answer and a subtly wrong total, and subtly wrong totals are
-how a finance tool loses its users.
+### Phase 3 — forecasting
 
-## Step 5 — anomaly watch
+With a term of matched transactions, the cheap statistical work pays better
+than the model does: expected collections from this school's own payment curve
+(Tanzanian fees arrive in a very particular shape around term start and exam
+weeks), the gap against committed spend, and "if collections track last term
+you are TSh 4.2M short in week 9" — which is the number a head of school needs
+in week 3. The model's job is turning that into three sentences somebody
+without a finance background reads, in the weekly magazine K9 already
+generates.
 
-An append-only ledger makes a small set of checks worth running nightly:
+### Phase 4 — asking the ledger questions
 
-- the same M-Pesa receipt matched to two students;
-- a cash deposit entered with no corresponding shift on the school phone;
-- a waiver pattern concentrated on one staff member's entries;
-- a balance that moved without a transaction row (which should be impossible,
-  and is therefore exactly what a nightly check is for).
+"How much has Form 3 paid this term?" A narrow natural-language layer over a
+small set of **parameterised** queries — the agent picks a query and fills its
+parameters, it never writes SQL. That constraint is the difference between a
+useful answer and a subtly wrong total, and subtly wrong totals are how a
+finance tool loses its users.
 
-These are flags to a named human — the head of school, not the bursar whose
-entries are being checked — with the evidence attached. Never an accusation,
-never an automatic block.
+### Phase 5 — anomaly watch
 
-## What the money agents must never do
+Nightly, on an append-only ledger: the same receipt matched to two students; a
+cash entry with no corresponding shift; a waiver pattern concentrated on one
+staff member's entries; a balance that moved without a transaction row (which
+`verifyLedger()` already detects and which should be impossible — which is
+exactly why it is checked). Flags to a named human — the head of school, not
+the bursar whose entries are being checked — with the evidence attached. Never
+an accusation, never an automatic block.
 
-The same three rules the market agent and the paper importer already follow,
-because money deserves them more, not less:
+---
 
-1. **Propose, never post.** No agent writes a `fee_transaction`, sends a
-   message to a parent, or initiates an STK push without a human pressing a
-   button on that specific item.
-2. **Show the reason.** Every proposal carries how it was reached — which
-   phone, which name match, which balance. A bursar confirming a match they
-   cannot check is the same as no bursar at all.
+## The three rules
+
+They hold for everything above, shipped and proposed, because money deserves
+them more than the rest of K9 does, not less:
+
+1. **Propose, never post.** No agent writes a `fee_transaction`, messages a
+   parent, or initiates an STK push without a human pressing a button on that
+   specific item.
+2. **Show the reason.** Every proposal carries how it was reached. A bursar
+   confirming a match they cannot check is the same as no bursar at all.
 3. **Fail closed and stay usable.** No brain, unreachable brain, no internet:
-   the regex reader, the exact-match reconciler and the manual entry path all
-   still work. K9's core promise is that the school keeps running on its own
-   LAN with the power cut and the fibre down; the money desk is the last place
-   to break that.
+   the regex reader, exact matching, and manual entry all still work. K9's
+   core promise is that the school keeps running on its own LAN with the power
+   cut and the fibre down, and the money desk is the last place to break it.
 
-## Where this runs (master / worker)
+## Where it runs (master / worker)
 
-The ISO installs two nodes: a **master** laptop holding Postgres, the API and
-the dashboards, and a **worker** desktop holding Ollama and the models.
+The ISO installs a **master** laptop holding Postgres, the API and the
+dashboards, and a **worker** desktop holding Ollama and the models.
 
-That split suits this work well:
+The ledger, the matching arithmetic and every write stay on the master, with
+the database and the backups. Only the statement-reading pass crosses to the
+worker, and it is optional — with the worker off, reconciliation falls back to
+the regex reader and the bursar does slightly more tapping. Nothing about a
+parent's payment leaves the school LAN: M-Pesa settlement already goes through
+central over the licence key, but the *analysis* of it does not.
 
-- the ledger, the matching arithmetic and every write stay on the master,
-  where the database and the backups are;
-- only the reading pass and the message drafting cross to the worker, and both
-  are individually optional — if the worker is off, reconciliation degrades to
-  the regex reader and exact matching, and the bursar does slightly more
-  tapping;
-- nothing about a parent's payment leaves the school LAN. M-Pesa settlement
-  already goes through central over the licence key; the *analysis* of it
-  should not.
+The nightly backup the ISO configures matters much more now that the ledger is
+real. It should be **verified**, not just written — a restore test belongs in
+`kobeai-backup` before a school trusts this with a term of fees.
 
-The nightly backup the ISO already configures becomes materially more
-important the moment the ledger is real. It should be verified, not just
-written — a restore test belongs in `kobeai-backup` before any of this ships.
+## Endpoints
 
-## Suggested order
-
-| Phase | What | Why first |
+| Method | Path | Who |
 |---|---|---|
-| 0 | `fee_*` tables; retire `buildBalances()`; real parent phones for bulk invoicing | Nothing above is safe without it, and the derived phone numbers are a live hazard now |
-| 1 | Reconciliation agent (read → match → propose → confirm) | Biggest manual burden, clearest win, reuses the paper reader already built |
-| 2 | Arrears triage with drafted, human-sent messages | Needs a term of phase-1 data to be any good |
-| 3 | Forecasting in the weekly magazine | Cheap once 1 and 2 are real |
-| 4 | Parameterised natural-language queries | Convenience, not capability |
-| 5 | Nightly anomaly watch | Wants a year of ledger to tune |
+| `GET` | `/v1/fees/summary` | staff |
+| `GET` | `/v1/fees/accounts` | staff |
+| `GET` | `/v1/fees/accounts/:studentId` | staff |
+| `GET` | `/v1/fees/verify` | bursar |
+| `GET`/`POST` | `/v1/fees/structures` | staff / bursar |
+| `POST` | `/v1/fees/structures/:id/charge` | bursar |
+| `POST` | `/v1/fees/payments` | bursar |
+| `POST` | `/v1/fees/waivers` | bursar |
+| `POST` | `/v1/fees/transactions/:id/reverse` | bursar |
+| `POST` | `/v1/fees/reconcile/photo` | bursar (image body) |
+| `POST` | `/v1/fees/reconcile/text` | bursar |
+| `GET` | `/v1/fees/reconcile` · `/:id` | bursar |
+| `POST` | `/v1/fees/reconcile/:id/confirm` | bursar |
+| `GET` | `/v1/fees/arrears` | bursar |
 
-Phase 0 is unglamorous and is most of the value. The agent is what makes it
-feel seamless; the ledger is what makes it true.
+"bursar" is `admin` / `super_admin`; teachers can read accounts but post
+nothing.
+
+## Tests
+
+`lib/payment-reader.test.ts` covers reading a real M-Pesa confirmation, not
+mistaking the running balance for the payment, every phone format, deduping a
+forwarded confirmation, each matching signal, the refusal to choose between
+two siblings, and the confidence cap. `lib/fees.test.ts` covers the guards
+every write passes through — amount validation, the implausible-figure ceiling,
+and the fact that a negative charge cannot sneak in as a credit.

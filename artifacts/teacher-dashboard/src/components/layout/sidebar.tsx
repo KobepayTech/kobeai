@@ -30,6 +30,7 @@ import {
   Trophy,
   QrCode,
   Bot,
+  Banknote,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -59,7 +60,8 @@ const SCHOOL_NAV: NavItem[] = [
   { href: "/results", label: "Results", icon: Trophy, needs: "teaching" },
   { href: "/documents", label: "Documents", icon: FileText, needs: "teaching" },
   { href: "/onboarding", label: "Staff & Students", icon: QrCode, needs: "onboarding" },
-  { href: "/bursar", label: "Bursar", icon: Wallet, needs: "bursar" },
+  { href: "/bursar", label: "Bursar & Fees", icon: Wallet, needs: "bursar" },
+  { href: "/reconcile", label: "Reconcile", icon: Banknote, needs: "bursar" },
   { href: "/stationery", label: "Stationery", icon: Package, needs: "teaching" },
   { href: "/claim-codes", label: "Claim Codes", icon: KeyRound, needs: "teaching" },
   { href: "/school-ai", label: "School AI", icon: Cpu, needs: "school_settings" },

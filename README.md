@@ -62,9 +62,8 @@ Shilling (TSh).
   a live tracking view.
 
 See `docs/K9_ARCHITECTURE.md`, `docs/TEACHER_LENS.md`,
-`docs/K9_MODEL_STACK.md`, `docs/K9_ONBOARDING.md` and
-`docs/K9_MARKET_AGENT.md` for the full design, and `docs/K9_BURSAR_AI.md`
-for where the money side is going.
+`docs/K9_MODEL_STACK.md`, `docs/K9_ONBOARDING.md`,
+`docs/K9_MARKET_AGENT.md` and `docs/K9_BURSAR_AI.md` for the full design.
 
 ## Setting a school up
 
@@ -103,6 +102,26 @@ stale ones away. Every cycle is recorded. With no brain installed it recycles
 teacher-authored quiz questions rather than leaving the floor empty.
 
 See `docs/K9_MARKET_AGENT.md`.
+
+## School fees
+
+Fees are a real ledger: `fee_transactions` is append-only and signed,
+`fee_accounts` is the cached balance, and every write goes through one
+function that updates both inside a transaction — so
+`balance == SUM(transactions)` always holds, and `GET /v1/fees/verify`
+proves it. Nothing is edited or deleted; a mistake is corrected by a
+reversal. An M-Pesa receipt can only ever be posted once.
+
+Reconciling those payments is where AI earns its place. The bursar pastes
+(or photographs) the M-Pesa confirmations off the school phone; K9 reads
+them — regex first, because the text is machine-generated, with the vision
+model for statement layouts it does not know — works out whose fees each one
+is from the sending phone, the payer's name and the outstanding balance, and
+says why. Two plausible children produce no proposal at all. The bursar
+confirms, and only then does the ledger move.
+
+See `docs/K9_BURSAR_AI.md`, which also sets out what is deliberately not
+built yet and why.
 
 ## Printing
 
