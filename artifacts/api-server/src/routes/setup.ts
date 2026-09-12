@@ -70,12 +70,22 @@ function secretMatches(presented: string, expected: string): boolean {
  * The dashboard calls this before showing a login box: an un-set-up server
  * shows the install wizard instead. It deliberately says nothing about the
  * operator console, whether one exists, or how to reach it.
+ *
+ * A server that already has an administrator is set up even without a
+ * school_setup row — that is the Windows desktop build, which bootstraps its
+ * own admin from the installer (lib/k9-bootstrap.ts) — so it must not be sent
+ * to a wizard whose first action would be refused.
  */
 router.get("/v1/setup/state", async (_req, res) => {
   const setup = await loadSetup();
+  const [tenant] = await db
+    .select({ name: tenantsTable.name })
+    .from(tenantsTable)
+    .orderBy(tenantsTable.id)
+    .limit(1);
   res.json({
-    needs_setup: !setup?.completed_at,
-    school_name: setup?.school_name ?? null,
+    needs_setup: !setup?.completed_at && !(await hasStaffAccount()),
+    school_name: setup?.school_name ?? tenant?.name ?? null,
   });
 });
 
@@ -243,12 +253,17 @@ router.post("/v1/setup/operator/unlock", setupLimiter, async (req, res) => {
 router.get("/v1/me/capabilities", requireAuth(), async (req, res) => {
   const role = req.auth!.role;
   const setup = await loadSetup();
+  const [tenant] = await db
+    .select({ name: tenantsTable.name })
+    .from(tenantsTable)
+    .orderBy(tenantsTable.id)
+    .limit(1);
   const operator = role === "super_admin";
   const schoolAdmin = operator || role === "admin";
   res.json({
     role,
     name: req.auth!.name ?? null,
-    school_name: setup?.school_name ?? null,
+    school_name: setup?.school_name ?? tenant?.name ?? null,
     setup_complete: !!setup?.completed_at,
     capabilities: {
       // School-side

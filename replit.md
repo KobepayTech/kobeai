@@ -18,6 +18,24 @@ I prefer iterative development, with a focus on delivering functional components
 - Membership KP grant: every successful M-Pesa payment in `central.ts:completePayment` credits `MEMBERSHIP_KP_GRANT` (default 100 KP) inside the same transaction that flips the payment to `success`. If the `users` row doesn't exist yet (student paid for but not provisioned), the grant is parked in `kp_pending_grants` keyed by `student_code` and drained later — see below.
 - Pending-grant drain (`lib/kp.ts:drainPendingGrants`): at-most-once, race-safe via `FOR UPDATE SKIP LOCKED` + a `WHERE claimed_at IS NULL` CAS. Triggered from `GET /v1/student/market/me` so the student sees credits the moment they open the market. It is a no-op (one indexed pre-check) when nothing is pending.
 
+## Question market agent
+- The market is stocked by an agent, not by hand: `lib/market-agent.ts`, scheduled from `index.ts`, plus `market_agent_runs` and `market_agent_settings`. Full design in `docs/K9_MARKET_AGENT.md`.
+- Every posted question is verified by a second model pass with the answer key hidden; a draft the two passes disagree on is never posted. An unreachable brain means "not verified", so nothing is posted — it falls back to recycling `quiz_questions` instead.
+- `kp_reward` is set by the agent from difficulty × scarcity, clamped to the operator's `reward_min`/`reward_max` band. `max_open_questions` caps total open liability. The agent never touches balances; KP still only moves through `kp_ledger`.
+- Students only see `review_status = 'approved'` questions, and only subjects they take once `student_subjects` has rows for them.
+- Operator console at `/central/v1/admin/market-agent` (`super_admin` only) — dry-run plan, settings, review queue, run history.
+
+## School setup and the operator boundary
+- A school server ships with no accounts. `POST /v1/setup/school` (public, once) creates the tenant, the `school_setup` row and the school's own administrator — always role `admin`.
+- **The install flow has no path to `super_admin`.** The operator console requires `K9_OPERATOR_SECRET` in the environment AND the school's setup password at `/v1/setup/operator/unlock`; without the env var that route answers 404. Never set it on a school's server.
+- The dashboard nav is built from `GET /v1/me/capabilities`, defaulting closed. That is the courtesy; `requireAuth(["super_admin"])` on the central router is the enforcement.
+
+## Staff and student onboarding
+- Teachers onboard from a printed QR: `teacher_invites` (token hash only) → `/lens/#/onboard/<token>` → a personalisation form → account minted and signed in. `staff_profiles` holds the nickname, language, teaching style and briefing length K9 uses for them.
+- Class lists and Form 3+ subject-option sheets are photographed, read by the vision model (`lib/paper-reader.ts`), checked by the teacher, then committed. `paper_imports` holds the proposal; nothing writes to `users` until commit. `student_subjects` holds who takes what.
+- `GET /v1/onboarding/face-queue` drives the face walk: one name at a time, shutter, next, into the existing `/v1/faces/students/:code` enrolment.
+- Full flow in `docs/K9_ONBOARDING.md`.
+
 # System Architecture
 
 ## Monorepo Structure

@@ -61,8 +61,48 @@ Shilling (TSh).
 - **Parents** get school-day summaries, progress and approved notices, never
   a live tracking view.
 
-See `docs/K9_ARCHITECTURE.md`, `docs/TEACHER_LENS.md` and
-`docs/K9_MODEL_STACK.md` for the full design.
+See `docs/K9_ARCHITECTURE.md`, `docs/TEACHER_LENS.md`,
+`docs/K9_MODEL_STACK.md`, `docs/K9_ONBOARDING.md` and
+`docs/K9_MARKET_AGENT.md` for the full design, and `docs/K9_BURSAR_AI.md`
+for where the money side is going.
+
+## Setting a school up
+
+Nobody types a list into a computer.
+
+1. The first person to open the Teacher Dashboard gets the install wizard:
+   the school's name, a setup password, and the school's own administrator.
+   That is the only account the install creates — the KobepayTech operator
+   console is never part of a school install (`docs/K9_ONBOARDING.md`).
+2. The administrator prints teacher QR codes from **Staff & Students**.
+3. A teacher scans one with their own phone. It opens a form — their name,
+   age band, subjects, classes, language, and the name K9 should call them —
+   and creates their account. There is no login screen in the flow.
+4. The same phone photographs the printed class list. The vision model reads
+   it, the teacher checks the rows, and Commit creates the students.
+5. K9 then shows one name at a time: call that student over, tap the shutter,
+   next. That is the face gallery filled in a period, and camera presence
+   starts working.
+6. Finally the Form 3+ subject-option sheet, so nobody is quizzed on a paper
+   they dropped.
+
+Every read is a proposal a human approves. A school with no vision model
+pastes the list in as text through the same parsers.
+
+## Question market
+
+Students browse open questions on a shared classroom PC, rent five minutes of
+exclusive time on one for 10 KP, and win the reward if they answer correctly.
+
+The questions come from an agent running on the school's own models: it reads
+how thin the floor is per subject, what students are actually clearing, and
+which topics they are weak at; writes questions; re-solves each one with the
+answer key hidden and drops the ones the two passes disagree on; prices them
+from difficulty and scarcity inside an operator-set KP band; and sweeps the
+stale ones away. Every cycle is recorded. With no brain installed it recycles
+teacher-authored quiz questions rather than leaving the floor empty.
+
+See `docs/K9_MARKET_AGENT.md`.
 
 ## Printing
 
@@ -160,6 +200,10 @@ mockup sandbox as separate workflows on path-prefix routes.
 
 ### Demo credentials
 
+Development seeds only — `NODE_ENV=development` is the only env in which they
+are honoured, and the desktop/ISO builds do not seed them at all. A real
+school server has no accounts until someone completes the install wizard.
+
 | Role | Login | Password |
 |---|---|---|
 | Teacher | `teacher@school.tz` | `teacher123` |
@@ -179,6 +223,11 @@ mockup sandbox as separate workflows on path-prefix routes.
 | `DEFAULT_OBJECT_STORAGE_BUCKET_ID` | Object storage bucket for uploaded PDFs |
 | `PUBLIC_OBJECT_SEARCH_PATHS` | Object storage public search paths |
 | `PRIVATE_OBJECT_DIR` | Object storage private dir |
+| `K9_OPERATOR_SECRET` | Optional — the ONLY way a `super_admin` can be created. Set it on operator-run servers; never on a school's. Without it `/v1/setup/operator/unlock` answers 404 |
+| `AI_PROVIDER` | `ollama` turns the on-prem brain on (market agent, paper reading, classroom assistant) |
+| `OLLAMA_BASE_URL` | Where Ollama lives (default `http://localhost:11434`) |
+| `OLLAMA_MODEL` | Optional — pins one text model instead of the K9 registry's list |
+| `OLLAMA_VISION_MODEL` | Optional — pins one image-reading model for the paper reader |
 
 ## Deploying a school server
 
