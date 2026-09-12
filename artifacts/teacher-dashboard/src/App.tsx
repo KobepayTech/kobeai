@@ -34,6 +34,9 @@ import ClaimCodesPage from "@/pages/claim-codes";
 import CentralStationeryPage from "@/pages/central-stationery";
 import ModerationApps from "@/pages/moderation-apps";
 import ModerationPayments from "@/pages/moderation-payments";
+import SetupPage from "@/pages/setup";
+import OnboardingPage from "@/pages/onboarding";
+import MarketAgentPage from "@/pages/market-agent";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -48,6 +51,9 @@ function Router() {
   return (
     <Switch>
       <Route path="/login" component={Login} />
+      {/* The install wizard runs before any account exists, so it sits
+          outside Shell alongside login. */}
+      <Route path="/setup" component={SetupPage} />
       
       {/* Protected Routes wrapped in Shell */}
       <Route path="/dashboard">
@@ -97,6 +103,12 @@ function Router() {
       </Route>
       <Route path="/school-ai">
         <Shell><SchoolAi /></Shell>
+      </Route>
+      <Route path="/onboarding">
+        <Shell><OnboardingPage /></Shell>
+      </Route>
+      <Route path="/market-agent">
+        <Shell><MarketAgentPage /></Shell>
       </Route>
       <Route path="/central">
         <Shell><CentralTenants /></Shell>

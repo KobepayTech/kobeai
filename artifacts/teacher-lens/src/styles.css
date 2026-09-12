@@ -235,3 +235,91 @@ select.mark-input option { background: #16161f; color: var(--brand-fg); }
   background: var(--brand-green); color: white; border: none;
   border-radius: 12px; font-weight: 700; font-size: 15px; cursor: pointer;
 }
+
+/* ---------------------------------------------------------------------------
+   Onboarding — the screen a teacher lands on after scanning the QR code.
+   Scrollable, unlike the Lens itself, because it is a form and a review list
+   rather than a viewfinder.
+   --------------------------------------------------------------------------- */
+.onb { min-height: 100vh; overflow-y: auto; }
+.onb-centered { display: flex; align-items: center; justify-content: center; }
+.onb-page {
+  padding: 28px 20px calc(40px + env(safe-area-inset-bottom));
+  max-width: 520px; margin: 0 auto;
+}
+.onb-page h1 { font-size: 26px; margin: 0 0 8px; letter-spacing: -0.01em; }
+.onb-muted { color: var(--brand-muted); font-size: 14px; margin: 0 0 12px; }
+.onb-detail { color: var(--brand-green); font-size: 12px; font-weight: 600; }
+.onb-error { color: var(--brand-danger); font-size: 13px; margin: 10px 0 0; }
+.onb-page label {
+  display: block; font-size: 13px; color: var(--brand-muted);
+  margin: 18px 0 6px;
+}
+.onb-page input, .onb-textarea {
+  width: 100%; box-sizing: border-box; padding: 12px;
+  background: var(--brand-card); color: var(--brand-fg);
+  border: 1px solid var(--brand-card-border); border-radius: 10px;
+  font-size: 16px; font-family: inherit;
+}
+.onb-textarea { min-height: 200px; resize: vertical; }
+.onb-page input:focus, .onb-textarea:focus { outline: none; border-color: var(--brand-green); }
+
+.onb-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.onb-chip {
+  padding: 9px 14px; border-radius: 999px; font-size: 14px; font-weight: 600;
+  background: var(--brand-card); color: var(--brand-fg);
+  border: 1px solid var(--brand-card-border); cursor: pointer;
+}
+.onb-chip.on { background: rgba(0,168,107,0.22); border-color: var(--brand-green); }
+.onb-add { display: flex; gap: 8px; margin-top: 8px; }
+.onb-add input { flex: 1; }
+
+.onb-task {
+  display: flex; gap: 14px; align-items: flex-start; text-align: left;
+  width: 100%; margin-top: 14px; padding: 16px;
+  background: var(--brand-card); border: 1px solid var(--brand-card-border);
+  border-radius: 14px; color: var(--brand-fg); cursor: pointer;
+}
+.onb-task.done { border-color: rgba(0,168,107,0.6); }
+.onb-task-n {
+  flex: none; width: 30px; height: 30px; border-radius: 50%;
+  display: grid; place-items: center; font-weight: 800;
+  background: rgba(0,168,107,0.2); color: #7fe0b7;
+}
+.onb-task-text { display: flex; flex-direction: column; gap: 3px; }
+.onb-task-text strong { font-size: 15px; }
+
+.onb-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.onb-row input { flex: 1; }
+.onb-row-sub { flex: none; max-width: 40%; font-size: 12px; }
+.onb-flag {
+  flex: none; font-size: 11px; font-weight: 700; padding: 3px 8px;
+  border-radius: 999px; background: rgba(244,162,97,0.18); color: var(--brand-warn);
+}
+.onb-del {
+  flex: none; width: 36px; height: 36px; border-radius: 10px;
+  background: transparent; color: var(--brand-dim);
+  border: 1px solid var(--brand-card-border); cursor: pointer;
+}
+
+.onb-camera { height: 100vh; display: flex; flex-direction: column; }
+.onb-camera-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: calc(10px + env(safe-area-inset-top)) 16px 10px;
+  font-size: 13px; color: var(--brand-muted);
+}
+.onb-camera .lens-viewport { flex: 1; }
+.onb-camera-foot {
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
+  padding: 16px 20px calc(24px + env(safe-area-inset-bottom));
+}
+.onb-inline-input {
+  width: 100%; box-sizing: border-box; padding: 11px;
+  background: var(--brand-card); color: var(--brand-fg);
+  border: 1px solid var(--brand-card-border); border-radius: 10px;
+  font-size: 15px; font-family: inherit; text-align: center;
+}
+.onb-ghost {
+  background: transparent; border: none; color: var(--brand-muted);
+  font-size: 14px; padding: 8px; cursor: pointer;
+}
