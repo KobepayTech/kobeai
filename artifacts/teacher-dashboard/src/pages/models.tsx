@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, CheckCircle2, Cpu, HelpCircle } from "lucide-react";
+import { AlertTriangle, Cable, CheckCircle2, HelpCircle, Loader2 } from "lucide-react";
 import { apiGet } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -30,31 +30,47 @@ type ModelRow = {
   expected_size_mb: number | null;
   expected_sha256: string | null;
   url: string | null;
-  kind: "downloaded" | "missing" | "algorithm-only";
+  kind: "downloaded" | "partial" | "missing";
   path: string | null;
   actual_size_mb?: number;
+  connection: "connected" | "not_connected" | "runtime_offline";
+  connection_note: string;
 };
 
 type Response = {
   models_dir: string;
+  base_models_dir: string;
   manifest_path: string;
+  runtime: { url: string; reachable: boolean; error: string | null };
   totals: {
     total: number;
     downloaded: number;
     missing: number;
     optional_missing: number;
-    algorithm_only: number;
+    partial: number;
+    connected: number;
   };
   models: ModelRow[];
 };
 
 function kindBadge(kind: ModelRow["kind"], required: boolean) {
-  if (kind === "downloaded") return { label: "Downloaded", variant: "default" as const };
-  if (kind === "algorithm-only") return { label: "Algorithm only", variant: "secondary" as const };
+  if (kind === "downloaded") return { label: "Ready", variant: "default" as const };
+  if (kind === "partial") {
+    return {
+      label: required ? "Incomplete (required)" : "Incomplete (optional)",
+      variant: required ? ("destructive" as const) : ("secondary" as const),
+    };
+  }
   return {
     label: required ? "Missing (required)" : "Missing (optional)",
     variant: required ? ("destructive" as const) : ("outline" as const),
   };
+}
+
+function connectionBadge(connection: ModelRow["connection"]) {
+  if (connection === "connected") return { label: "Connected", variant: "default" as const };
+  if (connection === "runtime_offline") return { label: "Runtime offline", variant: "destructive" as const };
+  return { label: "Not connected", variant: "outline" as const };
 }
 
 function licenseBadge(license: string) {
@@ -75,29 +91,38 @@ export default function ModelsPage() {
       <div>
         <h1 className="text-3xl font-bold tracking-tight">K9 model registry</h1>
         <p className="text-muted-foreground mt-1">
-          The on-prem models that power the K9 vision + audio cascade. This page shows
-          what the school-server expects to run and what's actually on disk.
+          The on-prem models that power the K9 vision, audio and agent stack. Every location comes
+          from <code className="text-xs">config/k9-models.json</code>; this page shows what's actually on disk.
         </p>
       </div>
 
-      {isLoading && <p className="text-sm text-muted-foreground">Loading manifest…</p>}
+      {isLoading && <p className="text-sm text-muted-foreground">Loading registry…</p>}
       {error && (
         <Card>
           <CardContent className="py-8 flex items-center gap-3 text-destructive">
             <AlertTriangle className="w-5 h-5" />
-            <span>{error instanceof Error ? error.message : "Failed to load manifest"}</span>
+            <span>{error instanceof Error ? error.message : "Failed to load the model registry"}</span>
           </CardContent>
         </Card>
       )}
 
       {data && (
         <>
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+            <Card>
+              <CardContent className="p-5 flex items-center justify-between">
+                <div>
+                  <div className="text-2xl font-bold">{data.totals.connected}/{data.totals.total}</div>
+                  <div className="text-sm text-muted-foreground">Connected to K9</div>
+                </div>
+                <Cable className="h-6 w-6 text-muted-foreground" />
+              </CardContent>
+            </Card>
             <Card>
               <CardContent className="p-5 flex items-center justify-between">
                 <div>
                   <div className="text-2xl font-bold">{data.totals.downloaded}/{data.totals.total}</div>
-                  <div className="text-sm text-muted-foreground">Downloaded</div>
+                  <div className="text-sm text-muted-foreground">On disk</div>
                 </div>
                 <CheckCircle2 className="h-6 w-6 text-muted-foreground" />
               </CardContent>
@@ -108,7 +133,7 @@ export default function ModelsPage() {
                   <div className={"text-2xl font-bold " + (data.totals.missing > 0 ? "text-destructive" : "")}>
                     {data.totals.missing}
                   </div>
-                  <div className="text-sm text-muted-foreground">Missing (required)</div>
+                  <div className="text-sm text-muted-foreground">Required not ready</div>
                 </div>
                 <AlertTriangle className={"h-6 w-6 " + (data.totals.missing > 0 ? "text-destructive" : "text-muted-foreground")} />
               </CardContent>
@@ -117,7 +142,7 @@ export default function ModelsPage() {
               <CardContent className="p-5 flex items-center justify-between">
                 <div>
                   <div className="text-2xl font-bold">{data.totals.optional_missing}</div>
-                  <div className="text-sm text-muted-foreground">Missing (optional)</div>
+                  <div className="text-sm text-muted-foreground">Optional not ready</div>
                 </div>
                 <HelpCircle className="h-6 w-6 text-muted-foreground" />
               </CardContent>
@@ -125,10 +150,10 @@ export default function ModelsPage() {
             <Card>
               <CardContent className="p-5 flex items-center justify-between">
                 <div>
-                  <div className="text-2xl font-bold">{data.totals.algorithm_only}</div>
-                  <div className="text-sm text-muted-foreground">Algorithm-only</div>
+                  <div className="text-2xl font-bold">{data.totals.partial}</div>
+                  <div className="text-sm text-muted-foreground">Incomplete downloads</div>
                 </div>
-                <Cpu className="h-6 w-6 text-muted-foreground" />
+                <Loader2 className="h-6 w-6 text-muted-foreground" />
               </CardContent>
             </Card>
           </div>
@@ -137,9 +162,14 @@ export default function ModelsPage() {
             <CardHeader>
               <CardTitle>Models</CardTitle>
               <CardDescription>
-                Manifest: <code className="text-xs">{data.manifest_path}</code>
+                Registry: <code className="text-xs">{data.manifest_path}</code>
                 <br />
-                On-disk dir: <code className="text-xs">{data.models_dir}</code>
+                K9 models: <code className="text-xs">{data.models_dir}</code>
+                <br />
+                KobeOS models: <code className="text-xs">{data.base_models_dir}</code>
+                <br />
+                K9 model runtime: <code className="text-xs">{data.runtime.url}</code>{" "}
+                {data.runtime.reachable ? "(running)" : `(not reachable${data.runtime.error ? `: ${data.runtime.error}` : ""})`}
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -149,8 +179,9 @@ export default function ModelsPage() {
                     <TableRow>
                       <TableHead>Model</TableHead>
                       <TableHead>Role</TableHead>
-                      <TableHead>Runtime</TableHead>
+                      <TableHead>Category</TableHead>
                       <TableHead>Status</TableHead>
+                      <TableHead>Connection</TableHead>
                       <TableHead className="text-right">Size (MB)</TableHead>
                       <TableHead>License</TableHead>
                     </TableRow>
@@ -158,31 +189,30 @@ export default function ModelsPage() {
                   <TableBody>
                     {data.models.map((m) => {
                       const kind = kindBadge(m.kind, m.required);
+                      const link = connectionBadge(m.connection);
                       const lic = licenseBadge(m.license);
                       return (
                         <TableRow key={m.name}>
                           <TableCell>
                             <div className="font-medium">{m.name}</div>
+                            {m.path && (
+                              <div className="text-xs text-muted-foreground font-mono break-all max-w-md">{m.path}</div>
+                            )}
                             {m.purpose && (
-                              <div className="text-xs text-muted-foreground max-w-md">
-                                {m.purpose}
-                              </div>
+                              <div className="text-xs text-muted-foreground max-w-md">{m.purpose}</div>
                             )}
                             {m.note && (
-                              <div className="text-xs text-muted-foreground italic max-w-md mt-1">
-                                {m.note}
-                              </div>
-                            )}
-                            {m.license_note && (
-                              <div className="text-xs text-destructive/80 max-w-md mt-1">
-                                {m.license_note}
-                              </div>
+                              <div className="text-xs text-muted-foreground italic max-w-md mt-1">{m.note}</div>
                             )}
                           </TableCell>
                           <TableCell>{m.role}</TableCell>
                           <TableCell className="text-xs font-mono">{m.runtime}</TableCell>
                           <TableCell>
                             <Badge variant={kind.variant}>{kind.label}</Badge>
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant={link.variant}>{link.label}</Badge>
+                            <div className="text-xs text-muted-foreground max-w-xs mt-1">{m.connection_note}</div>
                           </TableCell>
                           <TableCell className="text-right font-mono">
                             {m.actual_size_mb ?? m.expected_size_mb ?? "—"}
@@ -203,24 +233,22 @@ export default function ModelsPage() {
             <CardHeader>
               <CardTitle>Operator commands</CardTitle>
               <CardDescription>
-                Model files are downloaded from the school-server shell, not from this UI —
-                one, downloads are gigabytes and don't belong in a browser tab; two, the
-                license flags on some models require a human decision each time.
+                Models are managed from a command prompt on the K9 PC, not from this page — downloads are
+                gigabytes, and some models are gated behind license terms a person must accept.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-2 text-sm">
               <div>
-                <code className="text-xs">pnpm --filter @workspace/scripts models list</code>
-                {" — "}same view as this page, from the shell.
+                <code className="text-xs">scripts\k9-model-status.cmd</code>
+                {" — "}the same readiness view as this page.
               </div>
               <div>
-                <code className="text-xs">pnpm --filter @workspace/scripts models check</code>
-                {" — "}sha-256-verify what's on disk.
+                <code className="text-xs">node scripts\k9-models.mjs layout</code>
+                {" — "}preview moving folders to match the registry (add <code>--apply</code> to do it).
               </div>
               <div>
-                <code className="text-xs">pnpm --filter @workspace/scripts models download</code>
-                {" — "}fetch every missing model (respects <code>KOBEAI_MODELS_DIR</code> and per-model{" "}
-                <code>KOBEAI_MODEL_URL_*</code> env overrides).
+                <code className="text-xs">scripts\download-k9-all-ai-except-qwen.cmd</code>
+                {" — "}align folders, then download everything missing (never touches Qwen).
               </div>
             </CardContent>
           </Card>

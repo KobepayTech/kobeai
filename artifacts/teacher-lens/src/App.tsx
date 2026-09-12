@@ -187,15 +187,17 @@ function useCamera() {
     ctx.drawImage(v, 0, 0);
     return canvas.toDataURL("image/jpeg", 0.7);
   }, []);
-  const captureBlob = useCallback(async (): Promise<Blob | null> => {
+  // Frames are scaled down so the K9 models answer faster on a school PC.
+  const captureBlob = useCallback(async (maxSide = 1600): Promise<Blob | null> => {
     const v = videoRef.current;
     if (!v || v.videoWidth === 0) return null;
+    const scale = Math.min(1, maxSide / Math.max(v.videoWidth, v.videoHeight));
     const canvas = document.createElement("canvas");
-    canvas.width = v.videoWidth;
-    canvas.height = v.videoHeight;
+    canvas.width = Math.round(v.videoWidth * scale);
+    canvas.height = Math.round(v.videoHeight * scale);
     const ctx = canvas.getContext("2d");
     if (!ctx) return null;
-    ctx.drawImage(v, 0, 0);
+    ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
     return await new Promise<Blob | null>((resolve) =>
       canvas.toBlob((b) => resolve(b), "image/jpeg", 0.75),
     );
@@ -309,6 +311,33 @@ type StudentBrief = {
   }>;
 };
 
+type LensUpload = { request_id: number | null; image_key: string | null };
+
+type ReadItem = {
+  question_number: number;
+  question_text: string | null;
+  student_answer: string | null;
+  expected_answer: string | null;
+  is_correct: boolean | null;
+  marks_awarded: number | null;
+  marks_possible: number | null;
+};
+
+/** A lens frame request as the K9 worker left it (GET /v1/teacher-lens/frame/:id). */
+type LensResult = {
+  id: number;
+  status: "pending" | "in_progress" | "completed" | "failed" | "cancelled";
+  kind: string;
+  response: null | {
+    student_code?: string | null;
+    student_name?: string | null;
+    hint?: string;
+    note?: string;
+    items?: ReadItem[];
+    total_marks_awarded?: number | null;
+  };
+};
+
 function LookupPanel({
   auth,
   sessionId,
@@ -411,7 +440,12 @@ type MarkItem = {
   student_answer: string;
   expected_answer: string;
   is_correct: boolean;
+  marks_awarded: string;
+  marks_possible: string;
 };
+
+const isBlankItem = (it: MarkItem) =>
+  !it.student_answer.trim() && !it.expected_answer.trim() && !it.question_topic.trim() && !it.marks_awarded.trim();
 
 function newItem(n: number): MarkItem {
   return {
@@ -420,23 +454,186 @@ function newItem(n: number): MarkItem {
     student_answer: "",
     expected_answer: "",
     is_correct: true,
+    marks_awarded: "",
+    marks_possible: "",
   };
+}
+
+// Exams are set up in the dashboard. Marking against one records the
+// student's result live: report card, scoreboard and classroom TV update
+// straight away, and the earbud whispers the grade and position.
+type LensExam = {
+  id: number;
+  class_name?: string;
+  subject: string;
+  title: string;
+  kind: "ca" | "terminal";
+  total_marks: number;
+};
+
+type ExamStudent = { student_id: number; name: string; student_code: string | null; marks: number | null };
+
+type PaperGraded = {
+  summary: { total: number; correct: number; score_percent: number | null };
+  result: null | {
+    marks: number;
+    percent: number;
+    exam: LensExam;
+    standing: null | {
+      school_grade: string;
+      necta_grade: string;
+      subject_position: number;
+      subject_out_of: number;
+    };
+  };
+  curated_notes_generated: number;
+  retest: { retest_id: number; items: number } | null;
+};
+
+const EXAM_STORAGE_KEY = "k9-lens.exam";
+
+function storedExamId(): number | null {
+  try {
+    const id = Number(localStorage.getItem(EXAM_STORAGE_KEY));
+    return id > 0 ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+function ordinal(n: number): string {
+  const tens = n % 100;
+  if (tens >= 11 && tens <= 13) return `${n}th`;
+  return `${n}${({ 1: "st", 2: "nd", 3: "rd" } as Record<number, string>)[n % 10] ?? "th"}`;
+}
+
+function errorDetail(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  const start = message.indexOf("{");
+  if (start >= 0) {
+    try {
+      const body = JSON.parse(message.slice(start));
+      return body.detail ?? body.error ?? message;
+    } catch {
+      // not JSON
+    }
+  }
+  return message;
 }
 
 function MarkPanel({
   auth,
   sessionId,
+  paper,
   onClose,
 }: {
   auth: StoredAuth;
   sessionId: number | null;
+  /** The photo taken with the shutter, queued for the K9 brain to read. */
+  paper: { requestId: number | null; imageKey: string | null };
   onClose: () => void;
 }) {
+  const [exams, setExams] = useState<LensExam[]>([]);
+  const [examId, setExamId] = useState<number | null>(storedExamId);
+  const [students, setStudents] = useState<ExamStudent[]>([]);
   const [studentCode, setStudentCode] = useState("");
+  const [marksObtained, setMarksObtained] = useState("");
   const [subject, setSubject] = useState("");
   const [assessment, setAssessment] = useState("");
   const [items, setItems] = useState<MarkItem[]>(() => [newItem(1)]);
   const [busy, setBusy] = useState(false);
+  const [lastResult, setLastResult] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const exam = exams.find((e) => e.id === examId) ?? null;
+
+  useEffect(() => {
+    let cancelled = false;
+    apiGet<{ exams: LensExam[] }>(auth, "/v1/results/exams?status=open").then((r) => {
+      if (cancelled) return;
+      const list = r?.exams ?? [];
+      setExams(list);
+      setExamId((id) => (id !== null && list.some((e) => e.id === id) ? id : null));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [auth]);
+
+  const loadStudents = useCallback(
+    async (id: number) => {
+      const r = await apiGet<{ students: ExamStudent[] }>(auth, `/v1/results/exams/${id}/results`);
+      setStudents(r?.students ?? []);
+    },
+    [auth],
+  );
+
+  useEffect(() => {
+    try {
+      if (examId) localStorage.setItem(EXAM_STORAGE_KEY, String(examId));
+      else localStorage.removeItem(EXAM_STORAGE_KEY);
+    } catch {
+      // storage unavailable — the picker still works for this sheet
+    }
+    setStudents([]);
+    if (examId) loadStudents(examId);
+  }, [examId, loadStudents]);
+
+  // The brain reads the photo in the background; its answers fill the sheet
+  // for the teacher to check before saving.
+  const [paperImageKey, setPaperImageKey] = useState<string | null>(paper.imageKey);
+  const [readState, setReadState] = useState<"none" | "reading" | "read" | "failed">(paper.requestId ? "reading" : "none");
+  const [readNote, setReadNote] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!paper.requestId) return;
+    let cancelled = false;
+    (async () => {
+      const deadline = Date.now() + 15 * 60_000;
+      while (!cancelled && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        const result = await apiGet<LensResult>(auth, `/v1/teacher-lens/frame/${paper.requestId}`);
+        if (cancelled) return;
+        if (!result || result.status === "pending" || result.status === "in_progress") continue;
+        const found = result.status === "completed" ? (result.response?.items ?? []) : [];
+        if (found.length === 0) {
+          setReadState("failed");
+          setReadNote(`Kobe couldn't read the paper: ${result.response?.note ?? "no answers found"}`);
+          return;
+        }
+        setItems((prev) =>
+          prev.length === 1 && isBlankItem(prev[0]!)
+            ? found.map((it, i) => ({
+                question_number: it.question_number ?? i + 1,
+                question_topic: "",
+                student_answer: it.student_answer ?? "",
+                expected_answer: it.expected_answer ?? "",
+                is_correct: it.is_correct ?? true,
+                marks_awarded: it.marks_awarded != null ? String(it.marks_awarded) : "",
+                marks_possible: it.marks_possible != null ? String(it.marks_possible) : "",
+              }))
+            : prev,
+        );
+        const codeOnPaper = result.response?.student_code;
+        if (codeOnPaper) setStudentCode((code) => code || codeOnPaper);
+        const total = result.response?.total_marks_awarded;
+        if (total != null) setMarksObtained((marks) => marks || String(total));
+        setReadState("read");
+        setReadNote(
+          `Kobe read ${found.length} answer${found.length === 1 ? "" : "s"}` +
+            (result.response?.student_name ? ` for ${result.response.student_name}` : "") +
+            " — check them before saving.",
+        );
+        return;
+      }
+      if (!cancelled) {
+        setReadState("failed");
+        setReadNote("Kobe is taking too long — enter the marks by hand.");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [auth, paper.requestId]);
 
   const patch = (i: number, k: keyof MarkItem, v: MarkItem[keyof MarkItem]) => {
     setItems((prev) => {
@@ -447,28 +644,54 @@ function MarkPanel({
   };
 
   const submit = async () => {
-    if (!studentCode.trim()) return;
+    const code = studentCode.trim();
+    if (!code) return;
+    const filled = items.filter(
+      (it) => it.expected_answer.trim() !== "" || it.student_answer.trim() !== "" || it.marks_awarded.trim() !== "",
+    );
+    const marks = marksObtained.trim();
+    if (filled.length === 0 && !(exam && marks !== "")) {
+      speak(exam ? "Enter the marks or add a question first." : "Add at least one question first.");
+      return;
+    }
     setBusy(true);
+    setError(null);
     try {
+      const num = (value: string) => (value.trim() === "" ? undefined : Number(value));
       const payload = {
         session_id: sessionId,
-        student_code: studentCode.trim(),
-        subject: subject.trim() || undefined,
-        assessment_title: assessment.trim() || undefined,
-        items: items.filter(
-          (it) => it.expected_answer.trim() !== "" || it.student_answer.trim() !== "",
-        ),
+        student_code: code,
+        exam_id: exam?.id,
+        marks_obtained: exam ? num(marks) : undefined,
+        subject: exam ? undefined : subject.trim() || undefined,
+        assessment_title: exam ? undefined : assessment.trim() || undefined,
+        paper_image_key: paperImageKey ?? undefined,
+        items: filled.map(({ marks_awarded, marks_possible, ...it }) => ({
+          ...it,
+          marks_awarded: num(marks_awarded),
+          marks_possible: num(marks_possible),
+        })),
       };
-      if (payload.items.length === 0) {
-        speak("Add at least one question first.");
-        setBusy(false);
+      const r = await apiPost<PaperGraded>(auth, "/v1/teacher-lens/paper-graded", payload);
+      if (r.result) {
+        // The server whispers the result through the earbud. Keep the sheet
+        // open on the same exam so the next paper is one tap away.
+        const standing = r.result.standing;
+        const name = students.find((s) => s.student_code === code)?.name ?? code;
+        setLastResult(
+          `${name}: ${r.result.marks}/${r.result.exam.total_marks} (${r.result.percent}%)` +
+            (standing
+              ? ` · grade ${standing.school_grade} · NECTA ${standing.necta_grade} · ${ordinal(standing.subject_position)} of ${standing.subject_out_of}`
+              : ""),
+        );
+        setStudentCode("");
+        setMarksObtained("");
+        setItems([newItem(1)]);
+        setPaperImageKey(null);
+        setReadState("none");
+        if (exam) loadStudents(exam.id);
         return;
       }
-      const r = await apiPost<{
-        summary: { total: number; correct: number; score_percent: number | null };
-        curated_notes_generated: number;
-        retest: { retest_id: number; items: number } | null;
-      }>(auth, "/v1/teacher-lens/paper-graded", payload);
       const parts: string[] = [];
       parts.push(
         `Saved ${studentCode}: ${r.summary.correct} of ${r.summary.total}` +
@@ -488,23 +711,95 @@ function MarkPanel({
       speak(parts.join(" "));
       onClose();
     } catch (err) {
+      setError(errorDetail(err));
       speak("Couldn't save. Try again.");
     } finally {
       setBusy(false);
     }
   };
 
+  const marked = students.filter((s) => s.marks !== null).length;
+  const pickable = students.filter((s): s is ExamStudent & { student_code: string } => !!s.student_code);
+
   return (
     <div className="lens-sheet" onClick={onClose}>
       <div className="lens-sheet-body" onClick={(e) => e.stopPropagation()}>
         <h2>Mark paper</h2>
-        <p>Fill only what you need — the vision worker will fill the rest later.</p>
-        <label style={{ display: "block", fontSize: 12, color: "var(--brand-muted)", marginBottom: 4 }}>Student code</label>
-        <input className="mark-input" value={studentCode} onChange={(e) => setStudentCode(e.target.value)} placeholder="K9-002" />
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-          <input className="mark-input" value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Subject" />
-          <input className="mark-input" value={assessment} onChange={(e) => setAssessment(e.target.value)} placeholder="Assessment title" />
-        </div>
+        <label className="mark-label">Exam</label>
+        <select
+          className="mark-input"
+          value={examId ?? ""}
+          onChange={(e) => {
+            setExamId(e.target.value ? Number(e.target.value) : null);
+            setLastResult(null);
+            setError(null);
+          }}
+        >
+          <option value="">No exam — practice marking</option>
+          {exams.map((e) => (
+            <option key={e.id} value={e.id}>
+              {e.class_name ? `${e.class_name} · ` : ""}
+              {e.subject} · {e.title} (out of {e.total_marks})
+            </option>
+          ))}
+        </select>
+        {exam ? (
+          <p>
+            Results go straight to report cards and the scoreboard · {marked} of {students.length} marked.
+          </p>
+        ) : (
+          <p>Fill only what you need — the vision worker will fill the rest later.</p>
+        )}
+        {lastResult && <div className="mark-result">✓ {lastResult}</div>}
+        {error && <div className="mark-error">{error}</div>}
+        {readState !== "none" && (
+          <div className={readState === "failed" ? "mark-error" : "mark-result"}>
+            {readState === "reading" ? "📄 Kobe is reading the paper… you can start filling in meanwhile." : readNote}
+          </div>
+        )}
+
+        <label className="mark-label">Student</label>
+        {exam && pickable.length > 0 && (
+          <select
+            className="mark-input"
+            value={pickable.some((s) => s.student_code === studentCode) ? studentCode : ""}
+            onChange={(e) => setStudentCode(e.target.value)}
+          >
+            <option value="">Pick a student…</option>
+            {pickable.map((s) => (
+              <option key={s.student_id} value={s.student_code}>
+                {s.name}
+                {s.marks !== null ? ` ✓ ${s.marks}` : ""}
+              </option>
+            ))}
+          </select>
+        )}
+        <input
+          className="mark-input"
+          value={studentCode}
+          onChange={(e) => setStudentCode(e.target.value)}
+          placeholder={exam ? "Or type a student code" : "K9-002"}
+        />
+        {exam ? (
+          <>
+            <div className="mark-row">
+              <input
+                className="mark-input"
+                inputMode="decimal"
+                value={marksObtained}
+                onChange={(e) => setMarksObtained(e.target.value)}
+                placeholder="Paper total"
+              />
+              <span className="mark-outof">out of {exam.total_marks}</span>
+            </div>
+            <p className="mark-hint">Enter the paper total, or mark questions below and KobeAI works the total out.</p>
+          </>
+        ) : (
+          <div className="mark-row">
+            <input className="mark-input" value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Subject" />
+            <input className="mark-input" value={assessment} onChange={(e) => setAssessment(e.target.value)} placeholder="Assessment title" />
+          </div>
+        )}
 
         {items.map((it, i) => (
           <div key={i} className="mark-item">
@@ -543,6 +838,24 @@ function MarkPanel({
               onChange={(e) => patch(i, "expected_answer", e.target.value)}
               placeholder="Correct answer"
             />
+            {exam && (
+              <div className="mark-row">
+                <input
+                  className="mark-input"
+                  inputMode="decimal"
+                  value={it.marks_awarded}
+                  onChange={(e) => patch(i, "marks_awarded", e.target.value)}
+                  placeholder="Marks given"
+                />
+                <input
+                  className="mark-input"
+                  inputMode="decimal"
+                  value={it.marks_possible}
+                  onChange={(e) => patch(i, "marks_possible", e.target.value)}
+                  placeholder="Question out of"
+                />
+              </div>
+            )}
           </div>
         ))}
         <button className="mark-add" onClick={() => setItems((p) => [...p, newItem(p.length + 1)])}>
@@ -550,9 +863,9 @@ function MarkPanel({
         </button>
         <div className="mark-actions">
           <button className="mark-primary" onClick={submit} disabled={busy || !studentCode.trim()}>
-            {busy ? "Sending…" : "Send to KobeAI"}
+            {busy ? "Sending…" : exam ? "Record result" : "Send to KobeAI"}
           </button>
-          <button className="mark-ghost" onClick={onClose}>Cancel</button>
+          <button className="mark-ghost" onClick={onClose}>{lastResult ? "Done" : "Cancel"}</button>
         </div>
       </div>
     </div>
@@ -567,13 +880,22 @@ export function App() {
   const [mode, setMode] = useState<Mode>("lookup");
   const [sessionId, setSessionId] = useState<number | null>(null);
   const [lookupBrief, setLookupBrief] = useState<StudentBrief | null>(null);
-  const [markOpen, setMarkOpen] = useState(false);
+  const [markOpen, setMarkOpen] = useState<null | { requestId: number | null; imageKey: string | null }>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [wakeWordOn, setWakeWordOn] = useState<boolean>(false);
   const [studentPicker, setStudentPicker] = useState<null | {
     students: Array<{ student_code: string; student_name: string | null }>;
     imageKey: string | null;
+    requestId: number | null;
+    recognising: boolean;
+    hint: string | null;
   }>(null);
+  const [rememberFace, setRememberFace] = useState(true);
+  // The frame request the open picker is waiting on; cleared when it closes.
+  const pickerRequest = useRef<number | null>(null);
+  useEffect(() => {
+    if (!studentPicker) pickerRequest.current = null;
+  }, [studentPicker]);
   const { videoRef, ready: camReady, err: camErr, captureFrame, captureBlob } = useCamera();
 
   // Start a session as soon as we have auth.
@@ -640,14 +962,15 @@ export function App() {
     }
   }, [auth]);
 
-  // Upload the current frame to /v1/teacher-lens/frame. Returns the
-  // resulting image_key + queue id if the server accepted it; server
-  // enqueues the analysis request. Best effort — if it fails we still
-  // let the teacher pick a student manually.
-  const uploadFrame = useCallback(async (): Promise<{ image_key: string | null } | null> => {
+  // Upload the current frame to /v1/teacher-lens/frame. The server saves it
+  // and queues it for the K9 worker: faces are matched against enrolled
+  // students, paper photos are read by the brain. Best effort — if it fails
+  // the teacher still picks the student or types the marks.
+  const uploadFrame = useCallback(async (): Promise<LensUpload | null> => {
     if (!auth) return null;
-    const blob = await captureBlob();
+    const blob = await captureBlob(mode === "mark" ? 1600 : 1280);
     if (!blob) return null;
+    const examId = mode === "mark" ? storedExamId() : null;
     try {
       const res = await fetch(`${auth.api_base}/api/v1/teacher-lens/frame`, {
         method: "POST",
@@ -656,47 +979,28 @@ export function App() {
           "content-type": "image/jpeg",
           "x-lens-session-id": String(sessionId ?? ""),
           "x-lens-mode": mode,
+          ...(examId ? { "x-lens-exam-id": String(examId) } : {}),
         },
         body: blob,
       });
       if (!res.ok) return null;
       const body = await res.json();
-      return { image_key: body?.image_key ?? null };
+      return { request_id: body?.request?.id ?? null, image_key: body?.image_key ?? null };
     } catch {
       return null;
     }
   }, [auth, captureBlob, mode, sessionId]);
 
-  const onShutter = useCallback(async () => {
-    if (!auth) return;
-    // Priming the SpeechSynthesis on the first user gesture is critical
-    // on iOS/Android — later background whispers only fire if we've spoken
-    // at least once from a direct tap.
-    speak(mode === "lookup" ? "Looking up." : "Ready to mark.");
-    captureFrame(); // for local UX polish; the upload path uses captureBlob
-
-    if (mode === "lookup") {
-      // Fire the frame upload in parallel with prepping the picker. When
-      // the real Youtu-VL / SCRFD worker is running server-side, the
-      // recognised student_code will come back via the whisper channel
-      // ("Asha. Last Biology 92%…") without the teacher having to pick.
-      const upload = uploadFrame();
-      const recent = await fetchRecentStudents();
-      const uploaded = await upload;
-      setStudentPicker({ students: recent, imageKey: uploaded?.image_key ?? null });
-    } else {
-      setMarkOpen(true);
-    }
-  }, [auth, mode, captureFrame, uploadFrame, fetchRecentStudents]);
-
   const runLookup = useCallback(
-    async (studentCode: string) => {
+    async (studentCode: string, quiet = false) => {
       if (!auth) return;
+      pickerRequest.current = null;
       setStudentPicker(null);
       try {
         const r = await apiPost<StudentBrief>(auth, "/v1/teacher-lens/lookup", {
           student_code: studentCode,
           session_id: sessionId,
+          quiet,
         });
         setLookupBrief(r);
       } catch (err) {
@@ -705,6 +1009,69 @@ export function App() {
     },
     [auth, sessionId],
   );
+
+  // Waits for the worker to recognise the face. A match opens the brief (the
+  // server has already whispered it); otherwise the picker stays open.
+  const watchLookup = useCallback(
+    async (requestId: number) => {
+      if (!auth) return;
+      const deadline = Date.now() + 60_000;
+      while (Date.now() < deadline && pickerRequest.current === requestId) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        const result = await apiGet<LensResult>(auth, `/v1/teacher-lens/frame/${requestId}`);
+        if (pickerRequest.current !== requestId) return;
+        if (!result || result.status === "pending" || result.status === "in_progress") continue;
+        const code = result.status === "completed" ? result.response?.student_code : null;
+        if (code) {
+          runLookup(code, true);
+        } else {
+          setStudentPicker((p) =>
+            p && p.requestId === requestId ? { ...p, recognising: false, hint: result.response?.hint ?? null } : p,
+          );
+        }
+        return;
+      }
+      setStudentPicker((p) => (p && p.requestId === requestId ? { ...p, recognising: false } : p));
+    },
+    [auth, runLookup],
+  );
+
+  // The teacher picked the student; optionally remember the face from this frame.
+  const pickStudent = useCallback(
+    (studentCode: string) => {
+      const imageKey = studentPicker?.imageKey;
+      if (auth && imageKey && rememberFace) {
+        apiPost(auth, "/v1/teacher-lens/enroll-face", { student_code: studentCode, image_key: imageKey }).catch((err) =>
+          setToast(`Face not saved: ${errorDetail(err)}`),
+        );
+      }
+      runLookup(studentCode);
+    },
+    [auth, rememberFace, runLookup, studentPicker],
+  );
+
+  const onShutter = useCallback(async () => {
+    if (!auth) return;
+    // Priming the SpeechSynthesis on the first user gesture is critical
+    // on iOS/Android — later background whispers only fire if we've spoken
+    // at least once from a direct tap.
+    speak(mode === "lookup" ? "Looking up." : "Reading the paper.");
+    captureFrame(); // for local UX polish; the upload path uses captureBlob
+
+    if (mode === "lookup") {
+      // The picker opens straight away; a recognised face replaces it.
+      const upload = uploadFrame();
+      const recent = await fetchRecentStudents();
+      const uploaded = await upload;
+      const requestId = uploaded?.request_id ?? null;
+      pickerRequest.current = requestId;
+      setStudentPicker({ students: recent, imageKey: uploaded?.image_key ?? null, requestId, recognising: requestId !== null, hint: null });
+      if (requestId !== null) watchLookup(requestId);
+    } else {
+      const uploaded = await uploadFrame();
+      setMarkOpen({ requestId: uploaded?.request_id ?? null, imageKey: uploaded?.image_key ?? null });
+    }
+  }, [auth, mode, captureFrame, uploadFrame, fetchRecentStudents, watchLookup]);
 
   // Wake-word toggle — when on, saying "Kobe" fires the shutter.
   useWakeWord({
@@ -807,10 +1174,18 @@ export function App() {
           <div className="lens-sheet-body" onClick={(e) => e.stopPropagation()}>
             <h2>Who are you looking at?</h2>
             <p>
-              {studentPicker.imageKey
-                ? "Frame sent to Kobe. Pick a student — face-recognition will replace this list once the on-prem vision worker is running."
-                : "Couldn't send the frame — pick a student manually to continue."}
+              {studentPicker.recognising
+                ? "Kobe is recognising the face… or pick the student now."
+                : studentPicker.imageKey
+                  ? (studentPicker.hint ?? "Pick the student.")
+                  : "Couldn't send the frame — pick a student manually to continue."}
             </p>
+            {studentPicker.imageKey && (
+              <label className="mark-check">
+                <input type="checkbox" checked={rememberFace} onChange={(e) => setRememberFace(e.target.checked)} />
+                Remember this face so Kobe recognises them next time
+              </label>
+            )}
             <ul style={{ listStyle: "none", padding: 0, margin: 0, maxHeight: "50vh", overflowY: "auto" }}>
               {studentPicker.students.length === 0 ? (
                 <li style={{ color: "var(--brand-muted)", padding: "8px 0" }}>No students loaded. Enter a code:</li>
@@ -820,7 +1195,7 @@ export function App() {
                     <button
                       className="mark-add"
                       style={{ textAlign: "left", borderStyle: "solid", margin: "6px 0" }}
-                      onClick={() => runLookup(s.student_code)}
+                      onClick={() => pickStudent(s.student_code)}
                     >
                       <strong>{s.student_name ?? s.student_code}</strong>
                       <span style={{ color: "var(--brand-muted)", marginLeft: 8, fontFamily: "SF Mono, monospace", fontSize: 12 }}>
@@ -838,7 +1213,7 @@ export function App() {
                 onKeyDown={(e) => {
                   if (e.key !== "Enter") return;
                   const v = (e.target as HTMLInputElement).value.trim();
-                  if (v) runLookup(v);
+                  if (v) pickStudent(v);
                 }}
               />
               <button className="mark-ghost" onClick={() => setStudentPicker(null)}>Cancel</button>
@@ -848,7 +1223,7 @@ export function App() {
       )}
 
       <LookupPanel auth={auth} sessionId={sessionId} onClose={() => setLookupBrief(null)} brief={lookupBrief} />
-      {markOpen && <MarkPanel auth={auth} sessionId={sessionId} onClose={() => setMarkOpen(false)} />}
+      {markOpen && <MarkPanel auth={auth} sessionId={sessionId} paper={markOpen} onClose={() => setMarkOpen(null)} />}
     </div>
   );
 }

@@ -1,11 +1,14 @@
 import express, { Router, type Request, type Response } from "express";
-import { mkdir, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join, resolve, sep } from "node:path";
 import { pool } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
+import { FaceGalleryError, enrollStudentFace } from "../lib/face-gallery";
 import {
   enqueueVisionAnalysis,
   enqueueVisionAnalysisSafe,
+  getVisionRequest,
+  type VisionAnalysisRequest,
 } from "../lib/vision-queue";
 import { getMergedProfile } from "../lib/learning-profile";
 import {
@@ -13,6 +16,16 @@ import {
   generateRetestForPaper,
 } from "../lib/student-development";
 import { logger } from "../lib/logger";
+import {
+  announceResult,
+  ensureResultsTables,
+  findClassStudent,
+  getExam,
+  ordinal,
+  recordExamResult,
+  studentStanding,
+  type ExamRow,
+} from "../lib/results";
 
 const router = Router();
 
@@ -112,6 +125,31 @@ function text(value: unknown, max = 500): string | null {
   return trimmed;
 }
 
+function positiveInt(value: unknown): number | null {
+  const n = Number(value);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+/**
+ * Marks for an exam result: the teacher's total when given, otherwise the
+ * per-question marks scaled to the exam total, otherwise the share of correct answers.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function marksForExam(totalMarks: number, items: any[], correct: number, marksObtained: number | null): number | null {
+  if (marksObtained !== null) return marksObtained;
+  if (items.length === 0) return null;
+  const possible = items.map((it) => Number(it.marks_possible));
+  if (possible.every((p) => Number.isFinite(p) && p > 0)) {
+    const awarded = items.reduce((sum: number, it) => {
+      const given = Number(it.marks_awarded);
+      return sum + (Number.isFinite(given) ? given : it.is_correct ? Number(it.marks_possible) : 0);
+    }, 0);
+    const possibleTotal = possible.reduce((sum, p) => sum + p, 0);
+    return Math.round((awarded / possibleTotal) * totalMarks * 10) / 10;
+  }
+  return Math.round((correct / items.length) * totalMarks * 10) / 10;
+}
+
 async function enqueueWhisper(args: {
   sessionId: number | null;
   teacherUserId: number | null;
@@ -204,9 +242,22 @@ router.post("/v1/teacher-lens/paper-graded", requireTeacher, async (req, res) =>
     res.status(400).json({ error: "student_code required" });
     return;
   }
+  const examId = positiveInt(body.exam_id);
+  const marksObtained =
+    body.marks_obtained === undefined || body.marks_obtained === null || body.marks_obtained === ""
+      ? null
+      : Number(body.marks_obtained);
+  if (marksObtained !== null && (!Number.isFinite(marksObtained) || marksObtained < 0)) {
+    res.status(400).json({ error: "marks_obtained must be a number of marks, 0 or more" });
+    return;
+  }
+  if (marksObtained !== null && examId === null) {
+    res.status(400).json({ error: "marks_obtained needs an exam_id" });
+    return;
+  }
   const items = Array.isArray(body.items) ? body.items : [];
-  if (items.length === 0) {
-    res.status(400).json({ error: "items array required (may be empty only in a stub call)" });
+  if (items.length === 0 && marksObtained === null) {
+    res.status(400).json({ error: "send items, or marks_obtained with an exam_id" });
     return;
   }
   if (items.length > 200) {
@@ -214,9 +265,31 @@ router.post("/v1/teacher-lens/paper-graded", requireTeacher, async (req, res) =>
     return;
   }
 
+  // Marking against an exam set up in the dashboard records the student's
+  // result live: report card and scoreboards update immediately.
+  let exam: ExamRow | null = null;
+  let student: { id: number; name: string; student_code: string } | null = null;
+  if (examId !== null) {
+    await ensureResultsTables();
+    exam = await getExam(examId);
+    if (!exam) {
+      res.status(404).json({ error: "exam_not_found" });
+      return;
+    }
+    if (exam.status !== "open") {
+      res.status(409).json({ error: "exam_closed", detail: "Reopen the exam in the dashboard to record more results." });
+      return;
+    }
+    student = await findClassStudent(exam.class_id, studentCode);
+    if (!student) {
+      res.status(400).json({ error: "student_not_in_exam_class", detail: `${studentCode} is not in ${exam.class_name ?? "this exam's class"}.` });
+      return;
+    }
+  }
+
   const sessionId = Number.isFinite(Number(body.session_id)) ? Number(body.session_id) : null;
-  const subject = text(body.subject, 200);
-  const assessment = text(body.assessment_title, 300);
+  const subject = text(body.subject, 200) ?? exam?.subject ?? null;
+  const assessment = text(body.assessment_title, 300) ?? exam?.title ?? null;
   const paperImage = text(body.paper_image_key, 300);
 
   let correct = 0;
@@ -230,22 +303,33 @@ router.post("/v1/teacher-lens/paper-graded", requireTeacher, async (req, res) =>
     else incorrect += 1;
   }
   const total = items.length;
-  const score = total > 0 ? Math.round((correct / total) * 100) : null;
+  const examMarks = exam ? marksForExam(exam.total_marks, items, correct, marksObtained) : null;
+  if (exam && examMarks !== null && examMarks > exam.total_marks) {
+    res.status(400).json({ error: "marks_exceed_total", detail: `${examMarks} is more than the exam's ${exam.total_marks} marks.` });
+    return;
+  }
+  const score =
+    total > 0
+      ? Math.round((correct / total) * 100)
+      : exam && examMarks !== null
+        ? Math.round((examMarks / exam.total_marks) * 100)
+        : null;
 
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     const paper = await client.query(
       `INSERT INTO graded_papers (
-         session_id, teacher_user_id, student_code, subject,
+         session_id, teacher_user_id, student_code, class_id, subject,
          assessment_title, total_questions, correct_count, incorrect_count,
          score_percent, paper_image_key, metadata
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb)
        RETURNING *`,
       [
         sessionId,
         req.auth?.user_id ?? null,
         studentCode,
+        exam?.class_id ?? null,
         subject,
         assessment,
         total,
@@ -253,7 +337,10 @@ router.post("/v1/teacher-lens/paper-graded", requireTeacher, async (req, res) =>
         incorrect,
         score,
         paperImage,
-        JSON.stringify(body.metadata && typeof body.metadata === "object" ? body.metadata : {}),
+        JSON.stringify({
+          ...(body.metadata && typeof body.metadata === "object" ? body.metadata : {}),
+          ...(exam ? { exam_id: exam.id } : {}),
+        }),
       ],
     );
     const paperId = Number(paper.rows[0].id);
@@ -278,14 +365,33 @@ router.post("/v1/teacher-lens/paper-graded", requireTeacher, async (req, res) =>
         ],
       );
     }
+    let recorded: Awaited<ReturnType<typeof recordExamResult>> | null = null;
+    if (exam && student && examMarks !== null) {
+      recorded = await recordExamResult(client, {
+        examId: exam.id,
+        studentId: student.id,
+        marks: examMarks,
+        source: "lens",
+        gradedPaperId: paperId,
+        recordedBy: req.auth?.user_id ?? null,
+      });
+    }
     await client.query("COMMIT");
 
-    // Fire a whisper back so the teacher hears "captured N of N for
-    // <student> — one weak spot on X" through the earbud. Best effort.
+    let standing: Awaited<ReturnType<typeof studentStanding>> = null;
+    if (recorded && exam && student) {
+      announceResult(recorded.exam, student, { marks: recorded.result.marks, percent: recorded.result.percent });
+      standing = await studentStanding(exam.class_id, exam.term_id, student.id, exam.subject).catch(() => null);
+    }
+
+    // Whisper the result back through the earbud. Best effort.
     const shortSummary =
-      total > 0
-        ? `${studentCode}: ${correct} out of ${total} — ${score}%`
-        : `${studentCode}: no items captured`;
+      recorded && exam && student
+        ? `${student.name}: ${recorded.result.marks} of ${exam.total_marks} in ${exam.subject}` +
+          (standing ? `, grade ${standing.school_grade}, ${ordinal(standing.subject_position)} of ${standing.subject_out_of}` : "")
+        : total > 0
+          ? `${studentCode}: ${correct} out of ${total} — ${score}%`
+          : `${studentCode}: no items captured`;
     await enqueueWhisper({
       sessionId,
       teacherUserId: req.auth?.user_id ?? null,
@@ -353,6 +459,7 @@ router.post("/v1/teacher-lens/paper-graded", requireTeacher, async (req, res) =>
     res.status(201).json({
       paper: paper.rows[0],
       summary: { total, correct, incorrect, score_percent: score },
+      result: recorded ? { ...recorded.result, exam: recorded.exam, standing } : null,
       curated_notes_generated: notesGenerated,
       retest,
     });
@@ -365,32 +472,10 @@ router.post("/v1/teacher-lens/paper-graded", requireTeacher, async (req, res) =>
   }
 });
 
-/**
- * POST /v1/teacher-lens/lookup
- * Teacher looks at a student and taps the lens button. Client either
- * supplies the student_code (from face-recognition already done client-
- * side) or a face_signature the server will resolve. Server returns a
- * short brief and enqueues a whisper.
- * Body: { student_code?: string, session_id?: number }
- */
-router.post("/v1/teacher-lens/lookup", requireTeacher, async (req, res) => {
-  await ensureTables();
-  const studentCode = text(req.body?.student_code, 100);
-  if (!studentCode) {
-    res.status(400).json({
-      error: "student_code required. Face-recognition-based lookup will hit /v1/teacher-lens/frame once the vision worker is wired.",
-    });
-    return;
-  }
-  const sessionId = Number.isFinite(Number(req.body?.session_id))
-    ? Number(req.body.session_id)
-    : null;
-
+/** The short spoken brief for a student and the data behind it; null for an unknown student. */
+async function studentBrief(studentCode: string) {
   const profile = await getMergedProfile(studentCode);
-  if (!profile) {
-    res.status(404).json({ error: "student_not_found" });
-    return;
-  }
+  if (!profile) return null;
 
   // Recent grading — the teacher wants "how did they do last time".
   const recent = await pool.query(
@@ -412,19 +497,11 @@ router.post("/v1/teacher-lens/lookup", requireTeacher, async (req, res) => {
   if (lastScore != null && lastSubject) parts.push(`Last ${lastSubject}: ${lastScore} percent.`);
   if (weakBits) parts.push(`Weak in ${weakBits}.`);
   if (strongBits && !weakBits) parts.push(`Strong in ${strongBits}.`);
-  const whisper = parts.join(" ");
 
-  await enqueueWhisper({
-    sessionId,
-    teacherUserId: req.auth?.user_id ?? null,
-    text: whisper,
-    priority: 3,
-  });
-
-  res.json({
+  return {
     student_code: studentCode,
     student_name: profile.student_name,
-    whisper,
+    whisper: parts.join(" "),
     profile: {
       topics_strong: profile.topics_strong,
       topics_weak: profile.topics_weak,
@@ -432,7 +509,131 @@ router.post("/v1/teacher-lens/lookup", requireTeacher, async (req, res) => {
       questions_asked_count: profile.questions_asked_count,
     },
     recent_papers: recent.rows,
-  });
+  };
+}
+
+/**
+ * POST /v1/teacher-lens/lookup
+ * The teacher picked a student (or the worker recognised their face). Returns a
+ * short brief and whispers it unless `quiet` — the worker's match has already
+ * been whispered.
+ * Body: { student_code: string, session_id?: number, quiet?: boolean }
+ */
+router.post("/v1/teacher-lens/lookup", requireTeacher, async (req, res) => {
+  await ensureTables();
+  const studentCode = text(req.body?.student_code, 100);
+  if (!studentCode) {
+    res.status(400).json({ error: "student_code required" });
+    return;
+  }
+  const sessionId = Number.isFinite(Number(req.body?.session_id))
+    ? Number(req.body.session_id)
+    : null;
+
+  const brief = await studentBrief(studentCode);
+  if (!brief) {
+    res.status(404).json({ error: "student_not_found" });
+    return;
+  }
+
+  if (req.body?.quiet !== true) {
+    await enqueueWhisper({
+      sessionId,
+      teacherUserId: req.auth?.user_id ?? null,
+      text: brief.whisper,
+      priority: 3,
+    });
+  }
+
+  res.json(brief);
+});
+
+/**
+ * Speaks a finished lens request back to the teacher: the recognised
+ * student's brief, or how many answers the brain read from a paper.
+ */
+export async function onLensRequestCompleted(request: VisionAnalysisRequest): Promise<void> {
+  await ensureTables();
+  const context = request.context ?? {};
+  const response = request.response ?? {};
+  const sessionId = positiveInt(context["lens_session_id"]);
+  const say = (whisper: string, priority: number) =>
+    enqueueWhisper({ sessionId, teacherUserId: request.requested_by, text: whisper, priority });
+
+  if (request.reason === "lens:lookup") {
+    const code = typeof response["student_code"] === "string" ? response["student_code"] : null;
+    const brief = request.status === "completed" && code ? await studentBrief(code) : null;
+    if (brief) {
+      await say(brief.whisper, 3);
+      return;
+    }
+    const hint = typeof response["hint"] === "string" ? response["hint"] : "Pick them from the list.";
+    await say(`I couldn't recognise that student. ${hint}`, 4);
+    return;
+  }
+
+  if (request.reason === "lens:mark_paper") {
+    const items = Array.isArray(response["items"]) ? response["items"].length : 0;
+    await say(
+      request.status === "completed" && items > 0
+        ? `Kobe read ${items} answer${items === 1 ? "" : "s"}. Check them on the mark sheet.`
+        : "Kobe couldn't read that paper. Enter the marks by hand.",
+      4,
+    );
+  }
+}
+
+/**
+ * GET /v1/teacher-lens/frame/:id
+ * The lens polls its own frame request: { status, kind, response }.
+ */
+router.get("/v1/teacher-lens/frame/:id", requireTeacher, async (req, res) => {
+  const id = positiveInt(req.params.id);
+  const request = id ? await getVisionRequest(id) : null;
+  const visible =
+    request?.reason?.startsWith("lens:") &&
+    (request.requested_by === (req.auth?.user_id ?? null) || req.auth?.role !== "teacher");
+  if (!request || !visible) {
+    res.status(404).json({ error: "lens_request_not_found" });
+    return;
+  }
+  res.json({ id: request.id, status: request.status, kind: request.reason?.slice("lens:".length), response: request.response });
+});
+
+/**
+ * POST /v1/teacher-lens/enroll-face
+ * Remembers a student's face from a frame the lens already uploaded, so the
+ * next lookup recognises them. Body: { student_code, image_key }
+ */
+router.post("/v1/teacher-lens/enroll-face", requireTeacher, async (req, res) => {
+  const studentCode = text(req.body?.student_code, 100);
+  const imageKey = text(req.body?.image_key, 200);
+  if (!studentCode || !imageKey || !/^\d{4}-\d{2}-\d{2}[\\/][\w.-]+\.(jpe?g|png)$/i.test(imageKey)) {
+    res.status(400).json({ error: "student_code and the lens image_key are required" });
+    return;
+  }
+  const framesDir = resolve(process.env["KOBEAI_LENS_FRAMES_DIR"] ?? "/var/lib/kobeai/lens-frames");
+  const file = resolve(framesDir, imageKey);
+  if (!file.startsWith(framesDir + sep)) {
+    res.status(400).json({ error: "invalid image_key" });
+    return;
+  }
+  let image: Buffer;
+  try {
+    image = await readFile(file);
+  } catch {
+    res.status(404).json({ error: "lens frame not found" });
+    return;
+  }
+  try {
+    res.status(201).json(await enrollStudentFace(studentCode, image, { source: "lens", createdBy: req.auth?.user_id ?? null }));
+  } catch (err) {
+    if (err instanceof FaceGalleryError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    throw err;
+  }
 });
 
 /**
@@ -558,6 +759,9 @@ router.post(
     const sessionId = Number(req.header("x-lens-session-id"));
     const mode = text(req.header("x-lens-mode"), 40) ?? "lookup";
     const kind = mode === "mark" ? "mark_paper" : "lookup";
+    // The exam picked on the mark sheet tells the brain the subject and total.
+    const examId = kind === "mark_paper" ? positiveInt(req.header("x-lens-exam-id")) : null;
+    const exam = examId ? await getExam(examId).catch(() => null) : null;
 
     const framesDir = resolve(process.env["KOBEAI_LENS_FRAMES_DIR"] ?? "/var/lib/kobeai/lens-frames");
     const today = new Date().toISOString().slice(0, 10);
@@ -604,6 +808,7 @@ router.post(
           image_bytes: req.body.length,
           lens_session_id: Number.isFinite(sessionId) ? sessionId : null,
           lens_mode: mode,
+          ...(exam ? { exam_id: exam.id, subject: exam.subject, total_marks: exam.total_marks } : {}),
         },
       });
     } catch (err) {

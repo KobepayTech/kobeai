@@ -33,6 +33,9 @@ import modelsRouter from "./models";
 import classroomRouter from "./classroom";
 import teacherLensRouter from "./teacher-lens";
 import studentDevelopmentRouter from "./student-development";
+import localObjectsRouter from "./local-objects";
+import resultsRouter from "./results";
+import facesRouter from "./faces";
 
 const router: IRouter = Router();
 
@@ -72,5 +75,8 @@ router.use(modelsRouter);
 router.use(classroomRouter);
 router.use(teacherLensRouter);
 router.use(studentDevelopmentRouter);
+router.use(localObjectsRouter);
+router.use(resultsRouter);
+router.use(facesRouter);
 
 export default router;

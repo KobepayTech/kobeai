@@ -52,3 +52,7 @@ Thumbs.db
 *.jks
 *.keystore
 keystore.properties
+
+# Python bytecode from the K9 model runtime
+__pycache__/
+*.pyc

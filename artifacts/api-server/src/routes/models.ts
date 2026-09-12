@@ -1,119 +1,105 @@
-import { readFile, stat } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { statSync } from "node:fs";
 import type { Request, Response } from "express";
 import { Router } from "express";
+import { listOllamaModels, ollamaHasModel } from "../lib/ai-provider";
 import { requireAuth } from "../lib/auth";
+import { k9ModelPath, k9ModelsConfigPath, k9ModelStatus, loadK9Models, type K9ModelEntry } from "../lib/k9-models";
+import { fetchK9RuntimeHealth, type K9RuntimeHealth } from "../lib/k9-runtime";
 
 const router = Router();
 const requireStaff = requireAuth(["admin", "super_admin"]);
 
-// Resolve the manifest path from env, then fall back to the check-in copy at
-// deploy/school-server/models.json (relative to the running api-server process).
-function manifestPath(): string {
-  const explicit = process.env["KOBEAI_MODELS_MANIFEST"];
-  if (explicit) return resolve(explicit);
-  // artifacts/api-server/dist is the runtime cwd on `pnpm run start`, so walk
-  // up to the repo root before descending into deploy/.
-  return resolve(process.cwd(), "..", "..", "deploy", "school-server", "models.json");
-}
+type Connection = { connection: "connected" | "not_connected" | "runtime_offline"; connection_note: string };
 
-function modelsDir(): string {
-  return process.env["KOBEAI_MODELS_DIR"] ?? "/var/lib/kobeai/models";
-}
-
-type ModelEntry = {
-  role: string;
-  runtime: string;
-  purpose?: string;
-  url?: string | null;
-  url_env?: string;
-  sha256?: string | null;
-  size_mb?: number;
-  license: string;
-  license_note?: string;
-  required: boolean;
-  note?: string;
-};
-
-function modelFilePath(name: string, entry: ModelEntry): string | null {
-  if (!entry.url) return null;
-  const base = entry.url.split("/").pop() ?? "";
-  const filename = base && base.length > 1 ? base : `${name}.bin`;
-  return join(modelsDir(), name, filename);
-}
-
-async function localStatus(
-  name: string,
-  entry: ModelEntry,
-): Promise<{
-  kind: "algorithm-only" | "missing" | "downloaded";
-  path: string | null;
-  actual_size_mb?: number;
-}> {
-  if (!entry.url) return { kind: "algorithm-only", path: null };
-  const path = modelFilePath(name, entry);
-  if (!path) return { kind: "missing", path: null };
-  try {
-    const s = await stat(path);
-    return { kind: "downloaded", path, actual_size_mb: Math.round(s.size / (1024 * 1024)) };
-  } catch {
-    return { kind: "missing", path };
+/**
+ * Whether K9 can actually use a model right now: text models through their
+ * Ollama name, everything else through a K9 runtime engine.
+ */
+function connectionFor(name: string, entry: K9ModelEntry, runtime: K9RuntimeHealth, ollamaModels: string[]): Connection {
+  if (entry.ollama) {
+    return ollamaHasModel(ollamaModels, entry.ollama.name)
+      ? { connection: "connected", connection_note: `Ollama model ${entry.ollama.name}` }
+      : { connection: "not_connected", connection_note: "Not in Ollama yet — run `node scripts/k9-models.mjs ollama-sync`" };
   }
+  const engines = Object.entries(runtime.engines).filter(([, engine]) => engine.models.includes(name));
+  if (engines.length === 0) {
+    return runtime.reachable
+      ? { connection: "not_connected", connection_note: "Not used by the K9 runtime" }
+      : { connection: "runtime_offline", connection_note: `K9 runtime not reachable at ${runtime.url}` };
+  }
+  const live = engines.find(([, engine]) => engine.state === "loaded" || engine.state === "available");
+  if (live) return { connection: "connected", connection_note: `K9 runtime ${live[0]} (${live[1].state})` };
+  const [engineName, engine] = engines[0]!;
+  const reason = engine.needs_packages.length
+    ? `needs ${engine.needs_packages.join(", ")}`
+    : engine.state === "not_integrated"
+      ? "not integrated yet"
+      : engine.missing_models.length
+        ? `missing ${engine.missing_models.join(", ")}`
+        : (engine.error ?? engine.state);
+  return { connection: "not_connected", connection_note: `K9 runtime ${engineName}: ${reason}` };
 }
 
 /**
  * GET /v1/admin/models
- * Merged view of the K9 model manifest + local disk state. Admin-only —
- * this leaks the models directory path and download URLs which we don't
- * expose to teachers.
+ * The K9 model registry (config/k9-models.json) merged with what is on disk
+ * and what K9 can actually run (Ollama + the K9 model runtime). Admin-only —
+ * it reveals local paths.
  */
 router.get("/v1/admin/models", requireStaff, async (_req: Request, res: Response) => {
-  let manifest: { models: Record<string, ModelEntry> };
+  let registry;
   try {
-    const raw = await readFile(manifestPath(), "utf8");
-    manifest = JSON.parse(raw);
+    registry = loadK9Models();
   } catch (err) {
     res.status(500).json({
-      error: "models_manifest_unreadable",
+      error: "models_registry_unreadable",
       detail: err instanceof Error ? err.message : String(err),
-      manifest_path: manifestPath(),
+      manifest_path: k9ModelsConfigPath(),
     });
     return;
   }
 
-  const entries = Object.entries(manifest.models ?? {});
-  const rows = await Promise.all(
-    entries.map(async ([name, entry]) => {
-      const status = await localStatus(name, entry);
-      return {
-        name,
-        role: entry.role,
-        runtime: entry.runtime,
-        purpose: entry.purpose ?? null,
-        required: !!entry.required,
-        license: entry.license,
-        license_note: entry.license_note ?? null,
-        note: entry.note ?? null,
-        expected_size_mb: entry.size_mb ?? null,
-        expected_sha256: entry.sha256 ?? null,
-        url: entry.url ?? null,
-        ...status,
-      };
-    }),
-  );
+  const [runtime, ollamaModels] = await Promise.all([fetchK9RuntimeHealth(), listOllamaModels()]);
+  const { config, roots, configPath } = registry;
+  const rows = Object.entries(config.models).map(([name, entry]) => {
+    const modelPath = k9ModelPath(roots, entry);
+    const status = k9ModelStatus(entry, modelPath);
+    const source = entry.source;
+    return {
+      name,
+      role: entry.role,
+      runtime: entry.category,
+      purpose: source.note ?? entry.note ?? null,
+      required: entry.required,
+      license: entry.license ?? "see model card",
+      license_note: null,
+      note: entry.gated ? "Gated on Hugging Face — accept the model terms and run `hf auth login` before downloading." : null,
+      expected_size_mb: null,
+      expected_sha256: null,
+      url: source.repo ? `https://huggingface.co/${source.repo}` : source.url ?? null,
+      kind: status === "ready" ? ("downloaded" as const) : status,
+      path: modelPath,
+      actual_size_mb: entry.kind === "file" && status === "ready" ? Math.round(statSync(modelPath).size / (1024 * 1024)) : undefined,
+      ...(status === "ready"
+        ? connectionFor(name, entry, runtime, ollamaModels)
+        : { connection: "not_connected" as const, connection_note: "Not on disk yet" }),
+    };
+  });
 
-  const totals = {
-    total: rows.length,
-    downloaded: rows.filter((r) => r.kind === "downloaded").length,
-    missing: rows.filter((r) => r.kind === "missing" && r.required).length,
-    optional_missing: rows.filter((r) => r.kind === "missing" && !r.required).length,
-    algorithm_only: rows.filter((r) => r.kind === "algorithm-only").length,
-  };
-
+  const notReady = rows.filter((r) => r.kind !== "downloaded");
   res.json({
-    models_dir: modelsDir(),
-    manifest_path: manifestPath(),
-    totals,
+    models_dir: roots.k9,
+    base_models_dir: roots.base,
+    manifest_path: configPath,
+    runtime: { url: runtime.url, reachable: runtime.reachable, error: runtime.error },
+    totals: {
+      total: rows.length,
+      downloaded: rows.length - notReady.length,
+      missing: notReady.filter((r) => r.required).length,
+      optional_missing: notReady.filter((r) => !r.required).length,
+      partial: rows.filter((r) => r.kind === "partial").length,
+      connected: rows.filter((r) => r.connection === "connected").length,
+    },
     models: rows,
   });
 });

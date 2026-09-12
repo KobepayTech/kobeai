@@ -11,7 +11,7 @@ const router = Router();
 // The classroom kiosk authenticates with the same shared secret used for
 // birthday-celebration claims. Staff JWT works too so an admin browser can
 // hit the same endpoints for testing.
-function requireKioskOrStaff(req: Request, res: Response, next: NextFunction): void {
+export function requireKioskOrStaff(req: Request, res: Response, next: NextFunction): void {
   const secret = process.env["CLASSROOM_KIOSK_SECRET"];
   const provided = req.header("x-classroom-kiosk-secret");
   if (secret && provided) {

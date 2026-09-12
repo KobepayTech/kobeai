@@ -2,6 +2,8 @@ import { timingSafeEqual } from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
 import { Router } from "express";
 import { requireAuth, verifyToken } from "../lib/auth";
+import { faceGallery } from "../lib/face-gallery";
+import { logger } from "../lib/logger";
 import {
   claimVisionRequests,
   completeVisionRequest,
@@ -9,6 +11,7 @@ import {
   ensureVisionQueueTables,
   listVisionRequests,
 } from "../lib/vision-queue";
+import { onLensRequestCompleted } from "./teacher-lens";
 
 const router = Router();
 
@@ -112,6 +115,20 @@ router.post("/v1/vision/analyze/:id/complete", requireWorkerOrStaff, async (req,
     return;
   }
   res.json({ request: updated });
+  // Teacher Lens requests are spoken back through the teacher's earbud.
+  if (updated.reason?.startsWith("lens:")) {
+    onLensRequestCompleted(updated).catch((err) =>
+      logger.warn({ err: err instanceof Error ? err.message : String(err), id }, "lens result whisper failed"),
+    );
+  }
+});
+
+/**
+ * GET /v1/vision/face-gallery
+ * Enrolled student faces (SFace embeddings) for the K9 worker's matcher.
+ */
+router.get("/v1/vision/face-gallery", requireWorkerOrStaff, async (_req, res) => {
+  res.json({ students: await faceGallery() });
 });
 
 /**

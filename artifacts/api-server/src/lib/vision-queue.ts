@@ -154,6 +154,12 @@ export async function completeVisionRequest(
   return rowToRequest(rows.rows[0]);
 }
 
+export async function getVisionRequest(id: number): Promise<VisionAnalysisRequest | null> {
+  await ensureVisionQueueTables();
+  const rows = await pool.query(`SELECT * FROM vision_analysis_requests WHERE id = $1`, [id]);
+  return rows.rows[0] ? rowToRequest(rows.rows[0]) : null;
+}
+
 export async function listVisionRequests(args: {
   status?: string;
   studentCode?: string | null;

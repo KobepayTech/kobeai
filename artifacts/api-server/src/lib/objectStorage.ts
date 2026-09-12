@@ -1,6 +1,9 @@
-import { Storage, File } from "@google-cloud/storage";
+import type { File, Storage } from "@google-cloud/storage";
+import { createHmac, randomUUID, timingSafeEqual } from "crypto";
+import { createReadStream } from "fs";
+import { access, mkdir, writeFile } from "fs/promises";
+import path from "path";
 import { Readable } from "stream";
-import { randomUUID } from "crypto";
 import {
   ObjectAclPolicy,
   ObjectPermission,
@@ -11,23 +14,81 @@ import {
 
 const REPLIT_SIDECAR_ENDPOINT = "http://127.0.0.1:1106";
 
-export const objectStorageClient = new Storage({
-  credentials: {
-    audience: "replit",
-    subject_token_type: "access_token",
-    token_url: `${REPLIT_SIDECAR_ENDPOINT}/token`,
-    type: "external_account",
-    credential_source: {
-      url: `${REPLIT_SIDECAR_ENDPOINT}/credential`,
-      format: {
-        type: "json",
-        subject_token_field_name: "access_token",
+// Self-hosted installs (the K9 desktop server) have no Replit sidecar, so when
+// OBJECT_STORAGE_DIR is set uploads live on local disk instead of GCS. The
+// upload "presigned URL" becomes an HMAC-signed route on this API server.
+const LOCAL_OBJECT_DIR = process.env["OBJECT_STORAGE_DIR"] ?? "";
+const LOCAL_UPLOAD_ROUTE = "/api/v1/local-objects/uploads/";
+const LOCAL_ENTITY_PREFIX = "/objects/uploads/";
+const LOCAL_UPLOAD_TTL_MS = 15 * 60_000;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+let storageClient: Storage | null = null;
+
+/**
+ * GCS client authenticated through the Replit sidecar. Loaded lazily so
+ * local-disk installs never need @google-cloud/storage at runtime.
+ */
+export async function getObjectStorageClient(): Promise<Storage> {
+  if (!storageClient) {
+    const { Storage } = await import("@google-cloud/storage");
+    storageClient = new Storage({
+      credentials: {
+        audience: "replit",
+        subject_token_type: "access_token",
+        token_url: `${REPLIT_SIDECAR_ENDPOINT}/token`,
+        type: "external_account",
+        credential_source: {
+          url: `${REPLIT_SIDECAR_ENDPOINT}/credential`,
+          format: {
+            type: "json",
+            subject_token_field_name: "access_token",
+          },
+        },
+        universe_domain: "googleapis.com",
       },
-    },
-    universe_domain: "googleapis.com",
-  },
-  projectId: "",
-});
+      projectId: "",
+    });
+  }
+  return storageClient;
+}
+
+export function isLocalObjectStorage(): boolean {
+  return LOCAL_OBJECT_DIR !== "";
+}
+
+function localUploadSigningKey(): string {
+  return process.env["JWT_SECRET"] ?? process.env["SESSION_SECRET"] ?? "dev-local-object-uploads";
+}
+
+function signLocalUpload(id: string, exp: string): string {
+  return createHmac("sha256", localUploadSigningKey()).update(`${id}.${exp}`).digest("hex");
+}
+
+/** Checks the id / expiry / signature of a local upload URL. */
+export function verifyLocalUpload(id: string, exp: string, sig: string): boolean {
+  if (!UUID_RE.test(id)) return false;
+  const expMs = Number(exp);
+  if (!Number.isFinite(expMs) || expMs < Date.now()) return false;
+  const expected = Buffer.from(signLocalUpload(id, exp));
+  const given = Buffer.from(sig);
+  return expected.length === given.length && timingSafeEqual(expected, given);
+}
+
+/** Disk location of a local upload. `id` must already be validated. */
+export function localUploadPath(id: string): string {
+  return path.join(LOCAL_OBJECT_DIR, "uploads", id);
+}
+
+function resolveLocalEntity(objectPath: string): string {
+  const id = objectPath.startsWith(LOCAL_ENTITY_PREFIX)
+    ? objectPath.slice(LOCAL_ENTITY_PREFIX.length)
+    : "";
+  if (!UUID_RE.test(id)) {
+    throw new ObjectNotFoundError();
+  }
+  return localUploadPath(id);
+}
 
 export class ObjectNotFoundError extends Error {
   constructor() {
@@ -71,11 +132,12 @@ export class ObjectStorageService {
   }
 
   async searchPublicObject(filePath: string): Promise<File | null> {
+    const client = await getObjectStorageClient();
     for (const searchPath of this.getPublicObjectSearchPaths()) {
       const fullPath = `${searchPath}/${filePath}`;
 
       const { bucketName, objectName } = parseObjectPath(fullPath);
-      const bucket = objectStorageClient.bucket(bucketName);
+      const bucket = client.bucket(bucketName);
       const file = bucket.file(objectName);
 
       const [exists] = await file.exists();
@@ -107,6 +169,12 @@ export class ObjectStorageService {
   }
 
   async getObjectEntityUploadURL(): Promise<string> {
+    if (isLocalObjectStorage()) {
+      const id = randomUUID();
+      const exp = String(Date.now() + LOCAL_UPLOAD_TTL_MS);
+      return `${LOCAL_UPLOAD_ROUTE}${id}?exp=${exp}&sig=${signLocalUpload(id, exp)}`;
+    }
+
     const privateObjectDir = this.getPrivateObjectDir();
     if (!privateObjectDir) {
       throw new Error(
@@ -128,6 +196,15 @@ export class ObjectStorageService {
     });
   }
 
+  /** Writes bytes straight to local storage (used by seeders); returns the /objects path. */
+  async putLocalObject(bytes: Buffer): Promise<string> {
+    const id = randomUUID();
+    const file = localUploadPath(id);
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, bytes);
+    return `${LOCAL_ENTITY_PREFIX}${id}`;
+  }
+
   async getObjectEntityFile(objectPath: string): Promise<File> {
     if (!objectPath.startsWith("/objects/")) {
       throw new ObjectNotFoundError();
@@ -145,7 +222,8 @@ export class ObjectStorageService {
     }
     const objectEntityPath = `${entityDir}${entityId}`;
     const { bucketName, objectName } = parseObjectPath(objectEntityPath);
-    const bucket = objectStorageClient.bucket(bucketName);
+    const client = await getObjectStorageClient();
+    const bucket = client.bucket(bucketName);
     const objectFile = bucket.file(objectName);
     const [exists] = await objectFile.exists();
     if (!exists) {
@@ -154,7 +232,27 @@ export class ObjectStorageService {
     return objectFile;
   }
 
+  /** Opens a read stream for a stored /objects/<id> entity on either backend. */
+  async openObjectEntityStream(objectPath: string): Promise<Readable> {
+    if (isLocalObjectStorage()) {
+      const file = resolveLocalEntity(objectPath);
+      try {
+        await access(file);
+      } catch {
+        throw new ObjectNotFoundError();
+      }
+      return createReadStream(file);
+    }
+    const objectFile = await this.getObjectEntityFile(objectPath);
+    return objectFile.createReadStream();
+  }
+
   normalizeObjectEntityPath(rawPath: string): string {
+    if (rawPath.startsWith(LOCAL_UPLOAD_ROUTE)) {
+      const id = rawPath.slice(LOCAL_UPLOAD_ROUTE.length).split("?")[0] ?? "";
+      return UUID_RE.test(id) ? `${LOCAL_ENTITY_PREFIX}${id}` : rawPath;
+    }
+
     if (!rawPath.startsWith("https://storage.googleapis.com/")) {
       return rawPath;
     }

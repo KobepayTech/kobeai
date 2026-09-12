@@ -17,6 +17,7 @@ import AddChildPage from "@/pages/add-child";
 import StationeryPage from "@/pages/stationery";
 import MagazinePage from "@/pages/magazine";
 import DevelopmentPage from "@/pages/development";
+import ReportCardPage from "@/pages/report-card";
 import { InstallPrompt } from "@/components/install-prompt";
 
 const queryClient = new QueryClient({
@@ -45,6 +46,7 @@ function Router() {
       <Route path="/stationery" component={StationeryPage} />
       <Route path="/magazine/:childId" component={MagazinePage} />
       <Route path="/development/:childId" component={DevelopmentPage} />
+      <Route path="/report-card/:childId" component={ReportCardPage} />
       <Route component={NotFound} />
     </Switch>
   );

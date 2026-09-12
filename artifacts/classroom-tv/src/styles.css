@@ -174,6 +174,144 @@ body {
 .tv-footer .ok { background: var(--brand-green); }
 .tv-footer .bad { background: #ef476f; }
 
+/* --- Scoreboard mode --- */
+.tv-board-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2vh;
+  min-height: 0;
+}
+
+.tv-board-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 2vw;
+}
+
+.tv-board-title {
+  margin: 0;
+  font-size: 4vw;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.tv-board-sub {
+  font-size: 1.6vw;
+  color: var(--brand-green);
+  white-space: nowrap;
+}
+
+.tv-board-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1.2vh;
+}
+
+.tv-board-list-dense {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-auto-flow: column;
+  grid-template-rows: repeat(10, auto);
+  column-gap: 2vw;
+  row-gap: 0.8vh;
+}
+
+.tv-board-row {
+  display: grid;
+  grid-template-columns: 5vw 1fr auto 6vw;
+  align-items: center;
+  gap: 1.5vw;
+  padding: 1.4vh 1.5vw;
+  background: var(--brand-card);
+  border: 1px solid var(--brand-card-border);
+  border-radius: 0.8vw;
+}
+
+.tv-board-list-dense .tv-board-row {
+  grid-template-columns: 3.5vw 1fr auto 4vw;
+  padding: 0.8vh 1vw;
+}
+
+.tv-board-pos {
+  font-size: 2.4vw;
+  font-weight: 800;
+  color: var(--brand-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.tv-board-name {
+  font-size: 2.2vw;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tv-board-score {
+  font-size: 2.2vw;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.tv-board-grade {
+  font-size: 2vw;
+  font-weight: 800;
+  text-align: center;
+  border-radius: 0.6vw;
+  padding: 0.4vh 0;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.tv-board-list-dense .tv-board-pos,
+.tv-board-list-dense .tv-board-name,
+.tv-board-list-dense .tv-board-score {
+  font-size: 1.5vw;
+}
+
+.tv-board-list-dense .tv-board-grade {
+  font-size: 1.3vw;
+}
+
+.tv-board-top1 {
+  background: rgba(0, 168, 107, 0.16);
+  border-color: rgba(0, 168, 107, 0.55);
+}
+.tv-board-top1 .tv-board-pos { color: #f4d35e; }
+.tv-board-top2 .tv-board-pos { color: #cfd8dc; }
+.tv-board-top3 .tv-board-pos { color: var(--brand-accent); }
+
+.tv-board-dots {
+  display: flex;
+  justify-content: center;
+  gap: 0.6vw;
+  margin-top: auto;
+}
+
+.tv-board-dots span {
+  width: 0.8vw;
+  height: 0.8vw;
+  border-radius: 50%;
+  background: var(--brand-card-border);
+}
+
+.tv-board-dots span.on { background: var(--brand-green); }
+
+.tv-board-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-size: 2.4vw;
+  color: var(--brand-muted);
+  padding: 0 8vw;
+}
+
 /* --- Birthday overlay --- */
 .tv-celebration {
   position: fixed;

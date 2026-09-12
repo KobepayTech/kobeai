@@ -29,7 +29,7 @@ router.get("/v1/admin/stats", (_req, res) => {
     uptime_seconds: uptimeSeconds,
     ai: {
       provider: process.env["AI_PROVIDER"] ?? "canned",
-      model: process.env["OLLAMA_MODEL"] ?? "mistral:7b",
+      model: process.env["OLLAMA_MODEL"] ?? "K9 registry (config/k9-models.json)",
     },
     students: {
       total: 248,
