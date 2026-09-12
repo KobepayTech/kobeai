@@ -52,3 +52,13 @@ Thumbs.db
 *.jks
 *.keystore
 keystore.properties
+
+# Python bytecode from the K9 model runtime
+__pycache__/
+*.pyc
+
+# Camera configuration holds RTSP URLs with camera passwords — never commit it.
+# The placeholder template services/k9-camera/cameras.example.json is fine.
+k9-cameras*.json
+cameras.json
+!cameras.example.json

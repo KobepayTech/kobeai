@@ -10,6 +10,8 @@ import { startLearningProfileScheduler } from "./lib/learning-profile";
 import { startMagazineScheduler } from "./lib/magazine";
 import { startLessonPlanScheduler } from "./lib/student-development";
 import { startDailyDigest } from "./routes/parent-push";
+import { bootstrapK9School } from "./lib/k9-bootstrap";
+import { mountWebSurfaces } from "./lib/web-host";
 
 const rawPort = process.env["PORT"];
 
@@ -25,6 +27,16 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
+// The K9 desktop server (desktop/) must never ship the demo accounts, so it
+// bootstraps a real school instead. K9_SEED_DEMO=1 opts back in for demos.
+const desktopMode = process.env["K9_DESKTOP"] === "1";
+const seedDemo = !desktopMode || process.env["K9_SEED_DEMO"] === "1";
+
+const webRoot = process.env["K9_WEB_ROOT"];
+if (webRoot) {
+  mountWebSurfaces(app, webRoot);
+}
+
 app.listen(port, async (err) => {
   if (err) {
     logger.error({ err }, "Error listening on port");
@@ -33,34 +45,42 @@ app.listen(port, async (err) => {
 
   logger.info({ port }, "Server listening");
 
-  // Best-effort demo seed. Failures here shouldn't crash the server — they
-  // just mean the print picker will show an empty file list until a teacher
-  // uploads a real document.
-  await seedDemoData().catch((err) => logger.error({ err }, "demo seed failed"));
-
-  // Seed the multi-tenant control plane and grab a license key for the
-  // "this school" demo tenant. In production each school would have its own
-  // CENTRAL_BASE_URL + TENANT_LICENSE_KEY in its env file; for the demo we
-  // auto-wire them so the local sync agent has something to talk to.
-  try {
-    const { thisTenantLicenseKey } = await seedCentralDemo();
-    if (!process.env["CENTRAL_BASE_URL"]) {
-      process.env["CENTRAL_BASE_URL"] = `http://127.0.0.1:${port}`;
-    }
-    if (!process.env["TENANT_LICENSE_KEY"] && thisTenantLicenseKey) {
-      process.env["TENANT_LICENSE_KEY"] = thisTenantLicenseKey;
-    }
-  } catch (err) {
-    logger.error({ err }, "central seed failed");
+  if (desktopMode) {
+    await bootstrapK9School(port).catch((err) =>
+      logger.error({ err }, "K9 school bootstrap failed"),
+    );
   }
 
-  await seedStationeryDemo().catch((err) =>
-    logger.error({ err }, "stationery seed failed"),
-  );
+  if (seedDemo) {
+    // Best-effort demo seed. Failures here shouldn't crash the server — they
+    // just mean the documents page will be empty until a teacher uploads a
+    // real document.
+    await seedDemoData().catch((err) => logger.error({ err }, "demo seed failed"));
 
-  await seedMiniApps().catch((err) =>
-    logger.error({ err }, "mini-apps seed failed"),
-  );
+    // Seed the multi-tenant control plane and grab a license key for the
+    // "this school" demo tenant. In production each school would have its own
+    // CENTRAL_BASE_URL + TENANT_LICENSE_KEY in its env file; for the demo we
+    // auto-wire them so the local sync agent has something to talk to.
+    try {
+      const { thisTenantLicenseKey } = await seedCentralDemo();
+      if (!process.env["CENTRAL_BASE_URL"]) {
+        process.env["CENTRAL_BASE_URL"] = `http://127.0.0.1:${port}`;
+      }
+      if (!process.env["TENANT_LICENSE_KEY"] && thisTenantLicenseKey) {
+        process.env["TENANT_LICENSE_KEY"] = thisTenantLicenseKey;
+      }
+    } catch (err) {
+      logger.error({ err }, "central seed failed");
+    }
+
+    await seedStationeryDemo().catch((err) =>
+      logger.error({ err }, "stationery seed failed"),
+    );
+
+    await seedMiniApps().catch((err) =>
+      logger.error({ err }, "mini-apps seed failed"),
+    );
+  }
 
   startCentralSync();
   startDailyDigest();

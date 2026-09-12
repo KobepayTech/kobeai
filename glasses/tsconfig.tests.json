@@ -1,0 +1,16 @@
+{
+  // The tests run under node:test through tsx. Node's own types come from the
+  // scripts workspace, which already depends on them, so this package needs no
+  // dependencies of its own.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "composite": false,
+    "declarationMap": false,
+    "emitDeclarationOnly": false,
+    "noEmit": true,
+    "rootDir": ".",
+    "typeRoots": ["../scripts/node_modules/@types"],
+    "types": ["node"]
+  },
+  "include": ["src", "tests"]
+}

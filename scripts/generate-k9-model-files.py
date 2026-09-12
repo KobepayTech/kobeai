@@ -2,11 +2,13 @@ from __future__ import annotations
 
 """Generate auxiliary K9 model-definition artifacts from the live runtime registry.
 
-The source of truth for runtime model selection is:
-    services/k9-runtime/model_registry.py
+Two things own different halves of this, and neither is duplicated here:
+    config/k9-models.json                  — every model path and completeness rule
+    services/k9-runtime/model_registry.py  — which model answers which capability
 
-This generator deliberately does NOT maintain a second capability router. It derives
-its snapshots from the live registry, creates optional Ollama aliases for GGUF models,
+This generator deliberately does NOT maintain a second capability router or a second
+set of paths. It derives its snapshots from the live registry (which resolves paths
+through config/k9-models.json), creates optional Ollama aliases for GGUF models,
 and writes preflight/status JSON for inspection.
 
 Backup policy: when a generated Modelfile changes, only the immediately previous
@@ -46,6 +48,11 @@ def load_runtime_registry():
     # Dataclasses with postponed annotations may consult sys.modules while the
     # module body is executing, so register the module before exec_module().
     sys.modules[spec.name] = module
+    # The registry imports its sibling k9_models (which reads
+    # config/k9-models.json); loading by path leaves that directory off sys.path.
+    runtime_dir = str(RUNTIME_REGISTRY.parent)
+    if runtime_dir not in sys.path:
+        sys.path.insert(0, runtime_dir)
     spec.loader.exec_module(module)
     return module
 

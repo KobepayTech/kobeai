@@ -9,6 +9,7 @@ import { Cpu, Loader2, RefreshCcw, CheckCircle2, AlertTriangle, XCircle, Send } 
 type AiHealth = {
   configured_provider: string;
   configured_model: string;
+  candidate_models: string[];
   base_url: string;
   ollama_reachable: boolean;
   model_installed: boolean;
@@ -134,7 +135,10 @@ export default function SchoolAi() {
           ) : health ? (
             <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-3 text-sm" data-testid="health-grid">
               <div><dt className="text-muted-foreground">Provider</dt><dd className="font-medium">{health.configured_provider}</dd></div>
-              <div><dt className="text-muted-foreground">Configured model</dt><dd className="font-mono text-xs">{health.configured_model}</dd></div>
+              <div><dt className="text-muted-foreground">Model in use</dt><dd className="font-mono text-xs">{health.configured_model}</dd></div>
+              {health.candidate_models.length > 1 && (
+                <div className="sm:col-span-2"><dt className="text-muted-foreground">Registry order (first installed is used)</dt><dd className="font-mono text-xs">{health.candidate_models.join(" → ")}</dd></div>
+              )}
               <div className="sm:col-span-2"><dt className="text-muted-foreground">Ollama base URL</dt><dd className="font-mono text-xs break-all">{health.base_url}</dd></div>
               <div><dt className="text-muted-foreground">Latency</dt><dd>{health.latency_ms == null ? "—" : `${health.latency_ms} ms`}</dd></div>
               <div><dt className="text-muted-foreground">Models installed</dt><dd>{health.installed_models.length}</dd></div>
@@ -167,8 +171,17 @@ export default function SchoolAi() {
           {health && health.configured_provider === "ollama" && health.ollama_reachable && !health.model_installed && (
             <div className="mt-4 p-3 rounded-md bg-amber-50 border border-amber-200 text-sm text-amber-900">
               <p className="font-medium mb-1">Configured model "<span className="font-mono">{health.configured_model}</span>" isn't installed.</p>
-              <p>SSH into the school server and run:</p>
-              <pre className="mt-1 font-mono text-xs bg-amber-100 p-2 rounded">ollama pull {health.configured_model}</pre>
+              {health.configured_model.startsWith("k9-") ? (
+                <>
+                  <p>K9 builds its text models from the GGUF files in the model registry. On the K9 PC, use <strong>Connect AI Models to Ollama</strong> in the tray menu, or run:</p>
+                  <pre className="mt-1 font-mono text-xs bg-amber-100 p-2 rounded">node scripts\k9-models.mjs ollama-sync</pre>
+                </>
+              ) : (
+                <>
+                  <p>SSH into the school server and run:</p>
+                  <pre className="mt-1 font-mono text-xs bg-amber-100 p-2 rounded">ollama pull {health.configured_model}</pre>
+                </>
+              )}
             </div>
           )}
         </CardContent>

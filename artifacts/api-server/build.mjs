@@ -59,7 +59,9 @@ async function buildAll() {
       "@prisma/client",
       "@mikro-orm/*",
       "@grpc/*",
-      "@swc/*",
+      // Only the native compiler; @swc/helpers is plain JS that fontkit
+      // requires at load, so it must be bundled for node_modules-free installs.
+      "@swc/core",
       "@aws-sdk/*",
       "@azure/*",
       "@opentelemetry/*",

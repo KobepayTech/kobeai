@@ -12,7 +12,6 @@ import presenceRouter from "./presence";
 import networkDiscoveryRouter from "./network-discovery";
 import devicesRouter from "./devices";
 import k9RuntimeRouter from "./k9-runtime";
-import tabletRouter from "./tablet";
 import parentRouter from "./parent";
 import parentPushRouter from "./parent-push";
 import adminRouter from "./admin";
@@ -35,6 +34,9 @@ import modelsRouter from "./models";
 import classroomRouter from "./classroom";
 import teacherLensRouter from "./teacher-lens";
 import studentDevelopmentRouter from "./student-development";
+import localObjectsRouter from "./local-objects";
+import resultsRouter from "./results";
+import facesRouter from "./faces";
 
 const router: IRouter = Router();
 
@@ -55,7 +57,6 @@ router.use(networkDiscoveryRouter);
 
 router.use(devicesRouter);
 router.use(k9RuntimeRouter);
-router.use(tabletRouter);
 
 router.use(parentRouter);
 router.use(parentPushRouter);
@@ -79,5 +80,8 @@ router.use(modelsRouter);
 router.use(classroomRouter);
 router.use(teacherLensRouter);
 router.use(studentDevelopmentRouter);
+router.use(localObjectsRouter);
+router.use(resultsRouter);
+router.use(facesRouter);
 
 export default router;

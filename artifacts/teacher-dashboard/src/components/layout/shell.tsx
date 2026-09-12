@@ -18,8 +18,8 @@ export function Shell({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-screen bg-background">
       <Sidebar />
-      <main className="pl-64 min-h-screen flex flex-col">
-        <div className="flex-1 p-8">
+      <main className="pl-64 print:pl-0 min-h-screen flex flex-col">
+        <div className="flex-1 p-8 print:p-0">
           {children}
         </div>
       </main>

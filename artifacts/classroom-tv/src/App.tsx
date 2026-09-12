@@ -13,15 +13,46 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 // for the teacher AI chat. Modes are URL-driven so kiosks in different
 // roles boot into different views without a rebuild.
 // ---------------------------------------------------------------------------
-const API_BASE = (import.meta.env.VITE_KOBEAI_API_BASE ?? "").replace(/\/$/, "");
-const KIOSK_SECRET = import.meta.env.VITE_KOBEAI_KIOSK_SECRET ?? "";
-const KIOSK_ID = import.meta.env.VITE_KOBEAI_KIOSK_ID ?? "classroom-tv";
+//
+// Kiosks served by a K9 school server need no rebuild: the API defaults to
+// this page's origin, and the kiosk secret is paired once through the
+// "Classroom TV link" (?key=...) from the K9 desktop app, then kept in
+// localStorage.
+const KIOSK_SECRET_STORAGE_KEY = "k9.classroom_kiosk_secret";
+const API_BASE = (import.meta.env.VITE_KOBEAI_API_BASE || window.location.origin).replace(/\/$/, "");
+const KIOSK_SECRET = import.meta.env.VITE_KOBEAI_KIOSK_SECRET || pairKioskSecret();
+const KIOSK_ID =
+  import.meta.env.VITE_KOBEAI_KIOSK_ID ||
+  new URLSearchParams(window.location.search).get("kiosk") ||
+  "classroom-tv";
+
+function pairKioskSecret(): string {
+  const params = new URLSearchParams(window.location.search);
+  const fromUrl = params.get("key");
+  try {
+    if (fromUrl) {
+      localStorage.setItem(KIOSK_SECRET_STORAGE_KEY, fromUrl);
+      // Drop the secret from the address bar once it's stored.
+      params.delete("key");
+      const query = params.toString();
+      window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
+      return fromUrl;
+    }
+    return localStorage.getItem(KIOSK_SECRET_STORAGE_KEY) ?? "";
+  } catch {
+    return fromUrl ?? "";
+  }
+}
 
 const CELEBRATION_POLL_MS = 20_000;
 const CELEBRATION_DISPLAY_MS = 30_000;
 const CLOCK_TICK_MS = 15_000;
 const CONTEXT_POLL_MS = 60_000;
 const MISMATCH_POLL_MS = 25_000;
+const SCOREBOARD_POLL_MS = 15_000;
+const SCOREBOARD_ROTATE_MS = 12_000;
+const SCOREBOARD_ROWS_PER_PAGE = 20;
+const SCOREBOARD_CLASS_ID = new URLSearchParams(window.location.search).get("class_id");
 
 type Celebration = {
   id: number;
@@ -53,12 +84,24 @@ type Mismatch = {
   seen_at: string;
 };
 
-type Mode = "display" | "dashboard" | "assistant";
+// What the school lets classroom TVs show (results_settings.tv_scoreboard):
+// names, scores and grades only — never student codes.
+type BoardRow = { position: number; name: string; score: number; grade: string };
+type TvScoreboard = {
+  enabled: boolean;
+  mode: "off" | "top5" | "full";
+  class?: { id: number; name: string };
+  term?: { id: number; name: string; academic_year: string };
+  subjects?: Array<{ subject: string; rows: BoardRow[] }>;
+  overall?: BoardRow[];
+};
+
+type Mode = "display" | "dashboard" | "assistant" | "scoreboard";
 
 function resolveMode(): Mode {
   const params = new URLSearchParams(window.location.search);
   const raw = (params.get("mode") ?? "").toLowerCase();
-  if (raw === "dashboard" || raw === "assistant" || raw === "display") return raw;
+  if (raw === "dashboard" || raw === "assistant" || raw === "display" || raw === "scoreboard") return raw;
   return "display";
 }
 
@@ -124,7 +167,10 @@ function SetupScreen() {
   return (
     <div className="tv-setup">
       <h1>KobeAI Classroom</h1>
-      <p>This kiosk needs to be paired with the school server. Rebuild with:</p>
+      <p>
+        This kiosk needs to be paired with the school server. Open the{" "}
+        <strong>Classroom TV link</strong> from the K9 School Server app on this screen, or rebuild with:
+      </p>
       <p>
         <code>VITE_KOBEAI_API_BASE=https://your-school-server</code>
         <br />
@@ -134,7 +180,8 @@ function SetupScreen() {
       </p>
       <p style={{ marginTop: "3vh" }}>
         Then load{" "}
-        <code>?mode=display</code>, <code>?mode=dashboard</code>, or <code>?mode=assistant</code>.
+        <code>?mode=display</code>, <code>?mode=dashboard</code>, <code>?mode=assistant</code>, or{" "}
+        <code>?mode=scoreboard&amp;class_id=1</code>.
       </p>
     </div>
   );
@@ -146,7 +193,13 @@ function SetupScreen() {
 // ---------------------------------------------------------------------------
 function ModeBadge({ mode }: { mode: Mode }) {
   const label =
-    mode === "dashboard" ? "Dashboard" : mode === "assistant" ? "Teaching assistant" : "Display";
+    mode === "dashboard"
+      ? "Dashboard"
+      : mode === "assistant"
+        ? "Teaching assistant"
+        : mode === "scoreboard"
+          ? "Scoreboard"
+          : "Display";
   return <span className="tv-mode-badge">{label}</span>;
 }
 
@@ -381,6 +434,115 @@ function DashboardMode({ now, connected }: { now: Date; connected: boolean | nul
 }
 
 // ---------------------------------------------------------------------------
+// Mode: scoreboard — live class results (?mode=scoreboard&class_id=N).
+// Rotates through the overall ranking and each subject; long lists in
+// "full" mode are split across pages.
+// ---------------------------------------------------------------------------
+function ScoreboardMode({ now, connected }: { now: Date; connected: boolean | null }) {
+  const [board, setBoard] = useState<TvScoreboard | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [page, setPage] = useState(0);
+
+  useEffect(() => {
+    if (!API_BASE || !KIOSK_SECRET || !SCOREBOARD_CLASS_ID) return;
+    let cancelled = false;
+    async function tick() {
+      const res = await api<TvScoreboard>(
+        `/v1/classroom/scoreboard?class_id=${encodeURIComponent(SCOREBOARD_CLASS_ID ?? "")}`,
+      );
+      if (cancelled) return;
+      setBoard(res);
+      setLoaded(true);
+    }
+    tick();
+    const t = setInterval(tick, SCOREBOARD_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, []);
+
+  useEffect(() => {
+    const t = setInterval(() => setPage((p) => p + 1), SCOREBOARD_ROTATE_MS);
+    return () => clearInterval(t);
+  }, []);
+
+  const pages = useMemo(() => {
+    if (!board?.enabled) return [];
+    const sections = [
+      { title: "Overall average", rows: board.overall ?? [] },
+      ...(board.subjects ?? []).map((s) => ({ title: s.subject, rows: s.rows })),
+    ];
+    return sections.flatMap((section) => {
+      const chunks = Math.ceil(section.rows.length / SCOREBOARD_ROWS_PER_PAGE);
+      return Array.from({ length: chunks }, (_, i) => ({
+        title: chunks > 1 ? `${section.title} (${i + 1}/${chunks})` : section.title,
+        rows: section.rows.slice(i * SCOREBOARD_ROWS_PER_PAGE, (i + 1) * SCOREBOARD_ROWS_PER_PAGE),
+      }));
+    });
+  }, [board]);
+
+  const current = pages.length > 0 ? pages[page % pages.length] : null;
+  const message = !SCOREBOARD_CLASS_ID
+    ? "Add class_id to this TV link to choose the class, e.g. ?mode=scoreboard&class_id=1"
+    : !loaded
+      ? "Loading results…"
+      : board && !board.enabled
+        ? "The school has turned the classroom scoreboard off."
+        : !current
+          ? "No results yet this term. They appear here as teachers mark papers."
+          : null;
+
+  return (
+    <div className="tv tv-board">
+      <ClockHeader now={now} connected={connected} mode="scoreboard" />
+      <main className="tv-board-main">
+        {message || !current ? (
+          <div className="tv-board-empty">{message}</div>
+        ) : (
+          <>
+            <div className="tv-board-heading">
+              <h1 className="tv-board-title">{current.title}</h1>
+              <div className="tv-board-sub">
+                {board?.class?.name}
+                {board?.term ? ` · ${board.term.name} ${board.term.academic_year}` : ""}
+              </div>
+            </div>
+            <ol className={"tv-board-list" + (current.rows.length > 10 ? " tv-board-list-dense" : "")}>
+              {current.rows.map((row) => (
+                <li
+                  key={`${row.position}-${row.name}`}
+                  className={"tv-board-row" + (row.position <= 3 ? ` tv-board-top${row.position}` : "")}
+                >
+                  <span className="tv-board-pos">{row.position}</span>
+                  <span className="tv-board-name">{row.name}</span>
+                  <span className="tv-board-score">{row.score}</span>
+                  <span className="tv-board-grade">{row.grade}</span>
+                </li>
+              ))}
+            </ol>
+            {pages.length > 1 && (
+              <div className="tv-board-dots">
+                {pages.map((p, i) => (
+                  <span key={p.title} className={i === page % pages.length ? "on" : ""} />
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </main>
+      <footer className="tv-footer">
+        <div>
+          <span className={"dot " + (connected ? "ok" : "bad")}></span>
+          {connected ? "Live results" : "Offline"}
+        </div>
+        <div>Kiosk id · {KIOSK_ID}</div>
+      </footer>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Mode: assistant — teacher AI chat surface. Speaks to /v1/classroom/ask.
 // ---------------------------------------------------------------------------
 type ChatTurn = { role: "teacher" | "kobe"; text: string };
@@ -587,6 +749,7 @@ export function App() {
       {mode === "display" && <DisplayMode now={now} connected={connected} />}
       {mode === "dashboard" && <DashboardMode now={now} connected={connected} />}
       {mode === "assistant" && <AssistantMode now={now} connected={connected} />}
+      {mode === "scoreboard" && <ScoreboardMode now={now} connected={connected} />}
       {celebration && (
         <BirthdayOverlay
           name={celebration.student_name ?? celebration.student_code}

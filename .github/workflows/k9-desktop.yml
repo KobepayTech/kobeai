@@ -1,0 +1,44 @@
+name: K9 Desktop (Windows)
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "k9-v*"
+
+jobs:
+  build:
+    name: Build K9 installer
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci --no-audit --no-fund
+
+      - name: Build installer
+        run: node desktop/scripts/build.mjs
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: k9-school-server-setup
+          path: desktop/release/K9-Setup-*.exe
+          if-no-files-found: error

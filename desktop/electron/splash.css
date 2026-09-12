@@ -1,0 +1,71 @@
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: radial-gradient(circle at 50% 30%, #0b3d2a 0%, #06261a 70%);
+  color: #e8f5ee;
+  font-family: "Segoe UI", -apple-system, Ubuntu, sans-serif;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  overflow: hidden;
+  user-select: none;
+  -webkit-app-region: drag;
+}
+
+.mark {
+  width: 72px;
+  height: 72px;
+  margin-bottom: 14px;
+}
+
+.logo {
+  font-size: 40px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: #ffffff;
+}
+
+.tagline {
+  font-size: 13px;
+  color: #7fd3aa;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  margin: 4px 0 36px;
+}
+
+.progress-track {
+  width: 300px;
+  height: 4px;
+  background: #0f3a28;
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: 14px;
+}
+
+.progress-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #00a86b, #3ddc97);
+  border-radius: 2px;
+  transition: width 0.4s ease;
+}
+
+.status {
+  font-size: 13px;
+  color: #a8cdb9;
+  height: 18px;
+}
+
+.version {
+  position: fixed;
+  bottom: 14px;
+  right: 18px;
+  font-size: 11px;
+  color: #3f6b55;
+}

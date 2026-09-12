@@ -1,0 +1,18 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "declarationMap": true,
+    "emitDeclarationOnly": true,
+    "outDir": "dist",
+    "rootDir": "src",
+    // Browser-first: the adapters run in the Teacher Lens PWA (WebBluetooth) and
+    // the React Native shell. Everything used here — timers, fetch, Response,
+    // navigator — is in the DOM lib and also real in Node, so no @types are
+    // needed to build the SDK itself. The tests get Node types from
+    // tsconfig.tests.json.
+    "lib": ["es2022", "dom"],
+    "types": []
+  },
+  "include": ["src"]
+}

@@ -95,8 +95,14 @@ Then set on the api-server:
 ```
 AI_PROVIDER=ollama
 OLLAMA_BASE_URL=http://127.0.0.1:11434
-OLLAMA_MODEL=mistral:7b
 ```
+
+The model comes from the K9 registry (`config/k9-models.json`): the brain is
+Qwen3-VL-8B-Instruct (`k9-qwen3-vl`, imported from
+`C:\KobeOS\Models\k9\brain\qwen3-vl-8b` and quantized to Q4_K_M), then Qwen2.5-7B,
+Mistral, Llama 3, Phi-3 and DeepSeek from the GGUF files under
+`C:\KobeOS\Models`. `node scripts/k9-models.mjs ollama-sync` builds them into
+Ollama. Set `OLLAMA_MODEL` to pin one model instead.
 
 Health and a one-shot prompt tester are exposed for admins:
 
@@ -119,6 +125,10 @@ artifacts/
   classroom-tv/        Classroom PC + TV kiosk
   parent-app/          React/Vite parent PWA
   mockup-sandbox/      Canvas component preview server
+config/
+  k9-models.json       Canonical K9 model registry — every model path and brain
+desktop/               K9 Windows installer (Electron + embedded PostgreSQL)
+glasses/               Kobe Glasses SDK — one interface, many vendors (staff only)
 lib/
   db/                  Drizzle schema (users, classes, documents, …)
   api-spec/            OpenAPI source of truth
@@ -126,6 +136,7 @@ lib/
 services/
   k9-network/          Full vendored K-9 LAN/camera discovery source
   k9-bridge/           K-9 → KobeAI inventory sync bridge
+  k9-runtime/          Local model runtime (detection, tracking, faces, ReID, VAD)
   kobevision/          Local camera/face-analysis service
   kobevoice/           Full vendored KobeVoice/LiveKit voice-agent source
 tap-box/               Raspberry Pi print agent (Python)
@@ -171,7 +182,11 @@ mockup sandbox as separate workflows on path-prefix routes.
 
 ## Deploying a school server
 
-The `deploy/school-server/` compose file brings up Postgres, Redis,
+**Windows PC:** install `K9-Setup-<version>.exe` (built from `desktop/`, see
+`desktop/README.md`). It bundles PostgreSQL, the API and all dashboards,
+serves the school LAN on port 8088, and runs from the system tray.
+
+**Linux server:** the `deploy/school-server/` compose file brings up Postgres, Redis,
 the API server, and the dashboards behind a single nginx, designed to
 run on a school's own hardware (a NUC or mid-range tower is enough).
 Classroom PCs, Teacher Lens devices and print agents on the LAN talk to

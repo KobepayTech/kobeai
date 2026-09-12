@@ -26,6 +26,7 @@ import {
   Boxes,
   ShieldCheck,
   Receipt,
+  Trophy,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -41,6 +42,7 @@ const navItems = [
   { href: "/quizzes", label: "Quizzes", icon: BookOpenCheck },
   { href: "/timetable", label: "Timetable", icon: CalendarClock },
   { href: "/exams", label: "Exam Mode", icon: Timer },
+  { href: "/results", label: "Results", icon: Trophy },
   { href: "/documents", label: "Documents", icon: FileText },
   { href: "/bursar", label: "Bursar", icon: Wallet },
   { href: "/stationery", label: "Stationery", icon: Package },
@@ -61,7 +63,7 @@ export function Sidebar() {
   const { logout } = useAuth();
 
   return (
-    <aside className="fixed inset-y-0 left-0 w-64 bg-sidebar border-r border-sidebar-border flex flex-col z-20">
+    <aside className="print:hidden fixed inset-y-0 left-0 w-64 bg-sidebar border-r border-sidebar-border flex flex-col z-20">
       <div className="h-16 flex items-center px-6 border-b border-sidebar-border bg-sidebar">
         <School className="h-6 w-6 text-primary mr-2" />
         <span className="font-bold text-lg text-sidebar-foreground tracking-tight">KobeAI</span>

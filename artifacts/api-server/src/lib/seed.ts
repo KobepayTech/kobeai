@@ -1,7 +1,7 @@
 import { db, usersTable, classesTable, classMembershipsTable, documentsTable, documentAssignmentsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import crypto from "node:crypto";
-import { ObjectStorageService } from "./objectStorage";
+import { ObjectStorageService, isLocalObjectStorage } from "./objectStorage";
 
 /**
  * Idempotent demo seed. Ensures the pilot fixtures (one teacher, one class,
@@ -88,7 +88,7 @@ export async function seedDemoData(): Promise<void> {
   }
 }
 
-function hashPin(pin: string): string {
+export function hashPin(pin: string): string {
   // Simple salted SHA-256 — for the demo creds only. A real auth flow should
   // use bcrypt/argon2; out of scope for this task per the brief.
   return crypto.createHash("sha256").update(`kobeai:${pin}`).digest("hex");
@@ -100,6 +100,7 @@ export function checkPin(pin: string, hash: string | null | undefined): boolean 
 }
 
 async function uploadDemoPdf(svc: ObjectStorageService, pdf: Buffer): Promise<string> {
+  if (isLocalObjectStorage()) return svc.putLocalObject(pdf);
   // Use a presigned URL to push the bytes into the private object dir, then
   // normalize the GCS URL back to our /objects/<id> path.
   const uploadUrl = await svc.getObjectEntityUploadURL();

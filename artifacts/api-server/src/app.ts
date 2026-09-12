@@ -51,7 +51,22 @@ app.use(
     },
   }),
 );
-app.use(cors(corsOptions));
+app.use(
+  cors((req, cb) => {
+    // A self-hosted K9 server serves its own dashboards, and browsers send an
+    // Origin header even on same-origin POSTs — always allow those.
+    const { origin, host } = req.headers;
+    let sameOrigin = false;
+    if (origin && host) {
+      try {
+        sameOrigin = new URL(origin).host === host;
+      } catch {
+        sameOrigin = false;
+      }
+    }
+    cb(null, sameOrigin ? { ...corsOptions, origin: true } : corsOptions);
+  }),
+);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 

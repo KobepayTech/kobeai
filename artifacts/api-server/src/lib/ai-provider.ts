@@ -1,3 +1,4 @@
+import { k9TextModelNames, loadK9Models } from "./k9-models";
 import { logger } from "./logger";
 
 export type AskResult = {
@@ -41,12 +42,69 @@ function cannedAnswer(question: string): string {
   return FALLBACK;
 }
 
-function ollamaConfig(): { baseUrl: string; model: string; timeoutMs: number } {
+const DEFAULT_OLLAMA_MODEL = "mistral:7b";
+const INSTALLED_MODELS_CACHE_MS = 60_000;
+
+function ollamaConfig(): { baseUrl: string; timeoutMs: number } {
   return {
     baseUrl: process.env["OLLAMA_BASE_URL"] ?? "http://localhost:11434",
-    model: process.env["OLLAMA_MODEL"] ?? "mistral:7b",
     timeoutMs: Number(process.env["OLLAMA_TIMEOUT_MS"] ?? 30_000),
   };
+}
+
+/**
+ * Ollama models to try, best first. OLLAMA_MODEL pins one model; otherwise the
+ * K9 registry (config/k9-models.json) supplies its default text model and
+ * fallbacks, which `scripts/k9-models.mjs ollama-sync` builds from the GGUFs.
+ * Deploys without a registry keep the historical default.
+ */
+function candidateModels(): string[] {
+  const pinned = process.env["OLLAMA_MODEL"];
+  if (pinned) return [pinned];
+  try {
+    const names = k9TextModelNames(loadK9Models().config);
+    if (names.length > 0) return names;
+  } catch {
+    // No registry on this deploy.
+  }
+  return [DEFAULT_OLLAMA_MODEL];
+}
+
+function isInstalled(installed: string[], model: string): boolean {
+  return installed.some((name) => name === model || name.startsWith(`${model.split(":")[0]}:`));
+}
+
+let installedModelsCache: { at: number; baseUrl: string; names: string[] } | null = null;
+
+async function fetchInstalledModels(baseUrl: string, timeoutMs = 4_000): Promise<string[]> {
+  const resp = await fetch(`${baseUrl}/api/tags`, { signal: AbortSignal.timeout(timeoutMs) });
+  if (!resp.ok) throw new Error(`tags HTTP ${resp.status}`);
+  const data = (await resp.json()) as { models?: Array<{ name?: string }> };
+  const names = (data.models ?? []).map((m) => m.name).filter((n): n is string => typeof n === "string");
+  installedModelsCache = { at: Date.now(), baseUrl, names };
+  return names;
+}
+
+/** Models installed in Ollama, or [] when it can't be reached. */
+export async function listOllamaModels(): Promise<string[]> {
+  return fetchInstalledModels(ollamaConfig().baseUrl).catch(() => []);
+}
+
+export function ollamaHasModel(installed: string[], model: string): boolean {
+  return isInstalled(installed, model);
+}
+
+/** The first candidate Ollama actually has — or the top candidate when none is installed. */
+async function resolveOllamaModel(baseUrl: string, candidates = candidateModels()): Promise<string> {
+  if (candidates.length === 1) return candidates[0]!;
+  const cached =
+    installedModelsCache &&
+    installedModelsCache.baseUrl === baseUrl &&
+    Date.now() - installedModelsCache.at < INSTALLED_MODELS_CACHE_MS
+      ? installedModelsCache.names
+      : null;
+  const installed = cached ?? (await fetchInstalledModels(baseUrl).catch(() => []));
+  return candidates.find((model) => isInstalled(installed, model)) ?? candidates[0]!;
 }
 
 // Cap concurrent Ollama generations so a thundering herd of classroom /ask calls
@@ -90,7 +148,8 @@ function releaseSlot(): void {
 }
 
 async function askOllama(question: string, systemOverride?: string): Promise<AskResult> {
-  const { baseUrl, model, timeoutMs } = ollamaConfig();
+  const { baseUrl, timeoutMs } = ollamaConfig();
+  const model = await resolveOllamaModel(baseUrl);
   const got = await acquireSlot();
   if (!got) throw new Error("ollama_busy");
 
@@ -163,6 +222,7 @@ export async function askAI(question: string, systemOverride?: string): Promise<
 export type AiHealth = {
   configured_provider: string;
   configured_model: string;
+  candidate_models: string[];
   base_url: string;
   ollama_reachable: boolean;
   model_installed: boolean;
@@ -179,11 +239,13 @@ export type AiHealth = {
  */
 export async function getAiHealth(): Promise<AiHealth> {
   const provider = (process.env["AI_PROVIDER"] ?? "canned").toLowerCase();
-  const { baseUrl, model } = ollamaConfig();
+  const { baseUrl } = ollamaConfig();
+  const candidates = candidateModels();
 
   const out: AiHealth = {
     configured_provider: provider,
-    configured_model: model,
+    configured_model: candidates[0]!,
+    candidate_models: candidates,
     base_url: baseUrl,
     ollama_reachable: false,
     model_installed: false,
@@ -196,29 +258,17 @@ export async function getAiHealth(): Promise<AiHealth> {
     return out;
   }
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 4_000);
   const start = Date.now();
   try {
-    const resp = await fetch(`${baseUrl}/api/tags`, { signal: controller.signal });
+    out.installed_models = await fetchInstalledModels(baseUrl);
     out.latency_ms = Date.now() - start;
-    if (!resp.ok) {
-      out.error = `tags HTTP ${resp.status}`;
-      return out;
-    }
-    const data = (await resp.json()) as { models?: Array<{ name?: string }> };
     out.ollama_reachable = true;
-    out.installed_models = (data.models ?? [])
-      .map((m) => m.name)
-      .filter((n): n is string => typeof n === "string");
-    out.model_installed = out.installed_models.some(
-      (n) => n === model || n.startsWith(`${model.split(":")[0]}:`),
-    );
+    const chosen = candidates.find((model) => isInstalled(out.installed_models, model));
+    out.configured_model = chosen ?? candidates[0]!;
+    out.model_installed = !!chosen;
   } catch (err) {
     out.latency_ms = Date.now() - start;
     out.error = err instanceof Error ? err.message : String(err);
-  } finally {
-    clearTimeout(timer);
   }
 
   return out;

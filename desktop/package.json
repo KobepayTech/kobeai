@@ -1,0 +1,99 @@
+{
+  "name": "k9-desktop",
+  "productName": "K9 School Server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "K9 — KobeAI's on-premise school AI server for Windows",
+  "author": {
+    "name": "KobepayTech",
+    "email": "support@kobepaytech.com"
+  },
+  "main": "electron/main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "icons": "node scripts/make-icon.mjs",
+    "dist": "node scripts/build.mjs",
+    "dist:dir": "node scripts/build.mjs --dir",
+    "pack": "node scripts/build.mjs --pack-only"
+  },
+  "dependencies": {
+    "pg": "8.20.0"
+  },
+  "devDependencies": {
+    "@embedded-postgres/windows-x64": "18.3.0-beta.17",
+    "electron": "35.7.5",
+    "electron-builder": "26.8.1"
+  },
+  "build": {
+    "appId": "com.kobepaytech.k9",
+    "productName": "K9 School Server",
+    "copyright": "© 2026 KobepayTech",
+    "directories": {
+      "output": "release",
+      "buildResources": "build-resources"
+    },
+    "files": [
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build/server",
+        "to": "server",
+        "filter": [
+          "**/*",
+          "!**/*.map"
+        ]
+      },
+      {
+        "from": "build/web",
+        "to": "web"
+      },
+      {
+        "from": "build/config",
+        "to": "config"
+      },
+      {
+        "from": "build/runtime",
+        "to": "runtime"
+      },
+      {
+        "from": "build/postgres",
+        "to": "postgres"
+      },
+      {
+        "from": "build/ollama",
+        "to": "ollama"
+      }
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build-resources/icon.ico",
+      "executableName": "K9",
+      "requestedExecutionLevel": "asInvoker"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "K9 School Server",
+      "artifactName": "K9-Setup-${version}.exe",
+      "include": "build-resources/installer.nsh",
+      "installerIcon": "build-resources/icon.ico",
+      "uninstallerIcon": "build-resources/icon.ico",
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false
+    },
+    "publish": null
+  }
+}

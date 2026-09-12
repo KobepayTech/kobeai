@@ -19,6 +19,8 @@ import StudentDevelopment from "@/pages/student-development";
 import Quizzes from "@/pages/quizzes";
 import Timetable from "@/pages/timetable";
 import Exams from "@/pages/exams";
+import Results from "@/pages/results";
+import ReportCard from "@/pages/report-card";
 import Bursar from "@/pages/bursar";
 import Documents from "@/pages/documents";
 import SchoolAi from "@/pages/school-ai";
@@ -80,6 +82,12 @@ function Router() {
       </Route>
       <Route path="/exams">
         <Shell><Exams /></Shell>
+      </Route>
+      <Route path="/results/report-card/:studentId">
+        <Shell><ReportCard /></Shell>
+      </Route>
+      <Route path="/results">
+        <Shell><Results /></Shell>
       </Route>
       <Route path="/bursar">
         <Shell><Bursar /></Shell>

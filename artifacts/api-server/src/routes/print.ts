@@ -189,10 +189,10 @@ router.get("/v1/print/jobs/:id/document", requireTapBox, async (req, res) => {
     return;
   }
   try {
-    const file = await objStore.getObjectEntityFile(doc.object_path);
+    const stream = await objStore.openObjectEntityStream(doc.object_path);
     res.setHeader("Content-Type", doc.content_type);
     res.setHeader("Content-Disposition", `attachment; filename="${job.id}.pdf"`);
-    file.createReadStream()
+    stream
       .on("error", (err) => {
         req.log?.error({ err }, "object stream error");
         if (!res.headersSent) res.status(500).end();
