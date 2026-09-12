@@ -12,7 +12,6 @@ import presenceRouter from "./presence";
 import networkDiscoveryRouter from "./network-discovery";
 import devicesRouter from "./devices";
 import k9RuntimeRouter from "./k9-runtime";
-import tabletRouter from "./tablet";
 import parentRouter from "./parent";
 import parentPushRouter from "./parent-push";
 import adminRouter from "./admin";
@@ -58,7 +57,6 @@ router.use(networkDiscoveryRouter);
 
 router.use(devicesRouter);
 router.use(k9RuntimeRouter);
-router.use(tabletRouter);
 
 router.use(parentRouter);
 router.use(parentPushRouter);

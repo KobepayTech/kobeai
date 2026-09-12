@@ -7,6 +7,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const NATIVES = [
   { host: "rollup", native: "@rollup/rollup-win32-x64-msvc" },
@@ -51,4 +52,13 @@ export function ensureNativeBinaries(root) {
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
+}
+
+// desktop/scripts/build.mjs imports this, but running the file directly is the
+// obvious way to repair a fresh `pnpm install` on Windows — so do the work
+// instead of exiting 0 having done nothing.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+  ensureNativeBinaries(repoRoot);
+  console.log(`[k9-build] win32 native binaries checked in ${repoRoot}`);
 }
