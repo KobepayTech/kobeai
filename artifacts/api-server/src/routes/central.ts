@@ -214,6 +214,134 @@ async function authenticateTenant(req: Request, res: Response, next: NextFunctio
   next();
 }
 
+/**
+ * POST /central/v1/roster — the school pushes who it actually has.
+ * Body: { students: [{ student_code, student_name, grade? }] }
+ *
+ * Why this exists: subscriptions live here, keyed by tenant + student_code,
+ * but until now nothing created them. A school onboarded by photographing its
+ * class lists ended up with 600 students and zero subscription rows — and
+ * `/central/v1/payments/initiate` refuses a student with no subscription, so
+ * a parent could not even pay. Enforcement without provisioning locks a school
+ * out instead of collecting money from it.
+ *
+ * So the roster push is the provisioning step. Every student the school knows
+ * about gets a `trial` subscription expiring TRIAL_DAYS out; the trial window
+ * is the school's runway to collect before anything is ever gated.
+ *
+ * It is deliberately additive. A student missing from the push is NOT
+ * cancelled: a half-finished roster import, a class photographed but not yet
+ * committed, or a sync that raced a delete must never silently end a paid
+ * subscription. Removal stays an explicit operator action.
+ */
+const TRIAL_DAYS = Math.max(1, Number(process.env["SUBSCRIPTION_TRIAL_DAYS"] ?? 30));
+const DEFAULT_MONTHLY_TSH = Math.max(0, Number(process.env["SUBSCRIPTION_MONTHLY_TSH"] ?? 5000));
+
+router.post("/central/v1/roster", authenticateTenant, async (req, res) => {
+  const tenant = (req as Request & { tenant?: typeof tenantsTable.$inferSelect }).tenant!;
+  const raw = Array.isArray(req.body?.students) ? req.body.students : [];
+  if (raw.length === 0) {
+    res.status(400).json({ error: "students must be a non-empty array" });
+    return;
+  }
+  if (raw.length > 5000) {
+    res.status(413).json({ error: "push at most 5000 students at a time" });
+    return;
+  }
+
+  type Incoming = { student_code: string; student_name: string; grade: string | null };
+  const students: Incoming[] = [];
+  const seen = new Set<string>();
+  for (const entry of raw) {
+    const code = String((entry as Record<string, unknown>)?.["student_code"] ?? "").trim();
+    const name = String((entry as Record<string, unknown>)?.["student_name"] ?? "").trim();
+    const grade = String((entry as Record<string, unknown>)?.["grade"] ?? "").trim();
+    if (!code || !name || seen.has(code)) continue;
+    seen.add(code);
+    students.push({ student_code: code.slice(0, 64), student_name: name.slice(0, 200), grade: grade || null });
+  }
+  if (students.length === 0) {
+    res.status(400).json({ error: "no usable students in the push" });
+    return;
+  }
+
+  const existing = await db
+    .select({
+      student_code: studentSubscriptionsTable.student_code,
+      status: studentSubscriptionsTable.status,
+    })
+    .from(studentSubscriptionsTable)
+    .where(eq(studentSubscriptionsTable.tenant_id, tenant.id));
+  const known = new Map(existing.map((e) => [e.student_code, e.status]));
+
+  const toCreate = students.filter((s) => !known.has(s.student_code));
+  // The cap is the operator's commercial limit and this is the one place it
+  // can actually bite. Provision up to it and report the overflow by name,
+  // rather than silently dropping students or silently exceeding the plan.
+  const room = Math.max(0, tenant.students_cap - known.size);
+  const provisioning = toCreate.slice(0, room);
+  const overCap = toCreate.slice(room);
+
+  const expires = new Date(Date.now() + TRIAL_DAYS * 86_400_000);
+  let created = 0;
+  for (const student of provisioning) {
+    const [row] = await db
+      .insert(studentSubscriptionsTable)
+      .values({
+        tenant_id: tenant.id,
+        student_code: student.student_code,
+        student_name: student.student_name,
+        plan: "trial",
+        status: "trial",
+        monthly_price_tsh: DEFAULT_MONTHLY_TSH,
+        expires_at: expires,
+      })
+      .onConflictDoNothing({
+        target: [studentSubscriptionsTable.tenant_id, studentSubscriptionsTable.student_code],
+      })
+      .returning({ id: studentSubscriptionsTable.id });
+    if (row) created += 1;
+  }
+
+  // Keep names in step with the school's own roster — a student the school
+  // renamed after a misread class list should not stay misspelled on the
+  // parent's receipt. Nothing else about an existing subscription is touched.
+  let renamed = 0;
+  for (const student of students) {
+    if (!known.has(student.student_code)) continue;
+    const [row] = await db
+      .update(studentSubscriptionsTable)
+      .set({ student_name: student.student_name, updated_at: new Date() })
+      .where(
+        and(
+          eq(studentSubscriptionsTable.tenant_id, tenant.id),
+          eq(studentSubscriptionsTable.student_code, student.student_code),
+          sql`${studentSubscriptionsTable.student_name} <> ${student.student_name}`,
+        ),
+      )
+      .returning({ id: studentSubscriptionsTable.id });
+    if (row) renamed += 1;
+  }
+
+  if (overCap.length > 0) {
+    logger.warn(
+      { tenant_id: tenant.id, cap: tenant.students_cap, over: overCap.length },
+      "roster push exceeded the tenant student cap",
+    );
+  }
+
+  res.json({
+    pushed: students.length,
+    created,
+    renamed,
+    already_known: known.size,
+    students_cap: tenant.students_cap,
+    over_cap: overCap.map((s) => s.student_code),
+    trial_days: TRIAL_DAYS,
+    trial_expires_at: expires.toISOString(),
+  });
+});
+
 router.post("/central/v1/sync", authenticateTenant, async (req, res) => {
   const tenant = (req as Request & { tenant?: { id: number } }).tenant!;
   const ip = (req.headers["x-forwarded-for"] as string) ?? req.socket.remoteAddress ?? null;

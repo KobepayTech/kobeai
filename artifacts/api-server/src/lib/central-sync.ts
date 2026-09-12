@@ -20,6 +20,12 @@ const cfg = () => ({
   ENFORCE_SUBSCRIPTIONS: (process.env["ENFORCE_SUBSCRIPTIONS"] ?? "false") === "true",
 });
 
+// A snapshot holding less than this share of what we already cache is treated
+// as a bad response rather than a mass cancellation. Only applies once the
+// cache is big enough for the ratio to mean anything.
+const MAX_SHRINK_RATIO = 0.5;
+const MIN_CACHE_FOR_GUARD = 20;
+
 let lastSyncAt: Date | null = null;
 let lastSyncError: string | null = null;
 let subscriptionCount = 0;
@@ -34,6 +40,12 @@ export function getSyncStatus() {
     last_sync_at: lastSyncAt?.toISOString() ?? null,
     last_sync_error: lastSyncError,
     cached_subscriptions: subscriptionCount,
+    last_roster_push_at: lastRosterPushAt?.toISOString() ?? null,
+    last_roster_push_error: lastRosterPushError,
+    // Students the school has but the tenant's plan has no room for. They
+    // have no subscription, so under enforcement they would be blocked —
+    // which is a commercial conversation, not a silent failure.
+    over_cap_student_codes: lastOverCap,
   };
 }
 
@@ -72,6 +84,26 @@ export async function syncOnce(): Promise<void> {
     // `requireActiveSubscription` read never observes an empty cache (which
     // would otherwise cause spurious HTTP 402s under ENFORCE_SUBSCRIPTIONS).
     const incomingCodes = body.subscriptions.map((s) => s.student_code);
+
+    // Blast-radius guard. The replace below deletes every cached row absent
+    // from the snapshot, so a central bug returning a short or empty list
+    // would wipe the cache — and under ENFORCE_SUBSCRIPTIONS, an empty cache
+    // after a successful first sync means every student in the school gets a
+    // 402 at once. A snapshot that would drop most of what we hold is far
+    // more likely to be a bad response than a real mass-cancellation, so we
+    // keep serving the cache we have and report it instead.
+    const [{ n: cachedNow } = { n: 0 }] = await db
+      .select({ n: count() })
+      .from(subscriptionCacheTable);
+    if (cachedNow >= MIN_CACHE_FOR_GUARD && incomingCodes.length < cachedNow * MAX_SHRINK_RATIO) {
+      lastSyncError = `refused a snapshot that would drop ${cachedNow - incomingCodes.length} of ${cachedNow} subscriptions`;
+      logger.error(
+        { cached: cachedNow, incoming: incomingCodes.length },
+        "central sync snapshot rejected — keeping the existing cache",
+      );
+      return;
+    }
+
     await db.transaction(async (tx) => {
       for (const s of body.subscriptions) {
         await tx
@@ -162,6 +194,84 @@ export async function pushUsageOnce(): Promise<void> {
   }
 }
 
+export type RosterPushResult = {
+  pushed: number;
+  created: number;
+  renamed: number;
+  students_cap: number;
+  over_cap: string[];
+  trial_days: number;
+};
+
+let lastRosterPushAt: Date | null = null;
+let lastRosterPushError: string | null = null;
+let lastOverCap: string[] = [];
+
+/**
+ * Push this school's roster UP to central so every student has a subscription
+ * to enforce against.
+ *
+ * This is the step that used to be missing. A school onboarded by
+ * photographing its class lists had students in `users` and nothing in
+ * `student_subscriptions`, and `/central/v1/payments/initiate` refuses a
+ * student with no subscription — so a parent could not pay even if they
+ * wanted to. Enforcement without provisioning does not collect money, it
+ * locks the school out.
+ *
+ * Runs on the sync timer, and again immediately after a roster import commits
+ * so a class photographed at 09:00 is billable by 09:01.
+ */
+export async function pushRosterOnce(): Promise<RosterPushResult | null> {
+  const { CENTRAL_BASE_URL, TENANT_LICENSE_KEY } = cfg();
+  if (!CENTRAL_BASE_URL || !TENANT_LICENSE_KEY) return null;
+  try {
+    const students = await db
+      .select({
+        student_code: usersTable.student_code,
+        student_name: usersTable.name,
+        grade: usersTable.grade,
+      })
+      .from(usersTable)
+      .where(eq(usersTable.role, "student"));
+    const payload = students.filter((s) => !!s.student_code);
+    if (payload.length === 0) return null;
+
+    const res = await fetch(`${CENTRAL_BASE_URL}/api/central/v1/roster`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-tenant-license-key": TENANT_LICENSE_KEY },
+      body: JSON.stringify({ students: payload }),
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!res.ok) {
+      lastRosterPushError = `roster push HTTP ${res.status}`;
+      logger.warn({ status: res.status }, "roster push failed");
+      return null;
+    }
+    const body = (await res.json()) as RosterPushResult;
+    lastRosterPushAt = new Date();
+    lastRosterPushError = null;
+    lastOverCap = body.over_cap ?? [];
+    if (lastOverCap.length > 0) {
+      logger.warn(
+        { over_cap: lastOverCap.length, cap: body.students_cap },
+        "roster push hit this school's student cap — some students have no subscription",
+      );
+    }
+    if (body.created > 0) {
+      logger.info({ created: body.created, trial_days: body.trial_days }, "subscriptions provisioned");
+      // Pull straight back so the local cache knows about them before the
+      // next timer tick — otherwise a brand-new student is "uncached" for up
+      // to a minute, which is exactly when enforcement would bite them.
+      await syncOnce();
+    }
+    return body;
+  } catch (err) {
+    lastRosterPushError = err instanceof Error ? err.message : String(err);
+    logger.warn({ err }, "roster push threw");
+    return null;
+  }
+}
+
 const USAGE_PUSH_INTERVAL_MS = Number(process.env["CENTRAL_USAGE_PUSH_INTERVAL_MS"] ?? 60_000);
 
 let timer: NodeJS.Timeout | null = null;
@@ -174,8 +284,12 @@ export function startCentralSync(): void {
   }
   if (timer) return;
   // Fire-and-forget the first pull immediately so the cache populates on boot.
-  void syncOnce();
-  timer = setInterval(() => void syncOnce(), SYNC_INTERVAL_MS);
+  void syncOnce().then(() => pushRosterOnce());
+  timer = setInterval(() => {
+    // Pull first so the cache is current, then push any students central has
+    // not seen yet. Both are idempotent and both swallow their own errors.
+    void syncOnce().then(() => pushRosterOnce());
+  }, SYNC_INTERVAL_MS);
   // Push initial snapshot after a short delay (let subscription cache populate
   // first so students_active_24h isn't zero on the first push).
   setTimeout(() => void pushUsageOnce(), 5_000);

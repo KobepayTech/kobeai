@@ -16,7 +16,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
-import { QrCode, Printer, Ban, Camera, Users, FileSpreadsheet } from "lucide-react";
+import { QrCode, Printer, Ban, Camera, Users, FileSpreadsheet, BadgeCheck, RefreshCw } from "lucide-react";
 
 // The administrator's side of onboarding: print QR codes, then watch the
 // school fill itself in as teachers scan them. Nothing here asks anyone to
@@ -49,6 +49,13 @@ type PaperImport = {
 
 type FaceQueue = { students: Array<{ id: number; name: string; photos: number }>; remaining: number };
 
+type SubscriptionState = {
+  sync: { enabled: boolean; enforce: boolean; last_roster_push_at: string | null; over_cap_student_codes: string[] };
+  counts: { students: number; cached: number; unprovisioned: number; by_status: Record<string, number> };
+  would_block: number;
+  expiring_soon: Array<{ student_code: string; student_name: string | null; days_left: number | null }>;
+};
+
 function claimUrl(path: string): string {
   const origin = typeof window !== "undefined" ? window.location.origin : "";
   return `${origin}${path}`;
@@ -72,6 +79,23 @@ export default function OnboardingPage() {
   const faces = useQuery<FaceQueue>({
     queryKey: ["onboarding-face-queue"],
     queryFn: () => apiGet("/v1/onboarding/face-queue"),
+  });
+  const subs = useQuery<SubscriptionState>({
+    queryKey: ["subscription-state"],
+    queryFn: () => apiGet("/v1/subscriptions/state"),
+  });
+
+  const pushRoster = useMutation({
+    mutationFn: () => apiPost<{ created: number; over_cap: string[] }>("/v1/subscriptions/push", {}),
+    onSuccess: (res) => {
+      toast({
+        title: `${res.created} subscription${res.created === 1 ? "" : "s"} provisioned`,
+        description: res.over_cap.length > 0 ? `${res.over_cap.length} students are over this school's plan limit.` : undefined,
+      });
+      qc.invalidateQueries({ queryKey: ["subscription-state"] });
+    },
+    onError: (err) =>
+      toast({ variant: "destructive", title: "Could not reach KobeAI", description: apiErrorText(err) }),
   });
 
   const issue = useMutation({
@@ -252,6 +276,65 @@ export default function OnboardingPage() {
           </Table>
         </CardContent>
       </Card>
+
+      {subs.data?.sync.enabled && (
+        <Card>
+          <CardHeader className="flex flex-row items-start justify-between gap-4">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <BadgeCheck className="h-5 w-5" /> KobeAI memberships
+              </CardTitle>
+              <CardDescription>
+                Every student gets a trial membership as soon as their class list is committed, so
+                parents can pay from day one.
+              </CardDescription>
+            </div>
+            <Button
+              variant="outline"
+              className="shrink-0"
+              onClick={() => pushRoster.mutate()}
+              disabled={pushRoster.isPending}
+            >
+              <RefreshCw className="mr-2 h-4 w-4" />
+              {pushRoster.isPending ? "Syncing…" : "Sync now"}
+            </Button>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex flex-wrap gap-2">
+              {Object.entries(subs.data.counts.by_status).map(([status, n]) => (
+                <Badge key={status} variant={status === "expired" ? "destructive" : "secondary"}>
+                  {n} {status}
+                </Badge>
+              ))}
+              {subs.data.counts.unprovisioned > 0 && (
+                <Badge variant="destructive">{subs.data.counts.unprovisioned} with no membership</Badge>
+              )}
+            </div>
+            {subs.data.would_block > 0 && (
+              <p className="text-sm text-muted-foreground">
+                If membership checks were switched on today, <strong>{subs.data.would_block}</strong> of{" "}
+                {subs.data.counts.students} students would lose the question market. They keep their
+                lessons, timetable and exams either way.
+              </p>
+            )}
+            {subs.data.sync.over_cap_student_codes.length > 0 && (
+              <p className="text-sm text-destructive">
+                {subs.data.sync.over_cap_student_codes.length} students are past this school's plan
+                limit and have no membership. Ask KobeAI to raise the cap.
+              </p>
+            )}
+            {subs.data.expiring_soon.length > 0 && (
+              <p className="text-sm text-muted-foreground">
+                {subs.data.expiring_soon.length} membership
+                {subs.data.expiring_soon.length === 1 ? "" : "s"} expire in the next 14 days — soonest{" "}
+                {subs.data.expiring_soon[0]!.student_name ?? subs.data.expiring_soon[0]!.student_code} in{" "}
+                {subs.data.expiring_soon[0]!.days_left} day
+                {subs.data.expiring_soon[0]!.days_left === 1 ? "" : "s"}.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>

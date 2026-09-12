@@ -41,6 +41,7 @@ import setupRouter from "./setup";
 import onboardingRouter from "./onboarding";
 import marketAgentRouter from "./market-agent";
 import feesRouter from "./fees";
+import subscriptionsRouter from "./subscriptions";
 
 const router: IRouter = Router();
 
@@ -91,5 +92,6 @@ router.use(setupRouter);
 router.use(onboardingRouter);
 router.use(marketAgentRouter);
 router.use(feesRouter);
+router.use(subscriptionsRouter);
 
 export default router;

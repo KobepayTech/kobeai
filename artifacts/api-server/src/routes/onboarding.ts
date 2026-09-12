@@ -17,6 +17,7 @@ import { logger } from "../lib/logger";
 import { rateLimit } from "../lib/rate-limit";
 import { hashPin } from "../lib/seed";
 import { ensureFaceTables } from "../lib/face-gallery";
+import { pushRosterOnce } from "../lib/central-sync";
 import { pool } from "@workspace/db";
 import {
   matchName,
@@ -561,7 +562,17 @@ router.post("/v1/onboarding/papers/:id/commit", staff, async (req, res) => {
       })
       .where(eq(paperImportsTable.id, row.id))
       .returning();
-    res.json({ import: updated, ...outcome });
+
+    // New students need subscriptions before anything can be enforced or
+    // paid for, so push the roster now rather than waiting for the next sync
+    // tick. Best effort: a school with no central configured, or an offline
+    // one, still commits its students — the timer picks it up later.
+    let subscriptions: Awaited<ReturnType<typeof pushRosterOnce>> = null;
+    if (row.kind === "roster" && outcome.created > 0) {
+      subscriptions = await pushRosterOnce().catch(() => null);
+    }
+
+    res.json({ import: updated, ...outcome, subscriptions });
   } catch (err) {
     logger.error({ err, id: row.id }, "paper import commit failed");
     res.status(500).json({ error: "Could not save those rows." });
