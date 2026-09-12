@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import express, { Router } from "express";
-import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import {
   db,
   classMembershipsTable,
@@ -383,8 +383,10 @@ router.patch("/v1/onboarding/me", staff, async (req, res) => {
  */
 router.post(
   "/v1/onboarding/papers",
-  express.raw({ type: ["image/jpeg", "image/png", "application/octet-stream"], limit: "12mb" }),
+  // Auth runs before the body parser so an unauthenticated caller is refused
+  // on its headers instead of after we have buffered 12 MB of it.
   staff,
+  express.raw({ type: ["image/jpeg", "image/png", "application/octet-stream"], limit: "12mb" }),
   async (req, res) => {
     const kind = String(req.query["kind"] ?? "roster");
     if (kind !== "roster" && kind !== "subjects") {

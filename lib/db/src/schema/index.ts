@@ -946,6 +946,10 @@ export const marketQuestionsTable = pgTable(
     form_level: text("form_level"), // "Form 1".."Form 6", null = any
     source: text("source").notNull().default("admin"), // 'admin' | 'agent'
     model: text("model"), // model that wrote it, e.g. "k9-qwen3-vl:latest"
+    // Which cycle wrote it. Deliberately NOT a foreign key: market_agent_runs
+    // is declared after this table and is a pure audit log, so a provenance
+    // pointer here must never be able to block a question insert or reorder a
+    // fresh-database migration.
     agent_run_id: integer("agent_run_id"),
     explanation: text("explanation"), // shown after a student answers
     // Normalised hash of the prompt, so the agent never mints the same
