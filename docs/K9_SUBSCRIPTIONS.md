@@ -3,10 +3,64 @@
 Status: adopted (enforcement off by default) • Owner: KobeAI school-server team
 • Last updated: 2026-09-12
 
-A KobeAI subscription is the operator's TSh-per-student-per-month. It is **not**
-the school's own fees (`docs/K9_BURSAR_AI.md`) — different money, owed by
-different people to different people, and the two are never netted against each
-other.
+A K9 subscription is sold **per student, per year** — TZS 20,000–50,000,
+`SUBSCRIPTION_ANNUAL_TSH` (default 30,000). It is **not** the school's own
+fees (`docs/K9_BURSAR_AI.md`) — different money, owed by different people to
+different people, and the two are never netted against each other.
+
+## What the parent is actually buying
+
+Not access to an app. No student carries a device; the school owns the
+cameras, the classroom PCs, the server and the exams, and the teachers do the
+marking. What a parent pays for is the **intelligence profile**: K9
+continuously working out how their child learns, and helping the school teach
+them better.
+
+That makes the enforcement boundary unusually clear, and `lib/entitlements.ts`
+is the only place it is drawn:
+
+| Every student, paid or not | Subscribed |
+|---|---|
+| Attendance and presence | Skill mastery map |
+| Identity, face gallery, safety | Deep exam analysis — *why* the mark was lost |
+| Timetable, sitting exams | Recommended interventions |
+| Marks, report cards, school records | Progress over time |
+| | Personalised revision and retests |
+| | AI learning plan |
+| | Enhanced parent report |
+
+So for an unsubscribed student K9 still says **48% in Mathematics** — that is
+the school's record of its own pupil, not a KobeAI product. For a subscribed
+one it adds:
+
+```
+48% Mathematics
+  Algebra         81%
+  Fractions       74%
+  Geometry        39%
+  Trigonometry    27%
+Main issue: choosing the right formula
+Recommended: 3 targeted lessons + 12 practice questions
+Since the last exam: +7%
+```
+
+That contrast is the entire commercial argument, and the code renders it
+literally: a locked profile returns **200 with the baseline marks attached**,
+not a 402 and a blank page. The teacher sees "48% in Mathematics" and, beside
+it, exactly what the subscription would have told them. It is the only honest
+place to make the case.
+
+### The line that does not move
+
+**A child's attendance, safety and school record are never for sale.** K9 must
+still recognise an unpaid student on camera, still mark them present, still
+let them sit their exam, and still report their marks. `entitlements.test.ts`
+asserts this — if someone moves attendance, presence, safety, identity,
+exams, results or records into the premium tier, the build fails.
+
+The KP question market is also **not** gated. It is an engagement feature
+funded by KP, and a child who answers a physics question correctly should be
+paid for it whether or not their fees are current.
 
 ## What was actually broken
 
@@ -91,37 +145,61 @@ This ordering is not politeness, it is what works. A 402 nobody saw coming
 produces an angry parent at the school office and a school that turns the
 feature off. A countdown visible for two weeks produces a payment.
 
-## 4. Enforcement, when the school is ready
+## 4. How the school collects it
 
-`requireActiveSubscription()` is now mounted — on exactly two endpoints:
+The K9 annual fee goes on the same fee slip as everything else. The bursar
+receipts it with the rest — cash, M-Pesa, reconciled off the school phone like
+any other payment (`docs/K9_BURSAR_AI.md`) — and then activates the year from
+that same receipt:
 
 ```
-POST /v1/student/market/questions/:id/lock     gated
-POST /v1/student/market/questions/:id/answer   gated
+POST /v1/subscriptions/activate
+  { student_id, months: 12, fee_transaction_id }
+        │
+        │  verifies the payment is on THIS student's ledger
+        ▼
+POST /central/v1/subscriptions/activate   (licence key)
+        │
+        ▼  status = active, expires_at = max(today, current expiry) + 12 months
+        └─ syncOnce(), so the local cache knows before the screen refreshes
 ```
 
-Spending and earning KP is discretionary, so it is a fair thing to gate.
-Everything else stays open, on purpose:
+Paying early adds a year rather than losing the remainder. The activation
+records `collected_by = 'school'` and the originating `fee_transactions.id`,
+so every active subscription traces back to a specific payment on the school's
+own books.
 
-- **Browsing the market and reading your own balance are not gated.** A lapsed
-  student should see what they are missing and why. A blank screen teaches
-  nobody to go and renew.
-- **Nothing academic is gated anywhere in K9.** Sitting an exam, the
-  timetable, results, the classroom assistant — never. Withholding a child's
-  exam over a parent's arrears is a decision a headteacher may take, and some
-  do; it is not a decision an environment variable should take for them.
+**The subscription is keyed to the student ID, never a phone number or a
+device.** It survives a parent changing SIM, two siblings sharing one number,
+and a child moving between classes — none of which a phone-keyed subscription
+survives.
+
+## 5. Enforcement, when the school is ready
+
+`requirePremium(feature)` gates the intelligence layer on **the subject
+student's** subscription — not the caller's. Most of these routes are
+staff-facing, and a teacher's own account has nothing to do with whether a
+particular child's profile is paid for; getting that backwards would gate
+every student on whichever member of staff opened the page.
+
+Gated: the skill profile, curated notes, retests, lesson plans and the
+enhanced student magazine. Not gated: everything in the baseline column above,
+and the KP market.
+
+A locked route answers **200 with a described lock**, not 402 — every caller
+is a dashboard rendering a student's page, and a 402 makes the product look
+broken where a described lock makes it look like something the school can fix.
+
+Deep analysis also costs real GPU time, so for an unsubscribed student the
+model passes are skipped: the evidence is still recorded from the free keyword
+and rule paths, so subscribing later and reindexing fills in everything that
+was missed. Nothing is thrown away.
 
 The gate is inert until `ENFORCE_SUBSCRIPTIONS=true`, and even then it fails
 open until the first successful central sync, so a brand-new school is never
 locked out of itself.
 
-Note the structural limit, honestly: K9 has no student devices, so only three
-surfaces carry a student JWT at all. The classroom TV runs on a kiosk secret
-and Teacher Lens is staff-side. Per-student billing enforcement is
-intrinsically weak on this architecture, and collection pressure belongs on
-the bursar's arrears desk far more than on a 402.
-
-## 5. A failure mode enforcement would have made live
+## 6. A failure mode enforcement would have made live
 
 `syncOnce()` replaces the local cache with whatever central returned, deleting
 every row absent from the snapshot. With enforcement on and one sync already
@@ -139,7 +217,7 @@ and the safe failure is to keep working.
 |---|---|
 | `ENFORCE_SUBSCRIPTIONS` | `true` gates the market. Default `false` |
 | `SUBSCRIPTION_TRIAL_DAYS` | Trial window for a newly rostered student (default 30) |
-| `SUBSCRIPTION_MONTHLY_TSH` | Price written onto a new subscription (default 5000) |
+| `SUBSCRIPTION_ANNUAL_TSH` | Price per student per year (default 30,000). `monthly_price_tsh` is kept as annual ÷ 12 so every MRR figure in the operator console stays correct |
 | `CENTRAL_BASE_URL` / `TENANT_LICENSE_KEY` | Which control plane, and as whom |
 
 ## Suggested rollout
@@ -154,3 +232,27 @@ and the safe failure is to keep working.
 
 Steps 2–4 are not optional in practice. Skipping them is how a school decides
 KobeAI is the thing that broke, rather than the thing they had not paid for.
+
+
+## The numbers
+
+A 1,000-student school at TZS 30,000/year is TZS 30,000,000/year gross at full
+participation, before any school revenue share and before operating costs. The
+realistic figure is lower — participation will not be 100%, and a school that
+collects the fee on its own slip will expect a cut for doing so — but the
+shape holds: the revenue scales with students, the cost scales with marked
+papers, and both are things the school already produces.
+
+Worth being clear-eyed about two things:
+
+**Participation is the whole variable.** The product has to be visibly worth
+30,000 to a parent who has never seen it, which is why the locked profile
+shows the baseline marks next to what the subscription would add rather than
+just refusing. The first term of a school's data is the sales material.
+
+**A school that collects the fee controls the funnel.** That is the right
+trade — a bursar adding one line to a fee slip beats 1,000 parents each
+completing a separate M-Pesa flow, by an enormous margin — but it does mean
+KobeAI's revenue depends on the school choosing to bill for it. The revenue
+share is what makes that alignment real, and it belongs in the tenant record
+rather than in code.

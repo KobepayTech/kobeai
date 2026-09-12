@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { requireAuth } from "../lib/auth";
+import { entitlementFor, lockedPayload, requirePremium } from "../lib/entitlements";
 import { logger } from "../lib/logger";
 import { ERROR_LABELS, ERROR_TYPES } from "../lib/skill-taxonomy";
 import {
@@ -9,6 +10,7 @@ import {
   schoolSkillGaps,
   skillCohort,
   skillTaxonomy,
+  baselineSubjectMarks,
   studentSkillProfile,
   teacherAgreement,
   unmappedQuestions,
@@ -44,19 +46,40 @@ router.get("/v1/skills", staff, async (_req, res) => {
  * equations and the mole concept, and here is what to do next".
  */
 router.get("/v1/skills/students/:studentCode", staff, async (req, res) => {
-  const profile = await studentSkillProfile(String(req.params.studentCode));
+  const code = String(req.params.studentCode);
+  const entitlement = await entitlementFor(code);
+
+  // An unsubscribed student is NOT a blank page. The school's own marks stay
+  // visible — they are the school's record of its own pupil — and what the
+  // subscription adds is the answer to *why* that mark. Showing the two side
+  // by side at the moment a teacher is looking at the child is the only
+  // honest place to make the case for paying.
+  if (!entitlement.entitled) {
+    res.status(200).json({
+      ...lockedPayload("skill_profile", entitlement),
+      baseline: { subjects: await baselineSubjectMarks(code) },
+    });
+    return;
+  }
+
+  const profile = await studentSkillProfile(code);
   if (!profile) return void res.status(404).json({ error: "no such student" });
-  res.json(profile);
+  res.json({ ...profile, entitled: true, entitlement });
 });
 
 /** GET /v1/student/skills — the same profile, for the student's own screen. */
-router.get("/v1/student/skills", requireAuth(["student"]), async (req, res) => {
-  const code = req.auth?.student_id;
-  if (!code) return void res.status(401).json({ error: "no student" });
-  const profile = await studentSkillProfile(code);
-  if (!profile) return void res.status(404).json({ error: "no profile yet" });
-  res.json(profile);
-});
+router.get(
+  "/v1/student/skills",
+  requireAuth(["student"]),
+  requirePremium("skill_profile"),
+  async (req, res) => {
+    const code = req.auth?.student_id;
+    if (!code) return void res.status(401).json({ error: "no student" });
+    const profile = await studentSkillProfile(code);
+    if (!profile) return void res.status(404).json({ error: "no profile yet" });
+    res.json({ ...profile, entitled: true });
+  },
+);
 
 /**
  * GET /v1/skills/gaps?form_level=Form%203&subject=Mathematics

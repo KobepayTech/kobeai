@@ -15,6 +15,7 @@ import {
 } from "@workspace/db";
 import { eq } from "drizzle-orm";
 
+import { requirePremium } from "../lib/entitlements";
 const router = Router();
 
 const requireStaff = requireAuth(["teacher", "admin", "super_admin"]);
@@ -70,7 +71,7 @@ router.get("/v1/staff/magazine/school/latest", requireStaff, async (_req, res) =
   res.json({ edition });
 });
 
-router.get("/v1/staff/magazine/student/:studentCode/latest", requireStaff, async (req, res) => {
+router.get("/v1/staff/magazine/student/:studentCode/latest", requireStaff, requirePremium("parent_report_plus"), async (req, res) => {
   const raw = req.params.studentCode;
   const code = typeof raw === "string" ? raw.trim() : "";
   if (!code) {

@@ -235,7 +235,11 @@ async function authenticateTenant(req: Request, res: Response, next: NextFunctio
  * subscription. Removal stays an explicit operator action.
  */
 const TRIAL_DAYS = Math.max(1, Number(process.env["SUBSCRIPTION_TRIAL_DAYS"] ?? 30));
-const DEFAULT_MONTHLY_TSH = Math.max(0, Number(process.env["SUBSCRIPTION_MONTHLY_TSH"] ?? 5000));
+// K9 is sold per student per YEAR — the parent is buying a learning profile
+// that builds over a school year, not a month's access to an app they cannot
+// even open. The school collects it alongside its own fees.
+const ANNUAL_TSH = Math.max(0, Number(process.env["SUBSCRIPTION_ANNUAL_TSH"] ?? 30_000));
+const normalisedMonthly = (annual: number) => Math.round(annual / 12);
 
 router.post("/central/v1/roster", authenticateTenant, async (req, res) => {
   const tenant = (req as Request & { tenant?: typeof tenantsTable.$inferSelect }).tenant!;
@@ -293,7 +297,9 @@ router.post("/central/v1/roster", authenticateTenant, async (req, res) => {
         student_name: student.student_name,
         plan: "trial",
         status: "trial",
-        monthly_price_tsh: DEFAULT_MONTHLY_TSH,
+        billing_period: "year",
+        period_price_tsh: ANNUAL_TSH,
+        monthly_price_tsh: normalisedMonthly(ANNUAL_TSH),
         expires_at: expires,
       })
       .onConflictDoNothing({
@@ -339,7 +345,81 @@ router.post("/central/v1/roster", authenticateTenant, async (req, res) => {
     over_cap: overCap.map((s) => s.student_code),
     trial_days: TRIAL_DAYS,
     trial_expires_at: expires.toISOString(),
+    annual_price_tsh: ANNUAL_TSH,
   });
+});
+
+/**
+ * POST /central/v1/subscriptions/activate — the school collected the money.
+ * Body: { student_code, months?, reference?, collected_by? }
+ *
+ * This is the shape the commercial model actually takes in a Tanzanian
+ * school: the K9 annual fee goes on the same fee slip as everything else, the
+ * bursar receipts it with the rest, and central simply hears "this student is
+ * paid up until <date>". No parent is asked to run a separate app payment for
+ * a service their child accesses through the school's own computers.
+ *
+ * The subscription is keyed to the STUDENT, never a phone or a device, so it
+ * survives a parent changing SIM, a sibling using the same number, and the
+ * child moving between classes.
+ *
+ * Extension is from whichever is later — today or the current expiry — so
+ * paying early adds a year rather than losing the remainder.
+ */
+router.post("/central/v1/subscriptions/activate", authenticateTenant, async (req, res) => {
+  const tenant = (req as Request & { tenant?: { id: number } }).tenant!;
+  const studentCode = String(req.body?.student_code ?? "").trim();
+  const months = Math.min(36, Math.max(1, Number(req.body?.months ?? 12)));
+  const reference = String(req.body?.reference ?? "").trim().slice(0, 120) || null;
+  const collectedBy = ["school", "parent_mpesa", "operator"].includes(String(req.body?.collected_by))
+    ? String(req.body.collected_by)
+    : "school";
+  if (!studentCode) {
+    res.status(400).json({ error: "student_code required" });
+    return;
+  }
+
+  const [existing] = await db
+    .select()
+    .from(studentSubscriptionsTable)
+    .where(
+      and(
+        eq(studentSubscriptionsTable.tenant_id, tenant.id),
+        eq(studentSubscriptionsTable.student_code, studentCode),
+      ),
+    );
+  if (!existing) {
+    res.status(404).json({ error: "That student is not on this school's roster yet." });
+    return;
+  }
+
+  const from =
+    existing.expires_at && existing.expires_at > new Date() ? existing.expires_at : new Date();
+  const until = new Date(from);
+  until.setMonth(until.getMonth() + months);
+
+  const [updated] = await db
+    .update(studentSubscriptionsTable)
+    .set({
+      status: "active",
+      plan: "learning",
+      billing_period: months === 12 ? "year" : "month",
+      period_price_tsh: months === 12 ? ANNUAL_TSH : Math.round((ANNUAL_TSH / 12) * months),
+      monthly_price_tsh: normalisedMonthly(ANNUAL_TSH),
+      collected_by: collectedBy,
+      collection_reference: reference,
+      last_payment_at: new Date(),
+      expires_at: until,
+      updated_at: new Date(),
+    })
+    .where(eq(studentSubscriptionsTable.id, existing.id))
+    .returning();
+
+  logger.info(
+    { tenant_id: tenant.id, studentCode, months, until: until.toISOString(), collectedBy },
+    "subscription activated",
+  );
+  res.json({ subscription: updated, expires_at: until.toISOString() });
 });
 
 router.post("/central/v1/sync", authenticateTenant, async (req, res) => {

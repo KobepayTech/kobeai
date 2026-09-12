@@ -10,6 +10,7 @@ import {
   type Skill,
 } from "@workspace/db";
 import { brainJson } from "./kobe-brain";
+import { entitlementFor } from "./entitlements";
 import { logger } from "./logger";
 import {
   ERROR_TYPES,
@@ -209,6 +210,7 @@ export async function mapToSkill(
   subject: string | null,
   questionText: string,
   topicHint?: string | null,
+  useModel = true,
 ): Promise<SkillMatch | null> {
   const skills = await allSkills();
   const scoped = subject ? skills.filter((s) => s.subject === subject) : skills;
@@ -218,7 +220,7 @@ export async function mapToSkill(
   if (mapCache.has(key)) return mapCache.get(key)!;
 
   let match = matchByKeyword(scoped, questionText, topicHint);
-  if (!match) match = await matchByModel(scoped, questionText, subject ?? "this subject");
+  if (!match && useModel) match = await matchByModel(scoped, questionText, subject ?? "this subject");
 
   if (mapCache.size >= MAP_CACHE_MAX) mapCache.clear();
   mapCache.set(key, match);
@@ -272,9 +274,18 @@ const CLASSIFIER_SYSTEM =
  * the skill, because the mastery score is what drives the profile and the
  * error type only sharpens it.
  */
-export async function classifyError(item: ItemForClassification): Promise<ErrorType | null> {
+export async function classifyError(
+  item: ItemForClassification,
+  useModel = true,
+): Promise<ErrorType | null> {
   const ruled = classifyErrorRules(item);
   if (ruled !== undefined) return ruled;
+  if (!useModel) {
+    // No model pass for this student: fall straight to the same default the
+    // model path uses when it cannot decide. The observation is still
+    // recorded, so subscribing later and reindexing fills in the detail.
+    return (item.marks_awarded ?? 0) > 0 ? "incomplete" : "concept";
+  }
 
   const out = await brainJson<{ error_type?: unknown }>(
     `A teacher marked this answer and took marks off. Say why.\n\n` +
@@ -500,6 +511,15 @@ export async function ingestGradedPaper(paperId: number): Promise<IngestResult> 
     .limit(1);
   if (!student) return { items: 0, mapped: 0, unmapped: 0, skills_touched: 0, disagreements: 0 };
 
+  // Deep analysis is the subscribed tier, and it is the part that costs real
+  // GPU time — a thousand-student school is a lot of model calls. So for an
+  // unsubscribed student the evidence is still recorded (keyword mapping and
+  // the deterministic error rules are free), but no model runs. Subscribing
+  // later and reindexing fills in everything that was skipped, which is why
+  // this records rather than discards.
+  const entitlement = await entitlementFor(String(paper.student_code));
+  const useModel = entitlement.entitled;
+
   const { rows: items } = await pool.query(
     `SELECT id, question_number, question_text, question_topic, student_answer,
             expected_answer, is_correct, marks_awarded, marks_possible, metadata
@@ -528,18 +548,21 @@ export async function ingestGradedPaper(paperId: number): Promise<IngestResult> 
           ? 100
           : 0;
 
-    const match = await mapToSkill(subject, questionText, topicHint);
+    const match = await mapToSkill(subject, questionText, topicHint, useModel);
     const errorType =
       ratio >= 100
         ? null
-        : await classifyError({
-            question_text: questionText,
-            student_answer: item["student_answer"] == null ? null : String(item["student_answer"]),
-            expected_answer: item["expected_answer"] == null ? null : String(item["expected_answer"]),
-            is_correct: isCorrect,
-            marks_awarded: awarded,
-            marks_possible: possible,
-          });
+        : await classifyError(
+            {
+              question_text: questionText,
+              student_answer: item["student_answer"] == null ? null : String(item["student_answer"]),
+              expected_answer: item["expected_answer"] == null ? null : String(item["expected_answer"]),
+              is_correct: isCorrect,
+              marks_awarded: awarded,
+              marks_possible: possible,
+            },
+            useModel,
+          );
 
     await db
       .insert(skillObservationsTable)
@@ -606,7 +629,7 @@ export async function ingestGradedPaper(paperId: number): Promise<IngestResult> 
   }
 
   logger.info(
-    { paperId, items: items.length, mapped, skills: touched.size, disagreements },
+    { paperId, items: items.length, mapped, skills: touched.size, disagreements, deep: useModel },
     "graded paper folded into the skill profile",
   );
   return {
@@ -717,6 +740,40 @@ export async function studentSkillProfile(studentCode: string): Promise<StudentS
       .sort((a, b) => b.priority - a.priority)
       .slice(0, 5),
   };
+}
+
+/**
+ * The school's OWN record of a student, with no K9 analysis in it: the
+ * subject averages that come straight off exams the teachers marked.
+ *
+ * This is the baseline tier — it is never withheld from anyone, paid or not,
+ * because it is the school's record of its own pupil and not a KobeAI
+ * product. It is also what a locked profile shows instead of a blank page:
+ * "48% in Mathematics" stays visible, and the subscription is what adds the
+ * answer to *why* 48%.
+ */
+export async function baselineSubjectMarks(
+  studentCode: string,
+): Promise<Array<{ subject: string; average: number; exams: number; latest_percent: number | null }>> {
+  const { rows } = await pool.query(
+    `SELECT e.subject,
+            ROUND(AVG(r.percent))::int AS average,
+            COUNT(*)::int             AS exams,
+            (ARRAY_AGG(ROUND(r.percent)::int ORDER BY r.recorded_at DESC))[1] AS latest_percent
+       FROM exam_results r
+       JOIN result_exams e ON e.id = r.exam_id
+       JOIN users u        ON u.id = r.student_id
+      WHERE u.student_code = $1
+      GROUP BY e.subject
+      ORDER BY e.subject`,
+    [studentCode],
+  ).catch(() => ({ rows: [] as Array<Record<string, unknown>> }));
+  return (rows as Array<Record<string, unknown>>).map((r) => ({
+    subject: String(r["subject"]),
+    average: Number(r["average"] ?? 0),
+    exams: Number(r["exams"] ?? 0),
+    latest_percent: r["latest_percent"] == null ? null : Number(r["latest_percent"]),
+  }));
 }
 
 export type SkillGap = {

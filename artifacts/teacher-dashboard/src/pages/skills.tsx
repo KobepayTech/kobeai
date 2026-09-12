@@ -13,7 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Brain, TrendingDown, TrendingUp, Target, ScanLine, School } from "lucide-react";
+import { Brain, TrendingDown, TrendingUp, Target, ScanLine, School, Lock } from "lucide-react";
 
 // Skill profiles — what the teacher's own marking says about each student.
 //
@@ -36,9 +36,23 @@ type SkillRow = {
 };
 
 type Profile = {
+  entitled?: boolean;
   student: { id: number; name: string; student_code: string | null; grade: string | null };
   subjects: Array<{ subject: string; average: number; skills: SkillRow[] }>;
   priority: SkillRow[];
+};
+
+// What the server sends instead when the student has no K9 learning
+// subscription. Not an error and not a blank page: the school's own marks
+// stay visible, and the lock says what the subscription would add.
+type Locked = {
+  entitled: false;
+  feature_label: string;
+  subscription_status: string;
+  message: string;
+  still_available: string[];
+  unlocks: string[];
+  baseline: { subjects: Array<{ subject: string; average: number; exams: number; latest_percent: number | null }> };
 };
 
 type Gap = {
@@ -92,12 +106,14 @@ export default function SkillsPage() {
   const [form, setForm] = useState("");
 
   const meta = useQuery<Meta>({ queryKey: ["skills-meta"], queryFn: () => apiGet("/v1/skills") });
-  const profile = useQuery<Profile>({
+  const profile = useQuery<Profile | Locked>({
     queryKey: ["skill-profile", lookup],
     queryFn: () => apiGet(`/v1/skills/students/${encodeURIComponent(lookup)}`),
     enabled: lookup.length > 0,
     retry: false,
   });
+  const locked = profile.data && profile.data.entitled === false ? (profile.data as Locked) : null;
+  const unlocked = profile.data && profile.data.entitled !== false ? (profile.data as Profile) : null;
   const gaps = useQuery<{ gaps: Gap[] }>({
     queryKey: ["skill-gaps", form],
     queryFn: () => apiGet(`/v1/skills/gaps${form ? `?form_level=${encodeURIComponent(form)}` : ""}`),
@@ -159,20 +175,61 @@ export default function SkillsPage() {
             </p>
           )}
 
-          {profile.data && (
+          {locked && (
+            <div className="space-y-4">
+              <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-4">
+                <div className="flex items-center gap-2 font-semibold">
+                  <Lock className="h-4 w-4" /> {locked.message}
+                </div>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  The school's own record of this student is never withheld — {" "}
+                  {locked.still_available.join(", ").toLowerCase()} all stay available. What the K9
+                  learning subscription adds is the answer to <em>why</em> a mark was what it was.
+                </p>
+                <ul className="mt-3 grid gap-1 text-sm sm:grid-cols-2">
+                  {locked.unlocks.map((u) => (
+                    <li key={u} className="text-muted-foreground">
+                      · {u}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              <div>
+                <div className="mb-2 text-sm font-semibold">The school's marks</div>
+                {locked.baseline.subjects.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No exam results recorded yet.</p>
+                ) : (
+                  <div className="space-y-1">
+                    {locked.baseline.subjects.map((b) => (
+                      <div key={b.subject} className="flex items-center gap-3 px-2 py-1 text-sm">
+                        <span className="w-56">{b.subject}</span>
+                        <span className="font-medium tabular-nums">{b.average}%</span>
+                        <span className="text-xs text-muted-foreground">
+                          across {b.exams} exam{b.exams === 1 ? "" : "s"}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {unlocked && (
             <div className="space-y-5">
               <div>
-                <div className="text-lg font-semibold">{profile.data.student.name}</div>
+                <div className="text-lg font-semibold">{unlocked.student.name}</div>
                 <div className="text-xs text-muted-foreground">
-                  {profile.data.student.student_code} · {profile.data.student.grade ?? "—"}
+                  {unlocked.student.student_code} · {unlocked.student.grade ?? "—"}
                 </div>
               </div>
 
-              {profile.data.priority.length > 0 && (
+              {unlocked.priority.length > 0 && (
                 <div className="rounded-lg border bg-muted/40 p-4">
                   <div className="mb-2 text-sm font-semibold">Help with these first</div>
                   <ol className="space-y-1 text-sm">
-                    {profile.data.priority.map((s, i) => (
+                    {unlocked.priority.map((s, i) => (
                       <li key={s.skill_id} className="flex flex-wrap items-center gap-2">
                         <span className="text-muted-foreground">{i + 1}.</span>
                         <span className="font-medium">{s.name}</span>
@@ -189,7 +246,7 @@ export default function SkillsPage() {
                 </div>
               )}
 
-              {profile.data.subjects.map((subject) => (
+              {unlocked.subjects.map((subject) => (
                 <div key={subject.subject}>
                   <div className="mb-2 flex items-baseline gap-2">
                     <h3 className="font-semibold">{subject.subject}</h3>
@@ -235,7 +292,7 @@ export default function SkillsPage() {
                 </div>
               ))}
 
-              {profile.data.subjects.length === 0 && (
+              {unlocked.subjects.length === 0 && (
                 <p className="text-sm text-muted-foreground">
                   No marked papers for this student yet.
                 </p>

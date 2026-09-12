@@ -28,6 +28,7 @@ import {
   Send,
   ShieldCheck,
   TriangleAlert,
+  GraduationCap,
 } from "lucide-react";
 
 // The bursar's desk, on the real fee ledger.
@@ -191,6 +192,25 @@ export default function Bursar() {
       toast({ variant: "destructive", title: "Not recorded", description: apiErrorText(err) }),
   });
 
+  // The K9 learning subscription is collected by the school with everything
+  // else: the bursar receipts the payment, then activates the year from that
+  // same receipt. No parent runs a separate app payment for a service their
+  // child reaches through the school's own computers.
+  const activate = useMutation({
+    mutationFn: (studentId: number) =>
+      apiPost<{ student: string; expires_at: string }>("/v1/subscriptions/activate", {
+        student_id: studentId,
+        months: 12,
+      }),
+    onSuccess: (res) =>
+      toast({
+        title: "K9 learning subscription activated",
+        description: `${res.student} is covered until ${new Date(res.expires_at).toLocaleDateString()}.`,
+      }),
+    onError: (err) =>
+      toast({ variant: "destructive", title: "Could not activate", description: apiErrorText(err) }),
+  });
+
   const verify = useMutation({
     mutationFn: () => apiGet<{ ok: boolean; drift: unknown[] }>("/v1/fees/verify"),
     onSuccess: (res) =>
@@ -338,18 +358,32 @@ export default function Bursar() {
                         )}
                       </TableCell>
                       <TableCell className="text-right">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSelected(a);
-                            setAmount(a.balance_tsh > 0 ? String(a.balance_tsh) : "");
-                            setPayOpen(true);
-                          }}
-                        >
-                          Record payment
-                        </Button>
+                        <div className="flex justify-end gap-1">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelected(a);
+                              setAmount(a.balance_tsh > 0 ? String(a.balance_tsh) : "");
+                              setPayOpen(true);
+                            }}
+                          >
+                            Record payment
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            title="Activate this student's K9 learning subscription for a year"
+                            disabled={activate.isPending}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              activate.mutate(a.student_id);
+                            }}
+                          >
+                            <GraduationCap className="h-4 w-4" />
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))

@@ -10,29 +10,17 @@ import {
   usersTable,
 } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
-import { requireActiveSubscription } from "../lib/central-sync";
 import { drainPendingGrants } from "../lib/kp";
 
 const router = Router();
 
 router.use("/v1/student/market", requireAuth(["student"]));
 
-// Subscription gating, mounted on the two endpoints that SPEND or EARN KP and
-// nowhere else. Browsing the floor and reading your own balance stay open, so
-// a lapsed student can still see what they are missing and why — a blank
-// screen teaches nobody to go and renew.
-//
-// Nothing academic is gated anywhere in K9: sitting an exam, reading the
-// timetable and getting a result are never subject to billing. Withholding a
-// child's exam over a parent's arrears is a decision a headteacher may take;
-// it is not one an environment variable should take for them.
-//
-// This is inert until ENFORCE_SUBSCRIPTIONS=true, and it fails open until the
-// first successful central sync so a brand-new school is never locked out of
-// itself. See docs/K9_SUBSCRIPTIONS.md.
-const gated = requireActiveSubscription();
-router.post("/v1/student/market/questions/:id/lock", gated);
-router.post("/v1/student/market/questions/:id/answer", gated);
+// NOT gated on subscription. The question market is an engagement feature
+// funded by KP, not part of what a parent pays K9 for — and a child who
+// answers a physics question correctly should be paid for it whether or not
+// their fees are current. What the subscription buys is the intelligence
+// profile (lib/entitlements.ts); see docs/K9_SUBSCRIPTIONS.md.
 
 const LOCK_DURATION_MS = 5 * 60 * 1000; // 5 minutes
 const LOCK_KP_COST = 10;

@@ -149,6 +149,33 @@ before the exam.
 
 See `docs/K9_SKILL_ENGINE.md`.
 
+## What a subscription buys
+
+K9 is sold per student per year (TZS 20,000–50,000). The parent is not buying
+access to an app — no student carries a device — they are buying the
+**intelligence profile**: K9 continuously working out how their child learns
+and helping the school teach them better.
+
+| Every student, paid or not | Subscribed |
+|---|---|
+| Attendance, presence, safety | Skill mastery map |
+| Identity and the face gallery | Why each mark was lost |
+| Timetable and sitting exams | Recommended interventions |
+| Marks, report cards, school records | Progress over time, revision, learning plan, enhanced parent report |
+
+So an unsubscribed student still shows **48% in Mathematics** — that is the
+school's record of its own pupil, not a KobeAI product. A subscribed one adds
+the per-skill breakdown, the main mistake, what to teach next, and the change
+since the last exam.
+
+**A child's attendance, safety and school record are never for sale.** The
+tier boundary lives in one file (`lib/entitlements.ts`) and a test fails the
+build if anyone moves them.
+
+The school collects the fee on its own fee slip and activates the year from
+that receipt — the subscription is keyed to the student ID, never a phone
+number or a device. See `docs/K9_SUBSCRIPTIONS.md`.
+
 ## Printing
 
 Printing is staff-initiated. A teacher picks a document, printer and number
@@ -273,8 +300,9 @@ school server has no accounts until someone completes the install wizard.
 | `OLLAMA_BASE_URL` | Where Ollama lives (default `http://localhost:11434`) |
 | `OLLAMA_MODEL` | Optional — pins one text model instead of the K9 registry's list |
 | `OLLAMA_VISION_MODEL` | Optional — pins one image-reading model for the paper reader |
-| `ENFORCE_SUBSCRIPTIONS` | `true` gates the question market on a current membership. Default `false`; provision and show first (`docs/K9_SUBSCRIPTIONS.md`) |
+| `ENFORCE_SUBSCRIPTIONS` | `true` gates the K9 intelligence profile on the student's subscription. Never gates attendance, safety, exams or marks. Default `false` (`docs/K9_SUBSCRIPTIONS.md`) |
 | `SUBSCRIPTION_TRIAL_DAYS` | Trial window a newly rostered student gets (default 30) |
+| `SUBSCRIPTION_ANNUAL_TSH` | Price per student per year (default 30,000) |
 | `SKILL_HALF_LIFE_DAYS` | How fast old marking decays out of a skill score (default 60) |
 
 ## Deploying a school server

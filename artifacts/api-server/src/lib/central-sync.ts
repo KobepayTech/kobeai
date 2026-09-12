@@ -272,6 +272,47 @@ export async function pushRosterOnce(): Promise<RosterPushResult | null> {
   }
 }
 
+/**
+ * Tell central this student's K9 fee has been collected, and for how long.
+ * Returns null when central cannot be reached — the caller must not record
+ * the activation locally in that case, or the school and the control plane
+ * would disagree about who has paid.
+ */
+export async function activateSubscription(args: {
+  student_code: string;
+  months: number;
+  reference?: string | null;
+  collected_by?: string;
+}): Promise<{ expires_at: string } | null> {
+  const { CENTRAL_BASE_URL, TENANT_LICENSE_KEY } = cfg();
+  if (!CENTRAL_BASE_URL || !TENANT_LICENSE_KEY) return null;
+  try {
+    const res = await fetch(`${CENTRAL_BASE_URL}/api/central/v1/subscriptions/activate`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-tenant-license-key": TENANT_LICENSE_KEY },
+      body: JSON.stringify({
+        student_code: args.student_code,
+        months: args.months,
+        reference: args.reference ?? null,
+        collected_by: args.collected_by ?? "school",
+      }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) {
+      logger.warn({ status: res.status, student: args.student_code }, "subscription activation refused");
+      return null;
+    }
+    const body = (await res.json()) as { expires_at: string };
+    // Pull straight back so the local cache — which every entitlement check
+    // reads — knows the student is paid before the bursar's screen refreshes.
+    await syncOnce();
+    return body;
+  } catch (err) {
+    logger.warn({ err, student: args.student_code }, "subscription activation threw");
+    return null;
+  }
+}
+
 const USAGE_PUSH_INTERVAL_MS = Number(process.env["CENTRAL_USAGE_PUSH_INTERVAL_MS"] ?? 60_000);
 
 let timer: NodeJS.Timeout | null = null;

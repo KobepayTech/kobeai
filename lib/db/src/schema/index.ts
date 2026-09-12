@@ -640,7 +640,20 @@ export const studentSubscriptionsTable = pgTable(
     student_name: text("student_name").notNull(),
     plan: text("plan").notNull().default("basic"), // basic | premium | trial
     status: text("status").notNull().default("trial"),
+    // K9 is sold per student per YEAR, and collected by the school alongside
+    // its own fees — so these two are both needed. `monthly_price_tsh` stays
+    // the NORMALISED monthly figure (annual ÷ 12) because every MRR
+    // calculation in the operator console reads it; `period_price_tsh` is
+    // what is actually charged, once per `billing_period`.
+    billing_period: text("billing_period").notNull().default("month"), // 'month' | 'year'
+    period_price_tsh: integer("period_price_tsh").notNull().default(0),
     monthly_price_tsh: integer("monthly_price_tsh").notNull().default(0),
+    // Where the money came from. 'school' means the school collected the K9
+    // fee alongside its own — the normal case — and carries the
+    // fee_transactions.id that paid for it, so an activation is always
+    // traceable back to a specific payment on the school's own ledger.
+    collected_by: text("collected_by"), // 'school' | 'parent_mpesa' | 'operator'
+    collection_reference: text("collection_reference"),
     parent_phone: text("parent_phone"),
     last_payment_at: timestamp("last_payment_at"),
     expires_at: timestamp("expires_at"),

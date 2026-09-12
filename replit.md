@@ -41,10 +41,15 @@ I prefer iterative development, with a focus on delivering functional components
 - Mastery is time-decayed (`SKILL_HALF_LIFE_DAYS`, default 60) and always carries a confidence. One question is a hint, not a diagnosis: trend is not reported below four observations, and the school-wide gap view ignores anything under 30% confidence.
 - A blank answer is classified `unanswered`, never `concept`.
 
-## Subscriptions
-- Provisioning, not enforcement, was the missing piece. `POST /central/v1/roster` (licence-key auth) takes the school's student list and gives each new student a `trial` subscription; the school pushes it on the sync timer and right after a roster import commits (`lib/central-sync.ts:pushRosterOnce`).
-- `tenants.students_cap` is enforced there, and students over it are reported by name.
-- `requireActiveSubscription()` is mounted ONLY on the market lock/answer endpoints. Nothing academic — exams, timetable, results — is ever gated. Inert until `ENFORCE_SUBSCRIPTIONS=true`.
+## Subscriptions (per student, per YEAR)
+- Sold per student per year (`SUBSCRIPTION_ANNUAL_TSH`, default 30,000). Keyed to the STUDENT ID, never a phone or device. `monthly_price_tsh` is kept as annual ÷ 12 so existing MRR maths stays correct; `period_price_tsh` is what is actually charged.
+- **The tier boundary lives in exactly one file: `lib/entitlements.ts`.** Baseline (never gated, never for sale): attendance, presence, safety, identity, timetable, exams, results, records. Premium: skill profile, exam analysis, recommendations, longitudinal, revision, learning plan, enhanced parent report. `entitlements.test.ts` fails the build if anything moves across.
+- `requirePremium(feature)` gates on the SUBJECT student's subscription, not the caller's — these routes are staff-facing and a teacher's own account is irrelevant to whether a child's profile is paid for.
+- A locked route answers **200 with a described lock plus the school's own marks**, not 402. The contrast ("48%" vs "48% and here is why") is the commercial argument, rendered where a teacher is already looking.
+- The KP market is NOT gated; it is engagement funded by KP.
+- Deep analysis skips model calls for unsubscribed students to save GPU, but still records the free keyword/rule observations, so subscribing later + `POST /v1/skills/reindex` backfills.
+- Provisioning: `POST /central/v1/roster` gives every new student a trial (`lib/central-sync.ts:pushRosterOnce`, on the sync timer and after every roster commit). `tenants.students_cap` is enforced there.
+- Collection: the school bills the K9 fee on its own fee slip; `POST /v1/subscriptions/activate` takes a `fee_transaction_id` as evidence and calls `POST /central/v1/subscriptions/activate`. Extends from max(today, current expiry), so paying early adds a year.
 - `GET /v1/subscriptions/state` says what enforcement would do today without switching it on. See `docs/K9_SUBSCRIPTIONS.md`.
 
 ## School setup and the operator boundary
