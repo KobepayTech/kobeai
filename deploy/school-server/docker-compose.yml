@@ -100,6 +100,7 @@ services:
       OLLAMA_MODEL: ${OLLAMA_MODEL:-mistral:7b}
       KOBEVISION_SHARED_SECRET: ${KOBEVISION_SHARED_SECRET}
       K9_SHARED_SECRET: ${K9_SHARED_SECRET}
+      K9_RUNTIME_URL: http://k9-runtime:8091
       SCHOOL_TIMEZONE: ${SCHOOL_TIMEZONE:-Africa/Dar_es_Salaam}
       PRESENCE_CHECKPOINT_MINUTES: ${PRESENCE_CHECKPOINT_MINUTES:-30}
       PRESENCE_MATCH_THRESHOLD: ${PRESENCE_MATCH_THRESHOLD:-0.86}
@@ -147,6 +148,34 @@ services:
     #         - driver: nvidia
     #           count: 1
     #           capabilities: [gpu]
+    networks: [kobeai]
+
+  # K9's local model gateway. It mounts the existing downloader tree read-only
+  # and lazy-loads individual models only when a capability needs them.
+  k9-runtime:
+    build:
+      context: ../../services/k9-runtime
+      dockerfile: Dockerfile
+    image: kobeai/k9-runtime:latest
+    container_name: kobeai-k9-runtime
+    restart: unless-stopped
+    environment:
+      K9_MODEL_ROOT: /models/k9
+      K9_SHARED_SECRET: ${K9_SHARED_SECRET}
+      K9_DEVICE: ${K9_DEVICE:-auto}
+      K9_GGUF_CONTEXT: ${K9_GGUF_CONTEXT:-8192}
+      K9_GGUF_GPU_LAYERS: ${K9_GGUF_GPU_LAYERS:--1}
+    volumes:
+      - ${K9_MODEL_ROOT_HOST:-./data/models/k9}:/models/k9:ro
+    ports:
+      - "127.0.0.1:8091:8091"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8091/health', timeout=3)\" || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    # For NVIDIA inference, set K9_DEVICE=cuda and enable a GPU reservation
+    # appropriate for the host's Docker/NVIDIA runtime.
     networks: [kobeai]
 
   # K-9 sees the physical school LAN and discovers/fingerprints cameras, DVRs,
