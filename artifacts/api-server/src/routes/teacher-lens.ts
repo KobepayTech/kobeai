@@ -16,6 +16,7 @@ import {
   generateRetestForPaper,
 } from "../lib/student-development";
 import { logger } from "../lib/logger";
+import { ingestGradedPaper, studentSkillProfile } from "../lib/skill-engine";
 import {
   announceResult,
   ensureResultsTables,
@@ -223,7 +224,13 @@ router.post("/v1/teacher-lens/session/:id/end", requireTeacher, async (req, res)
  *         expected_answer?: string,
  *         is_correct: boolean,
  *         marks_awarded?: number,
- *         marks_possible?: number
+ *         marks_possible?: number,
+ *         // When a scan proposed a mark before the teacher confirmed it,
+ *         // send what it proposed here. The TEACHER'S is_correct and
+ *         // marks_awarded above are what get recorded — always — and any
+ *         // difference is written to marking_feedback so the gap between
+ *         // what K9 reads and what teachers accept stays measurable.
+ *         metadata?: { ai_is_correct?: boolean, ai_marks_awarded?: number }
  *       }, ...
  *     ],
  *     paper_image_key?: string,
@@ -378,6 +385,16 @@ router.post("/v1/teacher-lens/paper-graded", requireTeacher, async (req, res) =>
     }
     await client.query("COMMIT");
 
+    // Fold the teacher's marking into the student's skill profile. This is
+    // the whole point of the marking path: K9 did not mark anything, it read
+    // what the teacher already decided and turned it into a per-skill
+    // picture. Best effort — a school with no model, or a question the
+    // taxonomy cannot place, must never cost the teacher their paper.
+    const skills = await ingestGradedPaper(paperId).catch((err) => {
+      logger.warn({ err, paperId }, "skill ingest failed; the paper is still recorded");
+      return null;
+    });
+
     let standing: Awaited<ReturnType<typeof studentStanding>> = null;
     if (recorded && exam && student) {
       announceResult(recorded.exam, student, { marks: recorded.result.marks, percent: recorded.result.percent });
@@ -462,6 +479,10 @@ router.post("/v1/teacher-lens/paper-graded", requireTeacher, async (req, res) =>
       result: recorded ? { ...recorded.result, exam: recorded.exam, standing } : null,
       curated_notes_generated: notesGenerated,
       retest,
+      // What the teacher's marking told K9 about this student's skills.
+      // `disagreements` counts the questions where a vision pass had proposed
+      // a different mark — the teacher's stands, and the gap is recorded.
+      skills,
     });
   } catch (err) {
     await client.query("ROLLBACK").catch(() => undefined);
@@ -487,7 +508,13 @@ async function studentBrief(studentCode: string) {
     [studentCode],
   );
 
-  const weakBits = profile.topics_weak.slice(0, 3).join(", ");
+  // Prefer the skill engine's own names: "Balancing equations" is something a
+  // teacher can act on in the next thirty seconds, where a free-form OCR
+  // topic string often is not. Falls back to the rolled-up topics when the
+  // student has no marked papers yet.
+  const skillProfile = await studentSkillProfile(studentCode).catch(() => null);
+  const prioritySkills = (skillProfile?.priority ?? []).slice(0, 3).map((s) => s.name);
+  const weakBits = (prioritySkills.length > 0 ? prioritySkills : profile.topics_weak.slice(0, 3)).join(", ");
   const strongBits = profile.topics_strong.slice(0, 3).join(", ");
   const lastScore = recent.rows[0]?.score_percent ?? null;
   const lastSubject = recent.rows[0]?.subject ?? null;

@@ -31,6 +31,7 @@ import {
   QrCode,
   Bot,
   Banknote,
+  Brain,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -53,6 +54,7 @@ const SCHOOL_NAV: NavItem[] = [
   { href: "/attendance-exceptions", label: "Attendance Exceptions", icon: CircleAlert, needs: "teaching" },
   { href: "/classroom-insights", label: "Classroom Insights", icon: MessagesSquare, needs: "teaching" },
   { href: "/student-development", label: "Student Development", icon: Lightbulb, needs: "teaching" },
+  { href: "/skills", label: "Skill Profiles", icon: Brain, needs: "teaching" },
   { href: "/camera-network", label: "Camera Network", icon: Camera, needs: "teaching" },
   { href: "/quizzes", label: "Quizzes", icon: BookOpenCheck, needs: "teaching" },
   { href: "/timetable", label: "Timetable", icon: CalendarClock, needs: "teaching" },

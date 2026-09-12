@@ -33,6 +33,20 @@ I prefer iterative development, with a focus on delivering functional components
 - Reconciliation (`lib/payment-reader.ts`, `/v1/fees/reconcile/*`) reads M-Pesa confirmations with a regex first and the vision model second, proposes a student with a stated reason, and posts nothing until a human confirms. Two plausible candidates → no proposal.
 - Removed in this change: `buildBalances()` and the fabricated student list, the hard-coded billing summary, and `/v1/bursar/deposit` (which credited the KP ledger with shillings). Bulk invoicing now uses real parent phones from `parent_children` instead of deriving them from the student id.
 
+## Skill profiles from marking
+- K9 marks nothing. `lib/skill-engine.ts` reads `graded_paper_items` — the teacher's own ticks, crosses and part marks — and maps each to a skill from the curated taxonomy in `lib/skill-taxonomy.ts`. Full design in `docs/K9_SKILL_ENGINE.md`.
+- Tables: `skills` (taxonomy), `skill_observations` (append-only evidence), `student_skill_mastery` (a derived cache — `POST /v1/skills/reindex` rebuilds it), `marking_feedback` (teacher vs K9).
+- The TEACHER'S mark is authoritative everywhere, without exception. `metadata.ai_is_correct` / `ai_marks_awarded` on an item record what a scan proposed; the difference goes to `marking_feedback` and `GET /v1/skills/agreement` publishes the rate.
+- Mapping is keywords first (works with no model at all), model second, and the model only ever picks a code from the existing taxonomy — it cannot invent a skill.
+- Mastery is time-decayed (`SKILL_HALF_LIFE_DAYS`, default 60) and always carries a confidence. One question is a hint, not a diagnosis: trend is not reported below four observations, and the school-wide gap view ignores anything under 30% confidence.
+- A blank answer is classified `unanswered`, never `concept`.
+
+## Subscriptions
+- Provisioning, not enforcement, was the missing piece. `POST /central/v1/roster` (licence-key auth) takes the school's student list and gives each new student a `trial` subscription; the school pushes it on the sync timer and right after a roster import commits (`lib/central-sync.ts:pushRosterOnce`).
+- `tenants.students_cap` is enforced there, and students over it are reported by name.
+- `requireActiveSubscription()` is mounted ONLY on the market lock/answer endpoints. Nothing academic — exams, timetable, results — is ever gated. Inert until `ENFORCE_SUBSCRIPTIONS=true`.
+- `GET /v1/subscriptions/state` says what enforcement would do today without switching it on. See `docs/K9_SUBSCRIPTIONS.md`.
+
 ## School setup and the operator boundary
 - A school server ships with no accounts. `POST /v1/setup/school` (public, once) creates the tenant, the `school_setup` row and the school's own administrator — always role `admin`.
 - **The install flow has no path to `super_admin`.** The operator console requires `K9_OPERATOR_SECRET` in the environment AND the school's setup password at `/v1/setup/operator/unlock`; without the env var that route answers 404. Never set it on a school's server.

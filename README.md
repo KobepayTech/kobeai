@@ -63,7 +63,8 @@ Shilling (TSh).
 
 See `docs/K9_ARCHITECTURE.md`, `docs/TEACHER_LENS.md`,
 `docs/K9_MODEL_STACK.md`, `docs/K9_ONBOARDING.md`,
-`docs/K9_MARKET_AGENT.md` and `docs/K9_BURSAR_AI.md` for the full design.
+`docs/K9_MARKET_AGENT.md`, `docs/K9_SKILL_ENGINE.md` and
+`docs/K9_BURSAR_AI.md` for the full design.
 
 ## Setting a school up
 
@@ -122,6 +123,31 @@ confirms, and only then does the ledger move.
 
 See `docs/K9_BURSAR_AI.md`, which also sets out what is deliberately not
 built yet and why.
+
+## Skill profiles
+
+K9 does not mark papers. Teachers do, exactly as they always have, and K9
+reads the marking they already did.
+
+Every tick, cross and part mark on a scanned paper is mapped to a syllabus
+skill, classified by *why* the mark was lost (concept, calculation, careless,
+incomplete, terminology, formula, reasoning, language, unanswered), and folded
+into a per-skill mastery score. So instead of "62% in Chemistry" a teacher
+sees that atomic structure is strong, balancing equations is weak, and the
+mole concept is weaker — and which three things to teach this student next.
+
+Two properties matter most. **The teacher is always right**: where a scan
+proposed a different mark, the teacher's stands and the disagreement is
+recorded, so the gap between what K9 reads and what teachers accept is
+measurable rather than assumed. And **one question is a hint, not a
+diagnosis**: every score carries a confidence, so a teacher can tell a rumour
+from a pattern before spending an intervention on it.
+
+A head teacher gets the form-wide view — "68% of Form 3 are below half on
+simultaneous equations" — which is a remedial lesson somebody can timetable
+before the exam.
+
+See `docs/K9_SKILL_ENGINE.md`.
 
 ## Printing
 
@@ -247,6 +273,9 @@ school server has no accounts until someone completes the install wizard.
 | `OLLAMA_BASE_URL` | Where Ollama lives (default `http://localhost:11434`) |
 | `OLLAMA_MODEL` | Optional — pins one text model instead of the K9 registry's list |
 | `OLLAMA_VISION_MODEL` | Optional — pins one image-reading model for the paper reader |
+| `ENFORCE_SUBSCRIPTIONS` | `true` gates the question market on a current membership. Default `false`; provision and show first (`docs/K9_SUBSCRIPTIONS.md`) |
+| `SUBSCRIPTION_TRIAL_DAYS` | Trial window a newly rostered student gets (default 30) |
+| `SKILL_HALF_LIFE_DAYS` | How fast old marking decays out of a skill score (default 60) |
 
 ## Deploying a school server
 

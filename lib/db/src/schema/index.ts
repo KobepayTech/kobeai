@@ -2030,3 +2030,174 @@ export const paymentMatchesTable = pgTable(
   }),
 );
 export type PaymentMatch = typeof paymentMatchesTable.$inferSelect;
+
+// ===========================================================================
+// Skills — turning a teacher's marking into a learning profile
+// ===========================================================================
+//
+// A score is not a diagnosis. "62% in Chemistry" tells a teacher nothing they
+// can act on; "strong on atomic structure, weak on balancing equations and
+// the mole concept" tells them what to teach on Tuesday. Two students can sit
+// on the same 62% and need completely opposite interventions.
+//
+// So K9 models SKILLS, not subjects. It does not mark anything: the teacher
+// marks exactly as they always have, and K9 reads the marking they already
+// did. Every tick, cross, part-mark and correction on a paper is a labelled
+// data point about one skill, and the teacher's mark is always the
+// authoritative one — where K9's own reading disagreed, the disagreement is
+// recorded (marking_feedback) so the gap between what K9 thinks is right and
+// what teachers actually accept is measurable rather than assumed.
+//
+//   marked paper  →  graded_paper_items  (already exists)
+//                 →  map each item to a skill
+//                 →  classify WHY the mark was lost
+//                 →  skill_observations   (append-only evidence)
+//                 →  student_skill_mastery (decayed rolling score)
+//
+// The evidence table is the source of truth; mastery is a cache that can be
+// rebuilt from it at any time, exactly like the fee ledger's balances.
+// ---------------------------------------------------------------------------
+
+export const skillsTable = pgTable(
+  "skills",
+  {
+    id: serial("id").primaryKey(),
+    subject: text("subject").notNull(), // "Mathematics"
+    // Stable dotted code, e.g. "MATH.ALG.REARRANGE". Referenced by the
+    // mapper's model prompt as a closed vocabulary, so a model can only
+    // choose an existing skill and can never invent one.
+    code: text("code").notNull(),
+    name: text("name").notNull(), // "Algebraic rearrangement"
+    strand: text("strand"), // "Algebra" — how the profile groups them
+    form_level: text("form_level"), // "Form 2"; null = taught across forms
+    syllabus_ref: text("syllabus_ref"), // NECTA topic reference where known
+    // Words that identify this skill in a question. The deterministic mapper
+    // scores against these; the model only ever sees what they miss.
+    keywords: jsonb("keywords").notNull().default(sql`'[]'::jsonb`),
+    active: boolean("active").notNull().default(true),
+    created_at: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    code_idx: uniqueIndex("skills_code_idx").on(t.subject, t.code),
+    subject_idx: index("skills_subject_idx").on(t.subject, t.active),
+  }),
+);
+export type Skill = typeof skillsTable.$inferSelect;
+
+/**
+ * One row per marked question, per skill. Append-only: this is the evidence,
+ * and `student_skill_mastery` is only a cache computed from it.
+ */
+export const skillObservationsTable = pgTable(
+  "skill_observations",
+  {
+    id: serial("id").primaryKey(),
+    student_id: integer("student_id")
+      .notNull()
+      .references(() => usersTable.id, { onDelete: "cascade" }),
+    skill_id: integer("skill_id").references(() => skillsTable.id, { onDelete: "set null" }),
+    // graded_paper_items.id. Not a foreign key: that table is created by raw
+    // SQL at runtime (routes/teacher-lens.ts) as well as declared here, and a
+    // constraint across the two definitions would be a boot-order hazard for
+    // no benefit — the evidence stands on its own.
+    paper_item_id: integer("paper_item_id"),
+    paper_id: integer("paper_id"),
+    source: text("source").notNull().default("paper"), // 'paper' | 'quiz' | 'retest' | 'manual'
+    // 0-100. marks_awarded/marks_possible where the teacher gave part marks,
+    // otherwise 100 for a tick and 0 for a cross. Part marks are the whole
+    // point: "nearly right" and "no idea" are different diagnoses.
+    ratio: integer("ratio").notNull(),
+    marks_awarded: integer("marks_awarded"),
+    marks_possible: integer("marks_possible"),
+    // Why the mark was lost. Null when the answer was fully correct.
+    // 'concept' | 'calculation' | 'careless' | 'incomplete' | 'terminology'
+    // | 'formula' | 'reasoning' | 'language' | 'unanswered'
+    error_type: text("error_type"),
+    // 'keyword' | 'model' | 'teacher' | 'topic' — how this item reached this
+    // skill, so a bad mapping can be found and the mapper improved.
+    mapped_by: text("mapped_by").notNull().default("keyword"),
+    map_confidence: integer("map_confidence"), // 0-100
+    observed_at: timestamp("observed_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    student_skill_idx: index("skill_obs_student_skill_idx").on(t.student_id, t.skill_id, t.observed_at),
+    skill_idx: index("skill_obs_skill_idx").on(t.skill_id, t.observed_at),
+    // One observation per marked question. Re-indexing a paper must not
+    // double-count the same tick.
+    item_idx: uniqueIndex("skill_obs_item_idx").on(t.paper_item_id).where(sql`paper_item_id IS NOT NULL`),
+  }),
+);
+export type SkillObservation = typeof skillObservationsTable.$inferSelect;
+
+/**
+ * The rolling picture, recomputed from `skill_observations` whenever new
+ * evidence lands. Every field is derived — drop this table and it rebuilds.
+ */
+export const studentSkillMasteryTable = pgTable(
+  "student_skill_mastery",
+  {
+    student_id: integer("student_id")
+      .notNull()
+      .references(() => usersTable.id, { onDelete: "cascade" }),
+    skill_id: integer("skill_id")
+      .notNull()
+      .references(() => skillsTable.id, { onDelete: "cascade" }),
+    // 0-100, time-decayed so last term's struggle does not outweigh this
+    // week's improvement.
+    mastery: integer("mastery").notNull(),
+    // 0-100: how much evidence sits behind that number. A 31% off one
+    // question is a hint; a 31% off nine is a diagnosis, and the UI must be
+    // able to tell a teacher which one they are looking at.
+    confidence: integer("confidence").notNull().default(0),
+    // Percentage points, recent evidence minus older. Positive = improving.
+    trend: integer("trend").notNull().default(0),
+    attempts: integer("attempts").notNull().default(0),
+    marks_awarded: integer("marks_awarded").notNull().default(0),
+    marks_possible: integer("marks_possible").notNull().default(0),
+    // The most common error type on this skill — "they know the concept and
+    // keep dropping the arithmetic" is a different lesson from "they have
+    // never understood it".
+    dominant_error: text("dominant_error"),
+    last_seen_at: timestamp("last_seen_at"),
+    updated_at: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.student_id, t.skill_id] }),
+    skill_idx: index("skill_mastery_skill_idx").on(t.skill_id, t.mastery),
+  }),
+);
+export type StudentSkillMastery = typeof studentSkillMasteryTable.$inferSelect;
+
+/**
+ * Teacher authority, made measurable.
+ *
+ * When the lens or a vision pass proposed a mark and the teacher awarded a
+ * different one, the teacher wins — always, without argument. But the
+ * disagreement is worth keeping: it is the only honest measure of whether
+ * K9's reading of an answer matches what teachers actually accept, and it is
+ * what any future auto-marking would have to earn its way past.
+ */
+export const markingFeedbackTable = pgTable(
+  "marking_feedback",
+  {
+    id: serial("id").primaryKey(),
+    paper_item_id: integer("paper_item_id"),
+    paper_id: integer("paper_id"),
+    student_id: integer("student_id").references(() => usersTable.id, { onDelete: "cascade" }),
+    skill_id: integer("skill_id").references(() => skillsTable.id, { onDelete: "set null" }),
+    subject: text("subject"),
+    ai_is_correct: boolean("ai_is_correct"),
+    ai_marks_awarded: integer("ai_marks_awarded"),
+    teacher_is_correct: boolean("teacher_is_correct").notNull(),
+    teacher_marks_awarded: integer("teacher_marks_awarded"),
+    marks_possible: integer("marks_possible"),
+    agreed: boolean("agreed").notNull(),
+    question_text: text("question_text"),
+    student_answer: text("student_answer"),
+    created_at: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    agreed_idx: index("marking_feedback_agreed_idx").on(t.subject, t.agreed, t.created_at),
+  }),
+);
+export type MarkingFeedback = typeof markingFeedbackTable.$inferSelect;

@@ -38,6 +38,7 @@ import SetupPage from "@/pages/setup";
 import OnboardingPage from "@/pages/onboarding";
 import MarketAgentPage from "@/pages/market-agent";
 import ReconcilePage from "@/pages/reconcile";
+import SkillsPage from "@/pages/skills";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -74,6 +75,9 @@ function Router() {
       </Route>
       <Route path="/student-development">
         <Shell><StudentDevelopment /></Shell>
+      </Route>
+      <Route path="/skills">
+        <Shell><SkillsPage /></Shell>
       </Route>
       <Route path="/camera-network">
         <Shell><CameraNetwork /></Shell>
