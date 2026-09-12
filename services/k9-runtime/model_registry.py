@@ -17,7 +17,15 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable
 
-from k9_models import COMPLETE_MARKER, Registry
+try:
+    from k9_models import COMPLETE_MARKER, Registry
+except ModuleNotFoundError:  # pragma: no cover - loader-dependent
+    # Tools that load this file by path (scripts/generate-k9-model-files.py uses
+    # importlib) don't put its directory on sys.path, so find the sibling module.
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from k9_models import COMPLETE_MARKER, Registry
 
 _registry: Registry | None = None
 
@@ -56,21 +64,22 @@ class ModelSpec:
         return str(entry["path"])
 
     def path(self, root: Path | None = None) -> Path:
-        """Where the model lives, per the registry. `root` is accepted for
-        compatibility with callers that pass one, and honoured only when it
-        differs from the registry's own root (tests use a temporary tree)."""
+        """Where the model lives, per the registry.
+
+        `root` is accepted because app.py passes the K9 model root, and tests pass
+        a temporary tree. It only re-roots models the registry puts under the K9
+        root: Qwen lives at the KobeOS root ("root": "base") and must not be
+        dragged under k9/, or the runtime looks for it in the wrong place.
+        """
         resolved = registry().path_of(self.registry_id)
         if root is None:
             return resolved
+        entry_root_name = registry().entry(self.registry_id).get("root", "k9")
         k9_root = registry().roots["k9"]
-        base = registry().roots[registry().entry(self.registry_id).get("root", "k9")]
-        if Path(root) == base:
+        if entry_root_name != "k9" or Path(root) == k9_root:
             return resolved
-        # Re-root: keep the registry's relative layout under the given root.
-        try:
-            return Path(root) / resolved.relative_to(base)
-        except ValueError:
-            return Path(root) / resolved.relative_to(k9_root)
+        # A different K9 root (a test's temporary tree): keep the relative layout.
+        return Path(root) / resolved.relative_to(k9_root)
 
     def status(self, root: Path | None = None) -> str:
         """"ready" | "partial" | "missing", by the registry's rules."""
