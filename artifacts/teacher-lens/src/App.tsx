@@ -1,3 +1,5 @@
+import { TeacherWorkspace, type CaptureActivity } from "./TeacherWorkspace";
+import { useCamera } from "./camera";
 import { captureGlasses, GlassesControl, speakThroughGlasses } from "./glasses";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -95,8 +97,8 @@ function speak(text: string): void {
 // ---------------------------------------------------------------------------
 function Setup({ onReady }: { onReady: (a: StoredAuth) => void }) {
   const [apiBase, setApiBase] = useState(DEFAULT_API_BASE);
-  const [email, setEmail] = useState("teacher@school.tz");
-  const [password, setPassword] = useState("teacher123");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -155,63 +157,6 @@ function Setup({ onReady }: { onReady: (a: StoredAuth) => void }) {
 // (server accepts the structured event without it) but ready for a future
 // wire-up to /v1/teacher-lens/frame.
 // ---------------------------------------------------------------------------
-function useCamera(enabled: boolean) {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const [ready, setReady] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  useEffect(() => {
-    setReady(false);
-    setErr(null);
-    if (!enabled) return;
-    let cancelled = false;
-    let stream: MediaStream | null = null;
-    (async () => {
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio: false,
-          video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 } },
-        });
-        if (cancelled) { stream.getTracks().forEach((t) => t.stop()); return; }
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          await videoRef.current.play();
-          setReady(true);
-        }
-      } catch (e) {
-        setErr(e instanceof Error ? e.message : String(e));
-      }
-    })();
-    return () => { cancelled = true; stream?.getTracks().forEach((t) => t.stop()); };
-  }, [enabled]);
-  const captureFrame = useCallback((): string | null => {
-    const v = videoRef.current;
-    if (!v || v.videoWidth === 0) return null;
-    const canvas = document.createElement("canvas");
-    canvas.width = v.videoWidth;
-    canvas.height = v.videoHeight;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return null;
-    ctx.drawImage(v, 0, 0);
-    return canvas.toDataURL("image/jpeg", 0.7);
-  }, []);
-  // Frames are scaled down so the K9 models answer faster on a school PC.
-  const captureBlob = useCallback(async (maxSide = 1600): Promise<Blob | null> => {
-    const v = videoRef.current;
-    if (!v || v.videoWidth === 0) return null;
-    const scale = Math.min(1, maxSide / Math.max(v.videoWidth, v.videoHeight));
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.round(v.videoWidth * scale);
-    canvas.height = Math.round(v.videoHeight * scale);
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return null;
-    ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
-    return await new Promise<Blob | null>((resolve) =>
-      canvas.toBlob((b) => resolve(b), "image/jpeg", 0.75),
-    );
-  }, []);
-  return { videoRef, ready, err, captureFrame, captureBlob };
-}
-
 // ---------------------------------------------------------------------------
 // Wake-word listener. Uses webkitSpeechRecognition (Chromium; iOS Safari
 // exposes it under a vendor prefix). Falls back silently on unsupported
@@ -886,6 +831,8 @@ export function App() {
   const [auth, setAuth] = useState<StoredAuth | null>(() => loadAuth());
   const authRef = useRef(auth);
   authRef.current = auth;
+  const [workspaceOpen, setWorkspaceOpen] = useState(true);
+  const [captures, setCaptures] = useState<CaptureActivity[]>([]);
   const [glassesConnected, setGlassesConnected] = useState(false);
   const [glassesSource, setGlassesSource] = useState<string | null>(null);
   const shutterBusy = useRef(false);
@@ -908,7 +855,7 @@ export function App() {
   useEffect(() => {
     if (!studentPicker) pickerRequest.current = null;
   }, [studentPicker]);
-  const { videoRef, ready: camReady, err: camErr, captureFrame, captureBlob } = useCamera(!!auth && !glassesSource);
+  const { videoRef, ready: camReady, err: camErr, captureFrame, captureBlob } = useCamera(!!auth && !glassesSource && !workspaceOpen);
 
   // Start a session as soon as we have auth.
   useEffect(() => {
@@ -1010,6 +957,7 @@ export function App() {
       });
       if (!res.ok) return null;
       const body = await res.json();
+      if (authRef.current === auth && body?.request?.id) setCaptures(previous => [{ id: body.request.id, mode, at: new Date().toISOString() }, ...previous].slice(0, 20));
       return { request_id: body?.request?.id ?? null, image_key: body?.image_key ?? null };
     } catch {
       return null;
@@ -1104,7 +1052,7 @@ export function App() {
 
   // Wake-word toggle — when on, saying "Kobe" fires the shutter.
   useWakeWord({
-    enabled: wakeWordOn,
+    enabled: wakeWordOn && !workspaceOpen && !!auth,
     onFire: () => {
       if (mode === "lookup" && !studentPicker && !lookupBrief) onShutter();
       // Deliberately no auto-shutter in mark mode: the teacher usually
@@ -1147,6 +1095,7 @@ export function App() {
             authRef.current = null;
             setGlassesSource(null);
             setGlassesConnected(false);
+            setCaptures([]); setWorkspaceOpen(true); setWakeWordOn(false);
             clearAuth();
             setAuth(null);
           }}
@@ -1155,6 +1104,7 @@ export function App() {
         </button>
       </header>
 
+      <button className="lens-secondary" onClick={() => setWorkspaceOpen(true)}>Teacher workspace</button>
       <GlassesControl onSource={selectGlassesSource} />
       <div className="lens-viewport">
         <video ref={videoRef} playsInline muted />
@@ -1210,6 +1160,8 @@ export function App() {
         </button>
       </div>
 
+      {workspaceOpen && <TeacherWorkspace auth={auth} connected={glassesConnected} source={glassesSource} captures={captures}
+        onClose={() => setWorkspaceOpen(false)} onCapture={next => { setMode(next); setWorkspaceOpen(false); }} onSpeak={speak} />}
       {toast && <div className="lens-toast">{toast}</div>}
 
       {studentPicker && (

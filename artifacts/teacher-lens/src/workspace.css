@@ -1,0 +1,235 @@
+.teacher-workspace {
+  position: fixed;
+  inset: 0;
+  z-index: 15;
+  overflow-y: auto;
+  background: #101915;
+  color: #eff7f1;
+  padding: max(20px, env(safe-area-inset-top))
+    max(18px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom));
+  box-sizing: border-box;
+}
+.teacher-workspace > * {
+  max-width: 920px;
+  margin-left: auto;
+  margin-right: auto;
+}
+.teacher-workspace * {
+  box-sizing: border-box;
+}
+.teacher-workspace button {
+  border: 1px solid #3a5043;
+  background: #21392b;
+  color: #f1fff5;
+  border-radius: 12px;
+  padding: 12px 16px;
+  cursor: pointer;
+  font-weight: 600;
+}
+.teacher-workspace button:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+.teacher-workspace button:focus-visible,
+.teacher-workspace input:focus-visible,
+.teacher-workspace textarea:focus-visible,
+.teacher-workspace select:focus-visible {
+  outline: 3px solid #9fdfaa;
+  outline-offset: 3px;
+}
+.teacher-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 22px;
+}
+.teacher-eyebrow {
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  color: #9fdfaa;
+}
+.teacher-heading h1 {
+  font-size: clamp(23px, 5vw, 34px);
+  margin: 10px 0;
+  letter-spacing: -0.04em;
+}
+.teacher-heading p,
+.teacher-muted {
+  color: #acc1b2;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.teacher-device {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  background: #1b2c22;
+  border: 1px solid #35493d;
+  border-radius: 16px;
+}
+.teacher-workspace small {
+  display: block;
+  color: #acc1b2;
+  line-height: 1.6;
+  font-size: 12px;
+  margin-top: 4px;
+}
+.teacher-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #dbac65;
+  flex-shrink: 0;
+}
+.teacher-dot.connected {
+  background: #9fdfaa;
+}
+.teacher-nav {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 5px;
+  margin-top: 20px;
+  margin-bottom: 24px;
+}
+.teacher-nav button {
+  background: transparent;
+  padding: 12px 5px;
+  border-color: transparent;
+}
+.teacher-nav button[aria-current] {
+  background: #d9edca;
+  color: #17291c;
+}
+.teacher-content {
+  padding-bottom: 30px;
+}
+.teacher-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.teacher-actions button {
+  text-align: left;
+  padding: 22px 18px;
+  background: #253d2d;
+  min-height: 165px;
+}
+.teacher-actions span {
+  display: block;
+  color: #a5d58f;
+  font-size: 12px;
+  margin-bottom: 26px;
+}
+.teacher-actions strong {
+  font-size: 18px;
+}
+.teacher-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 22px;
+}
+.teacher-workspace h2 {
+  font-size: 20px;
+  letter-spacing: -0.02em;
+}
+.teacher-workspace h3 {
+  font-size: 15px;
+}
+.teacher-period {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  border-bottom: 1px solid #35493d;
+  padding: 18px 0;
+}
+.teacher-period > span {
+  color: #c4dfb8;
+  font-size: 12px;
+}
+.teacher-period > div {
+  flex: 1;
+}
+.teacher-card {
+  background: #192a20;
+  border: 1px solid #35493d;
+  border-radius: 16px;
+  padding: 20px;
+  margin-top: 22px;
+  line-height: 1.6;
+}
+.teacher-card > button {
+  margin-top: 15px;
+}
+.teacher-workspace label {
+  display: block;
+  font-size: 13px;
+  margin: 16px 0;
+  color: #c4dfb8;
+}
+.teacher-workspace input,
+.teacher-workspace textarea,
+.teacher-workspace select {
+  width: 100%;
+  min-width: 0;
+  display: block;
+  margin-top: 8px;
+  padding: 13px;
+  border: 1px solid #4b6253;
+  border-radius: 10px;
+  background: #112018;
+  color: #f1fff5;
+  font: inherit;
+  font-size: 16px;
+}
+.teacher-workspace textarea {
+  min-height: 120px;
+  resize: vertical;
+}
+.teacher-search {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+.teacher-students {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+.teacher-students button {
+  text-align: left;
+}
+.teacher-students button[aria-pressed="true"] {
+  border-color: #a5d58f;
+}
+.teacher-prewrap {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.teacher-error,
+.teacher-success {
+  padding: 14px;
+  border-radius: 10px;
+  line-height: 1.5;
+}
+.teacher-error {
+  background: #4a222c;
+  color: #ffdce4;
+}
+.teacher-success {
+  background: #23402d;
+  color: #cdf0d5;
+}
+@media (min-width: 800px) {
+  .teacher-workspace {
+    padding-top: 36px;
+  }
+  .teacher-actions button {
+    min-height: 185px;
+  }
+}

@@ -37,6 +37,18 @@ jobs:
           pnpm --filter @workspace/glasses typecheck
           pnpm --filter @workspace/teacher-lens typecheck
           pnpm --filter @workspace/teacher-lens build
+      - name: Test teacher workspace in a mobile browser
+        run: |
+          npm install --prefix "$RUNNER_TEMP/lens-browser" --package-lock=false --no-audit --no-fund playwright@1.62.1
+          "$RUNNER_TEMP/lens-browser/node_modules/.bin/playwright" install --with-deps chromium
+          python3 -m http.server 5178 --bind 127.0.0.1 --directory artifacts/teacher-lens/dist/public > "$RUNNER_TEMP/lens-http.log" 2>&1 &
+          SERVER_PID=$!
+          trap 'kill "$SERVER_PID"' EXIT
+          for attempt in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:5178/ > /dev/null; then break; fi
+            sleep 1
+          done
+          NODE_PATH="$RUNNER_TEMP/lens-browser/node_modules" node artifacts/teacher-lens/tests/workspace.cjs
       - name: Fetch pinned HeyCyan SDK for compilation only
         run: python3 glasses/scripts/fetch_heycyan.py
       - name: Compile both native hardware variants

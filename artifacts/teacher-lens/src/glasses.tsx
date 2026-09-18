@@ -89,7 +89,11 @@ export function GlassesControl({
     if (bridge)
       void new NativeAdapter(bridge)
         .discover()
-        .then(setDevices)
+        .then((found) => {
+          if (!mounted.current) return;
+          setDevices(found);
+          setSelected(found.find((d) => d.id === "rokid")?.id ?? "");
+        })
         .catch((e) => setError(String(e)));
     return () => {
       mounted.current = false;
@@ -102,7 +106,8 @@ export function GlassesControl({
   if (!window.KobeNative)
     return (
       <div style={{ padding: "6px 16px", fontSize: 12 }}>
-        For Rokid, HeyCyan or RayNeo, use the KobeAI Lens Android app.
+        To connect Rokid, open this school account in the KobeAI Lens Android
+        app. Phone camera works here.
       </div>
     );
   const connect = async () => {
