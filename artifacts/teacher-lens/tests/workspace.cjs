@@ -58,6 +58,30 @@ const assert = require("node:assert/strict");
         },
         recent_papers: [],
       };
+    else if (url.pathname.includes("/skills/students/"))
+      data = {
+        entitled: true,
+        priority: [
+          {
+            skill_id: 7,
+            name: "Choosing the right formula",
+            subject: "Mathematics",
+            mastery: 31,
+            confidence: 62,
+            trend: -8,
+            dominant_error: "formula",
+          },
+        ],
+        subjects: [
+          {
+            subject: "Mathematics",
+            average: 48,
+            skills: [
+              { skill_id: 7, name: "Choosing the right formula", mastery: 31 },
+            ],
+          },
+        ],
+      };
     else if (url.pathname.includes("/curated-notes/"))
       data = {
         notes: [
@@ -91,11 +115,38 @@ const assert = require("node:assert/strict");
     0,
     "Workspace should not start phone camera",
   );
+  await page
+    .getByRole("button", {
+      name: "Connections: school server and Rokid glasses",
+    })
+    .click();
+  assert.equal(
+    await page
+      .getByLabel("Current server address", { exact: true })
+      .inputValue(),
+    "http://127.0.0.1:5178",
+  );
+  await page.getByRole("button", { name: "Check server connection" }).click();
+  await page.getByText(/Connected. Your school API accepted/).waitFor();
+  await page.getByRole("button", { name: "Done", exact: true }).click();
   await page.getByRole("tab", { name: "Students", exact: true }).click();
   await page.getByLabel("Search students").fill("Neema");
   await page.getByRole("button", { name: "Search", exact: true }).click();
   await page.getByRole("button", { name: /Neema/ }).click();
   await page.getByText("Needs support: Fractions", { exact: true }).waitFor();
+  // The skill map is the thing the subscription actually buys: not "48%"
+  // but which skill, how weak, and why the marks are going.
+  await page.getByText("Choosing the right formula").first().waitFor();
+  await page.getByText(/31% · Mathematics · mostly formula/).waitFor();
+  // A pending request must never disable the navigation. A teacher who
+  // taps Students while Today is still loading has to be able to leave.
+  assert.deepEqual(
+    await page
+      .getByRole("tab")
+      .evaluateAll((els) => els.map((el) => el.disabled)),
+    [false, false, false, false],
+    "Navigation tabs must never be disabled by a request in flight",
+  );
   await page
     .getByLabel("What did you observe?")
     .fill("Explained fractions to a classmate.");
@@ -113,32 +164,138 @@ const assert = require("node:assert/strict");
   await page.getByText("Source: ollama · qwen").waitFor();
   await page.getByRole("tab", { name: "Activity", exact: true }).click();
   await page.getByText(/No captures sent yet/).waitFor();
-  // The skill map is what a teacher acts on, so it must survive a student
-  // whose profile the server has nothing for yet.
-  await page.getByRole("tab", { name: "Students", exact: true }).click();
-  await page.getByText("What to teach next", { exact: true }).waitFor();
-
-  // Tabs must never be disabled: a teacher mid-lesson has to be able to leave
-  // a slow panel rather than wait on it.
-  assert.equal(
-    await page.evaluate(() =>
-      Array.from(document.querySelectorAll('[role="tab"]')).some((t) => t.disabled),
-    ),
-    false,
-    "Workspace tabs must stay usable while a request is in flight",
-  );
-
-  await page.getByRole("button", { name: "Open Lens", exact: true }).click();
-  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await page
+    .getByRole("button", {
+      name: "Connections: school server and Rokid glasses",
+    })
+    .click();
+  await page.getByRole("button", { name: "Change server / sign in" }).click();
   await page.getByRole("button", { name: "Sign in", exact: true }).waitFor();
   assert.equal(
     await page.evaluate(() => localStorage.getItem("k9-lens.auth")),
     null,
   );
+  assert.equal(
+    await page.getByLabel("School server URL").inputValue(),
+    "http://127.0.0.1:5178",
+  );
   assert.deepEqual(errors, []);
+  // Native protocol fixture: returning teachers reconnect without a button or credentials in JS.
+  const nativePage = await browser.newPage({
+    viewport: { width: 390, height: 844 },
+  });
+  await nativePage.addInitScript(() => {
+    localStorage.setItem(
+      "k9-lens.auth",
+      JSON.stringify({
+        api_base: location.origin,
+        token: "native-teacher",
+        teacher_name: "Asha",
+      }),
+    );
+    window.nativeCalls = [];
+    let enabled = true,
+      connected = false,
+      provider = null;
+    window.KobeNative = {
+      postMessage(raw) {
+        const call = JSON.parse(raw);
+        window.nativeCalls.push(call);
+        let result = null;
+        if (call.method === "info")
+          result = {
+            version: 1,
+            providers: ["rokid"],
+            automaticRokid: enabled,
+            connected,
+            provider,
+          };
+        if (call.method === "connect") {
+          connected = true;
+          provider = "rokid";
+          result = {
+            capabilities: {
+              camera: true,
+              display: true,
+              speaker: true,
+              speechSynthesis: true,
+            },
+          };
+        }
+        if (["pause", "forget"].includes(call.method)) {
+          enabled = false;
+          connected = false;
+          provider = null;
+        }
+        if (call.method === "disconnect") {
+          connected = false;
+          provider = null;
+        }
+        setTimeout(
+          () =>
+            window.KobeNative.onmessage?.({
+              data: JSON.stringify({ id: call.id, result }),
+            }),
+          0,
+        );
+      },
+    };
+  });
+  await nativePage.route("**/api/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.includes("/whisper/next")) return route.fulfill({ status: 204 });
+    return route.fulfill({
+      json: path.endsWith("/session")
+        ? { session: { id: 20 } }
+        : { current_period: null, upcoming_periods: [] },
+    });
+  });
+  await nativePage.goto("http://127.0.0.1:5178");
+  await nativePage
+    .getByText("Rokid Glasses connected", { exact: true })
+    .waitFor();
+  assert.equal(
+    await nativePage.evaluate(
+      () =>
+        window.nativeCalls.find((c) => c.method === "connect").params.automatic,
+    ),
+    true,
+  );
+  await nativePage
+    .getByRole("button", {
+      name: "Connections: school server and Rokid glasses",
+    })
+    .click();
+  await nativePage.getByLabel("Camera source").selectOption("");
+  await nativePage
+    .getByRole("button", { name: "Connect", exact: true })
+    .click();
+  await nativePage.getByText(/automatic glasses connection paused/).waitFor();
+  const connectionCount = await nativePage.evaluate(
+    () => window.nativeCalls.filter((c) => c.method === "connect").length,
+  );
+  await nativePage.waitForTimeout(3500);
+  assert.equal(
+    await nativePage.evaluate(
+      () => window.nativeCalls.filter((c) => c.method === "connect").length,
+    ),
+    connectionCount,
+  );
+  await nativePage.getByRole("button", { name: "Forget pairing" }).click();
+  await nativePage.getByText(/Pairing removed/).waitFor();
+  await nativePage
+    .getByRole("button", { name: "Change server / sign in" })
+    .click();
+  await nativePage
+    .getByRole("button", { name: "Sign in", exact: true })
+    .waitFor();
+  await nativePage.waitForFunction(
+    () => window.nativeCalls.at(-1).method === "disconnect",
+  );
+  await nativePage.close();
   await browser.close();
   console.log(
-    "PASS: mobile dashboard, camera gating, student summary, authenticated observation, AI source, empty activity, sign-out",
+    "PASS: mobile dashboard, camera gating, student summary, skill map, authenticated observation, AI source, empty activity, sign-out",
   );
 })().catch((e) => {
   console.error(e);

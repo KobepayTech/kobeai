@@ -1,6 +1,10 @@
 package tz.kobe.glasses
 
 import android.Manifest
+import android.content.Intent
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -35,6 +39,10 @@ import java.io.ByteArrayOutputStream
 class MainActivity : AppCompatActivity() {
     private lateinit var web: WebView
     private var hardware: Hardware? = null
+    private var hardwareProvider: String? = null
+    private var hardwareConnected = false
+    private var reconnectJob: Job? = null
+    private var visible = false
     private var permissionResult: CompletableDeferred<Boolean>? = null
     private var fileResult: CompletableDeferred<ByteArray>? = null
     private val gate = Mutex()
@@ -125,18 +133,29 @@ class MainActivity : AppCompatActivity() {
         val params = request.optJSONObject("params") ?: JSONObject()
         return when (request.getString("method")) {
             "info" -> JSONObject().put("version", 1).put("providers", JSONArray(ProviderFactory.providers))
+                .put("automaticRokid", RokidCredentials.automatic(this)).put("connected", hardwareConnected)
+                .put("provider", hardwareProvider ?: JSONObject.NULL)
             "connect" -> {
-                hardware?.disconnect(); hardware = null
-                val candidate = ProviderFactory.create(this, params.getString("provider"), lifecycleScope) { lost() }
+                val provider = params.getString("provider")
+                if (hardwareProvider == provider && hardwareConnected) return JSONObject().put("capabilities", requireHardware().capabilities())
+                check(visible) { "Open the app to start a connection" }
+                stopConnection()
+                val candidate = ProviderFactory.create(this, provider, lifecycleScope, params.optBoolean("automatic")) { lost() }
                 try {
-                    candidate.connect(); hardware = candidate
+                    candidate.connect(); hardware = candidate; hardwareProvider = provider; hardwareConnected = true
+                    if (provider == "rokid") {
+                        ConnectionService.onStopped = { lifecycleScope.launch { gate.withLock { stopConnection(); sendConnectionEvent("disconnected") } } }
+                        ContextCompat.startForegroundService(this, Intent(this, ConnectionService::class.java))
+                    }
                     JSONObject().put("capabilities", candidate.capabilities())
                 } catch (e: Exception) {
-                    withContext(NonCancellable) { candidate.disconnect() }
+                    withContext(NonCancellable) { candidate.disconnect(); stopConnection() }
                     throw e
                 }
             }
-            "disconnect" -> { hardware?.disconnect(); hardware = null; null }
+            "disconnect" -> { stopConnection(); null }
+            "pause" -> { RokidCredentials.enable(this, false); stopConnection(); null }
+            "forget" -> { stopConnection(); RokidCredentials.forget(this); null }
             "capture" -> {
                 val bytes = requireHardware().capture()
                 val jpeg = withContext(Dispatchers.Default) { normalizeJpeg(bytes) }
@@ -152,12 +171,46 @@ class MainActivity : AppCompatActivity() {
             else -> error("Unsupported operation")
         }
     }
-    private fun requireHardware(): Hardware = checkNotNull(hardware) { "Connect glasses first" }
-    private fun lost() {
-        if (!isDestroyed) runOnUiThread {
-            web.evaluateJavascript("window.KobeNative?.onmessage?.({data:JSON.stringify({event:'disconnected',reason:'Glasses disconnected'})})", null)
-        }
+    private fun requireHardware(): Hardware {
+        check(hardwareConnected) { "Glasses reconnecting" }
+        return checkNotNull(hardware)
     }
+    private suspend fun stopConnection() {
+        reconnectJob?.cancel(); reconnectJob = null
+        val old = hardware; hardware = null; hardwareProvider = null; hardwareConnected = false
+        ConnectionService.onStopped = null
+        stopService(Intent(this, ConnectionService::class.java))
+        old?.disconnect()
+    }
+    private fun sendConnectionEvent(event: String) {
+        if (!isDestroyed && ::web.isInitialized) web.evaluateJavascript(
+            "window.KobeNative?.onmessage?.({data:JSON.stringify({event:'$event',reason:'Glasses connection changed'})})", null)
+    }
+    private fun lost() { runOnUiThread {
+        hardwareConnected = false
+        sendConnectionEvent("disconnected")
+        if (hardwareProvider != "rokid" || reconnectJob?.isActive == true) return@runOnUiThread
+        reconnectJob = lifecycleScope.launch {
+            var waitMs = 3000L
+            while (isActive && hardwareProvider == "rokid" && RokidCredentials.automatic(this@MainActivity)) {
+                delay(waitMs)
+                val connected = gate.withLock {
+                    val candidate = hardware ?: return@withLock false
+                    try {
+                        withTimeout(30_000) { candidate.disconnect(); candidate.connect() }
+                        hardwareConnected = true; sendConnectionEvent("reconnected"); true
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        if (!isActive) throw e
+                        false
+                    } catch (_: Exception) { false }
+                }
+                if (connected) break
+                waitMs = minOf(waitMs * 2, 60_000L)
+            }
+        }
+    } }
+    override fun onStart() { super.onStart(); visible = true }
+    override fun onStop() { visible = false; super.onStop() }
     suspend fun ensurePermissions(required: Array<String>) = permissionGate.withLock {
         val missing = required.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
         if (missing.isNotEmpty()) {
@@ -174,6 +227,9 @@ class MainActivity : AppCompatActivity() {
         return pending.await()
     }
     override fun onDestroy() {
+        reconnectJob?.cancel(); reconnectJob = null
+        ConnectionService.onStopped = null
+        stopService(Intent(this, ConnectionService::class.java))
         val old = hardware; hardware = null
         // Complete cleanup independently of the cancelled Activity lifecycle.
         kotlinx.coroutines.CoroutineScope(Dispatchers.Main).launch { old?.disconnect() }

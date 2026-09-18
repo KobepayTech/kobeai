@@ -62,7 +62,7 @@ Gradle wrapper is from xg.glass commit `c697e7faadde27762c9aa3954f6ed7e65961c28f
    the glasses firmware. Android backup is disabled for this app.
 4. Choose the glasses type and tap **Connect**. Grant the requested permissions.
    - Rokid: enter the developer client secret and select the device-SN `.lc`
-     licence downloaded from the Rokid developer console. Both remain in memory.
+     licence downloaded from the Rokid developer console. After successful pairing, both are encrypted on this phone using Android Keystore.
    - HeyCyan: choose the device from the native BLE scan. Disconnect the HeyCyan
      app first if it holds the connection. Pair its audio output in Android's
      Bluetooth settings to hear phone speech through the glasses.
@@ -105,3 +105,33 @@ The bridge is only exposed to the bundled asset origin's main frame. It does not
 open a LAN port or attach native APIs to a remotely hosted page. Device actions
 are bounded, serialized, and return errors; images are resized to at most 1600px
 before crossing into JavaScript.
+
+## Automatic connections
+
+After first provisioning, Rokid reconnects at sign-in without prompting again.
+Only successful provisioning is saved, encrypted with an Android Keystore AES-GCM
+key. Forget pairing removes the stored credentials. Choosing Phone camera pauses
+automatic reconnection; explicitly connecting Rokid enables it again.
+
+A connected-device foreground service keeps the current SDK session eligible
+while the app is minimised. Android shows an ongoing connection notification with
+a Pause action. Dropped Rokid connections retry at 3, 6, 12, 24, 48 then 60-second
+intervals, with a 30-second attempt timeout. Photos and microphone recording are
+not started in the background. Signing out cancels retries and disconnects.
+
+The upstream Rokid client requires an Activity. Activity destruction, task
+removal, force-stop or process death ends this session; reopening the app resumes
+from encrypted provisioning. This is not a boot-time/headless persistent service.
+Battery restrictions, range and revoked Bluetooth permissions still affect it.
+
+The school URL and teacher session are reused. Authenticated server checks run
+quietly while the interface is visible, with bounded retries and recovery on
+network return/resume. These HTTPS requests do not need a permanent socket.
+Expired/revoked teacher authorization requires sign-in; it is not retried forever.
+The native Bluetooth service does not keep WebView polling or server AI processing
+running after the UI has been destroyed.
+
+Validation: browser protocol fixtures exercise automatic connection without a
+button, pause (no further auto-connect), forgetting provisioning and sign-out.
+Hardware checks must cover minimising, Bluetooth loss/return, notification Pause,
+permission revocation, process death and reopening before production rollout.

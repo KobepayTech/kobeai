@@ -28,6 +28,8 @@ function native(): NativeTransport | null {
         };
         if (message.event === "disconnected")
           active?.connectionLost(message.reason ?? "Connection lost");
+        else if (message.event === "reconnected")
+          window.dispatchEvent(new Event("kobe-native-reconnected"));
         else transport?.receive(message);
       } catch {
         /* malformed native message is ignored */
@@ -83,69 +85,162 @@ export function GlassesControl({
   const [status, setStatus] = useState("Phone camera");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const connecting = useRef(false);
+  const nextAttempt = useRef(0);
+  const backoff = useRef(3000);
+  const knownDevices = useRef(devices);
+  async function runConnect(provider: string, automatic = false) {
+    const bridge = native();
+    if (!bridge || connecting.current) return;
+    connecting.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      if (!provider) {
+        await bridge.request("pause");
+        active = null;
+        onSource(null);
+        setStatus("Phone camera · automatic glasses connection paused");
+        return;
+      }
+      const device = knownDevices.current.find((d) => d.id === provider);
+      if (!device) throw new Error("Choose a glasses model");
+      if (!automatic) await bridge.request("disconnect");
+      const glasses = await new NativeAdapter(bridge).open(device);
+      active = glasses;
+      onSource(device.model, false);
+      setStatus("Connecting in the background…");
+      await glasses.connect({ automatic });
+      if (!mounted.current) return;
+      active = glasses;
+      glasses.on("disconnected", () => {
+        if (!mounted.current || active !== glasses) return;
+        setStatus(
+          provider === "rokid"
+            ? "Rokid reconnecting automatically…"
+            : "Glasses disconnected",
+        );
+        onSource(device.model, false);
+      });
+      setSelected(provider);
+      onSource(device.model, true);
+      setStatus(
+        `${device.model} connected${provider === "rokid" ? " · reconnects automatically" : ""}`,
+      );
+      backoff.current = 3000;
+      nextAttempt.current = 0;
+    } catch (e) {
+      if (!mounted.current) return;
+      setStatus(
+        automatic
+          ? "Waiting for Rokid · retrying automatically"
+          : "Connection needs attention",
+      );
+      if (!automatic) setError(String(e));
+      nextAttempt.current = Date.now() + backoff.current;
+      backoff.current = Math.min(backoff.current * 2, 60_000);
+    } finally {
+      connecting.current = false;
+      if (mounted.current) setBusy(false);
+    }
+  }
   useEffect(() => {
     mounted.current = true;
     const bridge = native();
-    if (bridge)
-      void new NativeAdapter(bridge)
-        .discover()
-        .then((found) => {
-          if (!mounted.current) return;
-          setDevices(found);
-          setSelected(found.find((d) => d.id === "rokid")?.id ?? "");
-        })
-        .catch((e) => setError(String(e)));
+    if (!bridge) return;
+    let checking = false;
+    async function sync() {
+      if (
+        !mounted.current ||
+        document.visibilityState === "hidden" ||
+        connecting.current ||
+        checking
+      )
+        return;
+      checking = true;
+      try {
+        const info = await bridge!.request<{
+          automaticRokid?: boolean;
+          connected?: boolean;
+          provider?: string;
+        }>("info");
+        if (!mounted.current) return;
+        if (!info.connected && active?.state === "connected")
+          active.connectionLost("Connection interrupted");
+        if (
+          info.connected &&
+          info.provider === "rokid" &&
+          active?.state !== "connected"
+        ) {
+          await runConnect("rokid", true);
+        } else if (
+          info.automaticRokid &&
+          !info.provider &&
+          Date.now() >= nextAttempt.current
+        ) {
+          await runConnect("rokid", true);
+        }
+      } catch {
+        /* bounded request; next status check retries */
+      } finally {
+        checking = false;
+      }
+    }
+    void new NativeAdapter(bridge)
+      .discover()
+      .then((found) => {
+        if (!mounted.current) return;
+        knownDevices.current = found;
+        setDevices(found);
+        setSelected(found.find((d) => d.id === "rokid")?.id ?? "");
+        void sync();
+      })
+      .catch((e) => {
+        if (mounted.current) setError(String(e));
+      });
+    const timer = window.setInterval(() => void sync(), 3000);
+    const resume = () => {
+      nextAttempt.current = 0;
+      void sync();
+    };
+    document.addEventListener("visibilitychange", resume);
+    window.addEventListener("kobe-native-reconnected", resume);
     return () => {
       mounted.current = false;
       active = null;
-      // Queue cleanup even when the native pairing dialog has not completed.
-      // The host serializes this before a newly mounted session can connect.
-      void bridge?.request("disconnect").catch(() => undefined);
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", resume);
+      window.removeEventListener("kobe-native-reconnected", resume);
+      void bridge.request("disconnect").catch(() => undefined);
     };
   }, []);
   if (!window.KobeNative)
     return (
       <div className="glasses-hint">
-        To connect Rokid, open this school account in the KobeAI Lens Android
-        app. Phone camera works here.
+        Rokid reconnects automatically in the Android app after its first setup.
+        Phone camera works here.
       </div>
     );
-  const connect = async () => {
-    const bridge = native();
-    if (!bridge) return;
+  const connect = () => runConnect(selected);
+  const forget = async () => {
+    if (connecting.current) return;
+    connecting.current = true;
     setBusy(true);
-    setError("");
     try {
-      await active?.disconnect();
+      await native()?.request("forget");
       active = null;
       onSource(null);
-      if (!selected) {
-        setStatus("Phone camera");
-        return;
-      }
-      const device = devices.find((d) => d.id === selected);
-      if (!device) throw new Error("Choose a glasses model");
-      const glasses = await new NativeAdapter(bridge).open(device);
-      await glasses.connect();
-      if (!mounted.current) return;
-      active = glasses;
-      glasses.on("disconnected", () => {
-        setStatus(`${device.model}: disconnected — reconnect or choose phone`);
-        onSource(device.model, false);
-      });
-      onSource(device.model, true);
-      setStatus(
-        `${device.model} connected${selected === "heycyan" ? " · preview photos; check paper text is legible" : ""}`,
-      );
-    } catch (e) {
-      setError(String(e));
-      setStatus("Phone camera");
+      setStatus("Pairing removed. Connect Rokid to set up again.");
+      setError("");
+    } catch {
+      setError("Could not remove pairing. Try again.");
     } finally {
-      setBusy(false);
+      connecting.current = false;
+      if (mounted.current) setBusy(false);
     }
   };
   return (
-    <section className="glasses-control" aria-label="Glasses connection">
+    <section aria-label="Glasses connection" className="glasses-control">
       <div className="glasses-row">
         <select
           aria-label="Camera source"
@@ -166,12 +261,23 @@ export function GlassesControl({
           onClick={() => void connect()}
           disabled={busy}
         >
-          {busy ? "Connecting…" : "Connect"}
+          {busy
+            ? "Connecting…"
+            : selected === "rokid"
+              ? "Connect Rokid"
+              : "Connect"}
         </button>
       </div>
       <div role="status" className="glasses-status">
         {status}
       </div>
+      <button
+        className="mark-ghost"
+        disabled={busy}
+        onClick={() => void forget()}
+      >
+        Forget pairing
+      </button>
       {error && (
         <div role="alert" className="mark-error">
           {error}
