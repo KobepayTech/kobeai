@@ -166,7 +166,7 @@ export function GlassesControl({
           onClick={() => void connect()}
           disabled={busy}
         >
-          {busy ? "Connecting…" : "Connect"}
+          {busy ? "Connecting…" : selected === "rokid" ? "Connect Rokid" : "Connect"}
         </button>
       </div>
       <div role="status" style={{ fontSize: 12, paddingTop: 6 }}>

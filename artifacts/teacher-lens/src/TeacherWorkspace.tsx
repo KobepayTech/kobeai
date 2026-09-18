@@ -113,6 +113,7 @@ export function TeacherWorkspace({
   onCapture,
   onClose,
   onSpeak,
+  onConnections,
 }: {
   auth: TeacherAuth;
   connected: boolean;
@@ -121,6 +122,7 @@ export function TeacherWorkspace({
   onCapture: (mode: "lookup" | "mark") => void;
   onClose: () => void;
   onSpeak: (text: string) => void;
+  onConnections: () => void;
 }) {
   const [tab, setTab] = useState("Today");
   const workspaceRef = useRef<HTMLElement | null>(null);
@@ -257,7 +259,11 @@ export function TeacherWorkspace({
           <span>Open Lens</span>
         </button>
       </header>
-      <div className="teacher-device">
+      <button
+        className="teacher-device"
+        onClick={onConnections}
+        aria-label="Connections: school server and Rokid glasses"
+      >
         <span className="teacher-device-icon">
           <ToolIcon name="glasses" />
         </span>
@@ -271,7 +277,8 @@ export function TeacherWorkspace({
               : "Connect for hands-free teaching"}
           </small>
         </div>
-      </div>
+        <span className="connection-link">Set up ↗</span>
+      </button>
       <nav className="teacher-nav" aria-label="Teacher tools">
         {["Today", "Students", "Ask Kobe", "Activity"].map((t) => (
           <button

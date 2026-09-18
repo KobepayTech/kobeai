@@ -503,3 +503,51 @@
     transition: none;
   }
 }
+.teacher-workspace button.teacher-device {
+  width: 100%;
+  text-align: left;
+  background: white;
+  color: #192d35;
+  padding: 14px 16px;
+  border: 1px solid #e7ecee;
+  font-weight: 600;
+}
+.connection-link {
+  margin-left: auto;
+  font-size: 10px;
+  color: #087e80;
+  white-space: nowrap;
+}
+.teacher-connections {
+  z-index: 40;
+  padding-bottom: 35px;
+}
+.connection-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.teacher-connections .teacher-heading {
+  align-items: flex-start;
+}
+.teacher-connections li {
+  padding: 5px 0;
+}
+.teacher-connections code {
+  overflow-wrap: anywhere;
+}
+.connection-controls .lens-secondary {
+  background: #087e80;
+  color: white;
+}
+.connection-controls .mark-input {
+  background: white;
+  color: #192d35;
+  border: 1px solid #dde6ea;
+}
+.connection-controls .mark-error {
+  color: #a9374b;
+}
+.teacher-connections .teacher-heading h1 {
+  font-size: 23px;
+}

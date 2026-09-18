@@ -91,6 +91,20 @@ const assert = require("node:assert/strict");
     0,
     "Workspace should not start phone camera",
   );
+  await page
+    .getByRole("button", {
+      name: "Connections: school server and Rokid glasses",
+    })
+    .click();
+  assert.equal(
+    await page
+      .getByLabel("Current server address", { exact: true })
+      .inputValue(),
+    "http://127.0.0.1:5178",
+  );
+  await page.getByRole("button", { name: "Check server connection" }).click();
+  await page.getByText(/Connected. Your school API accepted/).waitFor();
+  await page.getByRole("button", { name: "Done", exact: true }).click();
   await page.getByRole("button", { name: "Students", exact: true }).click();
   await page.getByLabel("Search students").fill("Neema");
   await page.getByRole("button", { name: "Search", exact: true }).click();
@@ -116,12 +130,20 @@ const assert = require("node:assert/strict");
   await page.getByText("Source: ollama · qwen").waitFor();
   await page.getByRole("button", { name: "Activity", exact: true }).click();
   await page.getByText(/No captures sent yet/).waitFor();
-  await page.getByRole("button", { name: "Open Lens", exact: true }).click();
-  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await page
+    .getByRole("button", {
+      name: "Connections: school server and Rokid glasses",
+    })
+    .click();
+  await page.getByRole("button", { name: "Change server / sign in" }).click();
   await page.getByRole("button", { name: "Sign in", exact: true }).waitFor();
   assert.equal(
     await page.evaluate(() => localStorage.getItem("k9-lens.auth")),
     null,
+  );
+  assert.equal(
+    await page.getByLabel("School server URL").inputValue(),
+    "http://127.0.0.1:5178",
   );
   assert.deepEqual(errors, []);
   await browser.close();

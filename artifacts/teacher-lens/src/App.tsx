@@ -1,3 +1,4 @@
+import { Connections } from "./Connections";
 import { TeacherWorkspace, type CaptureActivity } from "./TeacherWorkspace";
 import { useCamera } from "./camera";
 import { captureGlasses, GlassesControl, speakThroughGlasses } from "./glasses";
@@ -95,8 +96,8 @@ function speak(text: string): void {
 // ---------------------------------------------------------------------------
 // Setup screen — one-time login. Uses the existing /v1/auth/teacher/login.
 // ---------------------------------------------------------------------------
-function Setup({ onReady }: { onReady: (a: StoredAuth) => void }) {
-  const [apiBase, setApiBase] = useState(DEFAULT_API_BASE);
+function Setup({ onReady, initialServer }: { onReady: (a: StoredAuth) => void; initialServer: string }) {
+  const [apiBase, setApiBase] = useState(initialServer || DEFAULT_API_BASE);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -107,6 +108,9 @@ function Setup({ onReady }: { onReady: (a: StoredAuth) => void }) {
     setBusy(true);
     try {
       const base = apiBase.replace(/\/$/, "") || window.location.origin;
+      const parsed = new URL(base);
+      if (!["https:", "http:"].includes(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash) throw new Error("Enter a valid school server address without credentials, query or fragment.");
+      if (window.KobeNative && parsed.protocol !== "https:") throw new Error("The Android app requires your school server’s HTTPS address.");
       const res = await fetch(`${base}/api/v1/auth/teacher/login`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -134,15 +138,14 @@ function Setup({ onReady }: { onReady: (a: StoredAuth) => void }) {
         <span style={{ color: "var(--brand-green)" }}>KobeAI</span> Lens
       </h1>
       <p style={{ color: "var(--brand-muted)", marginTop: -6, marginBottom: 20 }}>
-        The teacher-worn phone / glasses client. Sign in once — the phone stays
-        paired to the school after that.
+        Step 1: connect to your school server. Join the school Wi-Fi and enter the HTTPS address supplied by your administrator. Sign in with your school teacher account, then connect Rokid from Connections.
       </p>
-      <label>School server URL</label>
-      <input value={apiBase} onChange={(e) => setApiBase(e.target.value)} placeholder="https://school.local" />
-      <label>Email</label>
-      <input value={email} onChange={(e) => setEmail(e.target.value)} />
-      <label>Password</label>
-      <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" />
+      <label htmlFor="school-server">School server URL</label>
+      <input id="school-server" value={apiBase} onChange={(e) => setApiBase(e.target.value)} placeholder="https://school.local" />
+      <label htmlFor="teacher-email">Email</label>
+      <input id="teacher-email" value={email} onChange={(e) => setEmail(e.target.value)} />
+      <label htmlFor="teacher-password">Password</label>
+      <input id="teacher-password" value={password} onChange={(e) => setPassword(e.target.value)} type="password" />
       <button className="setup-btn" onClick={login} disabled={busy}>
         {busy ? "Signing in…" : "Sign in"}
       </button>
@@ -831,6 +834,8 @@ export function App() {
   const [auth, setAuth] = useState<StoredAuth | null>(() => loadAuth());
   const authRef = useRef(auth);
   authRef.current = auth;
+  const [connectionsOpen, setConnectionsOpen] = useState(false);
+  const [initialServer, setInitialServer] = useState("");
   const [workspaceOpen, setWorkspaceOpen] = useState(true);
   const [captures, setCaptures] = useState<CaptureActivity[]>([]);
   const [glassesConnected, setGlassesConnected] = useState(false);
@@ -855,7 +860,7 @@ export function App() {
   useEffect(() => {
     if (!studentPicker) pickerRequest.current = null;
   }, [studentPicker]);
-  const { videoRef, ready: camReady, err: camErr, captureFrame, captureBlob } = useCamera(!!auth && !glassesSource && !workspaceOpen);
+  const { videoRef, ready: camReady, err: camErr, captureFrame, captureBlob } = useCamera(!!auth && !glassesSource && !workspaceOpen && !connectionsOpen);
 
   // Start a session as soon as we have auth.
   useEffect(() => {
@@ -1052,7 +1057,7 @@ export function App() {
 
   // Wake-word toggle — when on, saying "Kobe" fires the shutter.
   useWakeWord({
-    enabled: wakeWordOn && !workspaceOpen && !!auth,
+    enabled: wakeWordOn && !workspaceOpen && !connectionsOpen && !!auth,
     onFire: () => {
       if (mode === "lookup" && !studentPicker && !lookupBrief) onShutter();
       // Deliberately no auto-shutter in mark mode: the teacher usually
@@ -1067,8 +1072,23 @@ export function App() {
 
   const uptimeLabel = useMemo(() => `Session ${sessionId ?? "starting…"}`, [sessionId]);
 
+  const signOut = () => {
+            if (auth && sessionId != null) void fetch(`${auth.api_base}/api/v1/teacher-lens/session/${sessionId}/end`, {
+              method: "POST", headers: { authorization: `Bearer ${auth.token}`, "content-type": "application/json" }, body: "{}", keepalive: true,
+            }).catch(() => undefined);
+            pickerRequest.current = null;
+            setSessionId(null); setStudentPicker(null); setLookupBrief(null); setMarkOpen(null);
+            authRef.current = null;
+            setGlassesSource(null);
+            setGlassesConnected(false);
+            setCaptures([]); setWorkspaceOpen(true); setWakeWordOn(false);
+            clearAuth();
+            setAuth(null);
+            setConnectionsOpen(false);
+  };
+
   if (!auth) {
-    return <Setup onReady={setAuth} />;
+    return <Setup onReady={setAuth} initialServer={initialServer} />;
   }
 
   return (
@@ -1086,26 +1106,16 @@ export function App() {
         <button
           className="lens-secondary"
           style={{ padding: "8px 12px", fontSize: 12 }}
-          onClick={() => {
-            if (sessionId != null) void fetch(`${auth.api_base}/api/v1/teacher-lens/session/${sessionId}/end`, {
-              method: "POST", headers: { authorization: `Bearer ${auth.token}`, "content-type": "application/json" }, body: "{}", keepalive: true,
-            }).catch(() => undefined);
-            pickerRequest.current = null;
-            setSessionId(null); setStudentPicker(null); setLookupBrief(null); setMarkOpen(null);
-            authRef.current = null;
-            setGlassesSource(null);
-            setGlassesConnected(false);
-            setCaptures([]); setWorkspaceOpen(true); setWakeWordOn(false);
-            clearAuth();
-            setAuth(null);
-          }}
+          onClick={signOut}
         >
           Sign out
         </button>
       </header>
 
       <button className="lens-secondary" onClick={() => setWorkspaceOpen(true)}>Teacher workspace</button>
-      <GlassesControl onSource={selectGlassesSource} />
+      <Connections auth={auth} open={connectionsOpen} onClose={() => setConnectionsOpen(false)} onChangeServer={() => { setInitialServer(auth.api_base); signOut(); }}>
+        <GlassesControl onSource={selectGlassesSource} />
+      </Connections>
       <div className="lens-viewport">
         <video ref={videoRef} playsInline muted />
         {glassesSource && <div className="frame-cover">Camera: {glassesSource}. Tap the shutter to capture.</div>}
@@ -1161,7 +1171,7 @@ export function App() {
       </div>
 
       {workspaceOpen && <TeacherWorkspace auth={auth} connected={glassesConnected} source={glassesSource} captures={captures}
-        onClose={() => setWorkspaceOpen(false)} onCapture={next => { setMode(next); setWorkspaceOpen(false); }} onSpeak={speak} />}
+        onConnections={() => setConnectionsOpen(true)} onClose={() => setWorkspaceOpen(false)} onCapture={next => { setMode(next); setWorkspaceOpen(false); }} onSpeak={speak} />}
       {toast && <div className="lens-toast">{toast}</div>}
 
       {studentPicker && (
