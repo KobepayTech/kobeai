@@ -913,17 +913,23 @@ export function App() {
   // Start a session as soon as we have auth.
   useEffect(() => {
     if (!auth || sessionId != null) return;
+    let cancelled = false;
     (async () => {
       try {
         const r = await apiPost<{ session: { id: number } }>(auth, "/v1/teacher-lens/session", {
           mode,
           device: navigator.userAgent,
         });
+        if (cancelled || authRef.current !== auth) {
+          await apiPost(auth, `/v1/teacher-lens/session/${r.session.id}/end`, {});
+          return;
+        }
         setSessionId(r.session.id);
       } catch {
         setToast("Couldn't start lens session — check the server URL.");
       }
     })();
+    return () => { cancelled = true; };
   }, [auth, mode, sessionId]);
 
   useWhisperPoll(auth ?? ({ api_base: "", token: "", teacher_name: "" } as StoredAuth), sessionId);

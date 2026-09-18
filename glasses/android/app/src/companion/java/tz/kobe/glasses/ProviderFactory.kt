@@ -19,7 +19,7 @@ object ProviderFactory {
     val providers = listOf("rokid", "heycyan")
     suspend fun create(activity: MainActivity, provider: String, scope: CoroutineScope, onLost: () -> Unit): Hardware {
         require(provider in providers)
-        val permissions = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION)
+        val permissions = mutableListOf(Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION)
         if (Build.VERSION.SDK_INT >= 31) permissions += listOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
         if (Build.VERSION.SDK_INT >= 33) permissions += Manifest.permission.NEARBY_WIFI_DEVICES
         activity.ensurePermissions(permissions.toTypedArray())

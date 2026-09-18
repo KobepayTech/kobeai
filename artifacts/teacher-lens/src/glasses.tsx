@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   NativeAdapter,
   NativeTransport,
@@ -75,6 +75,7 @@ export function GlassesControl({
 }: {
   onSource: (source: string | null, connected?: boolean) => void;
 }) {
+  const mounted = useRef(true);
   const [devices, setDevices] = useState<
     Array<{ id: string; model: string; vendor: string }>
   >([]);
@@ -83,6 +84,7 @@ export function GlassesControl({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   useEffect(() => {
+    mounted.current = true;
     const bridge = native();
     if (bridge)
       void new NativeAdapter(bridge)
@@ -90,9 +92,11 @@ export function GlassesControl({
         .then(setDevices)
         .catch((e) => setError(String(e)));
     return () => {
-      const old = active;
+      mounted.current = false;
       active = null;
-      void old?.disconnect().catch(() => undefined);
+      // Queue cleanup even when the native pairing dialog has not completed.
+      // The host serializes this before a newly mounted session can connect.
+      void bridge?.request("disconnect").catch(() => undefined);
     };
   }, []);
   if (!window.KobeNative)
@@ -118,6 +122,7 @@ export function GlassesControl({
       if (!device) throw new Error("Choose a glasses model");
       const glasses = await new NativeAdapter(bridge).open(device);
       await glasses.connect();
+      if (!mounted.current) return;
       active = glasses;
       glasses.on("disconnected", () => {
         setStatus(`${device.model}: disconnected — reconnect or choose phone`);
