@@ -1,0 +1,42 @@
+name: Glasses Android
+on:
+  pull_request:
+    paths:
+      - 'glasses/**'
+      - 'artifacts/teacher-lens/**'
+      - '.github/workflows/glasses-android.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install Lens and SDK test dependencies
+        run: pnpm --filter @workspace/glasses --filter @workspace/teacher-lens --filter @workspace/scripts install --frozen-lockfile
+      - name: Test bridge and build bundled Lens
+        run: |
+          pnpm --filter @workspace/glasses test
+          pnpm --filter @workspace/glasses typecheck
+          pnpm --filter @workspace/teacher-lens typecheck
+          pnpm --filter @workspace/teacher-lens build
+      - name: Fetch pinned HeyCyan SDK for compilation only
+        run: python3 glasses/scripts/fetch_heycyan.py
+      - name: Compile both native hardware variants
+        working-directory: glasses/android
+        run: ./gradlew :app:assembleCompanionDebug :app:assembleRayneoDebug --stacktrace
+      # Do not distribute an APK containing the proprietary SDK automatically.

@@ -1,3 +1,4 @@
+import { captureGlasses, GlassesControl, speakThroughGlasses } from "./glasses";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 // ---------------------------------------------------------------------------
@@ -79,6 +80,7 @@ async function apiGet<T>(auth: StoredAuth, path: string): Promise<T | null> {
 // practice). Falls back gracefully on browsers without support.
 // ---------------------------------------------------------------------------
 function speak(text: string): void {
+  if (speakThroughGlasses(text)) return;
   if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
   const u = new SpeechSynthesisUtterance(text);
   u.rate = 1.05;
@@ -153,11 +155,15 @@ function Setup({ onReady }: { onReady: (a: StoredAuth) => void }) {
 // (server accepts the structured event without it) but ready for a future
 // wire-up to /v1/teacher-lens/frame.
 // ---------------------------------------------------------------------------
-function useCamera() {
+function useCamera(enabled: boolean) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [ready, setReady] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => {
+    setReady(false);
+    setErr(null);
+    if (!enabled) return;
+    let cancelled = false;
     let stream: MediaStream | null = null;
     (async () => {
       try {
@@ -165,6 +171,7 @@ function useCamera() {
           audio: false,
           video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 } },
         });
+        if (cancelled) { stream.getTracks().forEach((t) => t.stop()); return; }
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
           await videoRef.current.play();
@@ -174,8 +181,8 @@ function useCamera() {
         setErr(e instanceof Error ? e.message : String(e));
       }
     })();
-    return () => stream?.getTracks().forEach((t) => t.stop());
-  }, []);
+    return () => { cancelled = true; stream?.getTracks().forEach((t) => t.stop()); };
+  }, [enabled]);
   const captureFrame = useCallback((): string | null => {
     const v = videoRef.current;
     if (!v || v.videoWidth === 0) return null;
@@ -877,6 +884,11 @@ function MarkPanel({
 // ---------------------------------------------------------------------------
 export function App() {
   const [auth, setAuth] = useState<StoredAuth | null>(() => loadAuth());
+  const authRef = useRef(auth);
+  authRef.current = auth;
+  const [glassesConnected, setGlassesConnected] = useState(false);
+  const [glassesSource, setGlassesSource] = useState<string | null>(null);
+  const shutterBusy = useRef(false);
   const [mode, setMode] = useState<Mode>("lookup");
   const [sessionId, setSessionId] = useState<number | null>(null);
   const [lookupBrief, setLookupBrief] = useState<StudentBrief | null>(null);
@@ -896,7 +908,7 @@ export function App() {
   useEffect(() => {
     if (!studentPicker) pickerRequest.current = null;
   }, [studentPicker]);
-  const { videoRef, ready: camReady, err: camErr, captureFrame, captureBlob } = useCamera();
+  const { videoRef, ready: camReady, err: camErr, captureFrame, captureBlob } = useCamera(!!auth && !glassesSource);
 
   // Start a session as soon as we have auth.
   useEffect(() => {
@@ -929,6 +941,12 @@ export function App() {
     window.addEventListener("pagehide", handler);
     return () => window.removeEventListener("pagehide", handler);
   }, [auth, sessionId]);
+
+  useEffect(() => {
+    const handler = (event: Event) => setToast((event as CustomEvent<string>).detail);
+    window.addEventListener("kobe-glasses-error", handler);
+    return () => window.removeEventListener("kobe-glasses-error", handler);
+  }, []);
 
   // Toast auto-dismiss.
   useEffect(() => {
@@ -968,7 +986,8 @@ export function App() {
   // the teacher still picks the student or types the marks.
   const uploadFrame = useCallback(async (): Promise<LensUpload | null> => {
     if (!auth) return null;
-    const blob = await captureBlob(mode === "mark" ? 1600 : 1280);
+    const blob = await captureGlasses() ?? await captureBlob(mode === "mark" ? 1600 : 1280);
+    if (authRef.current !== auth) throw new Error("Session ended — sign in again");
     if (!blob) return null;
     const examId = mode === "mark" ? storedExamId() : null;
     try {
@@ -1051,27 +1070,31 @@ export function App() {
   );
 
   const onShutter = useCallback(async () => {
-    if (!auth) return;
-    // Priming the SpeechSynthesis on the first user gesture is critical
-    // on iOS/Android — later background whispers only fire if we've spoken
-    // at least once from a direct tap.
-    speak(mode === "lookup" ? "Looking up." : "Reading the paper.");
-    captureFrame(); // for local UX polish; the upload path uses captureBlob
+    if (!auth || shutterBusy.current) return;
+    shutterBusy.current = true;
+    try {
+      // Priming the SpeechSynthesis on the first user gesture is critical
+      // on iOS/Android — later background whispers only fire if we've spoken
+      // at least once from a direct tap.
+      speak(mode === "lookup" ? "Looking up." : "Reading the paper.");
+      if (!glassesSource) captureFrame();
 
-    if (mode === "lookup") {
-      // The picker opens straight away; a recognised face replaces it.
-      const upload = uploadFrame();
-      const recent = await fetchRecentStudents();
-      const uploaded = await upload;
-      const requestId = uploaded?.request_id ?? null;
-      pickerRequest.current = requestId;
-      setStudentPicker({ students: recent, imageKey: uploaded?.image_key ?? null, requestId, recognising: requestId !== null, hint: null });
-      if (requestId !== null) watchLookup(requestId);
-    } else {
-      const uploaded = await uploadFrame();
-      setMarkOpen({ requestId: uploaded?.request_id ?? null, imageKey: uploaded?.image_key ?? null });
-    }
-  }, [auth, mode, captureFrame, uploadFrame, fetchRecentStudents, watchLookup]);
+      if (mode === "lookup") {
+        // The picker opens straight away; a recognised face replaces it.
+        const [uploaded, recent] = await Promise.all([uploadFrame(), fetchRecentStudents()]);
+        if (authRef.current !== auth) return;
+        const requestId = uploaded?.request_id ?? null;
+        pickerRequest.current = requestId;
+        setStudentPicker({ students: recent, imageKey: uploaded?.image_key ?? null, requestId, recognising: requestId !== null, hint: null });
+        if (requestId !== null) watchLookup(requestId);
+      } else {
+        const uploaded = await uploadFrame();
+        if (authRef.current !== auth) return;
+        setMarkOpen({ requestId: uploaded?.request_id ?? null, imageKey: uploaded?.image_key ?? null });
+      }
+    } catch (error) { setToast(errorDetail(error)); }
+    finally { shutterBusy.current = false; }
+  }, [auth, mode, glassesSource, captureFrame, uploadFrame, fetchRecentStudents, watchLookup]);
 
   // Wake-word toggle — when on, saying "Kobe" fires the shutter.
   useWakeWord({
@@ -1083,6 +1106,10 @@ export function App() {
       // shouldn't open the mark sheet mid-conversation.
     },
   });
+
+  const selectGlassesSource = useCallback((source: string | null, connected = false) => {
+    setGlassesSource(source); setGlassesConnected(connected);
+  }, []);
 
   const uptimeLabel = useMemo(() => `Session ${sessionId ?? "starting…"}`, [sessionId]);
 
@@ -1098,7 +1125,7 @@ export function App() {
             <span className="k">Kobe</span>AI Lens
           </div>
           <div className="lens-mode">
-            <span className={"lens-status-dot " + (camReady ? "ok" : "bad")} />
+            <span className={"lens-status-dot " + ((camReady || glassesConnected) ? "ok" : "bad")} />
             {mode === "lookup" ? "Lookup" : "Mark paper"} · {uptimeLabel}
           </div>
         </div>
@@ -1106,6 +1133,14 @@ export function App() {
           className="lens-secondary"
           style={{ padding: "8px 12px", fontSize: 12 }}
           onClick={() => {
+            if (sessionId != null) void fetch(`${auth.api_base}/api/v1/teacher-lens/session/${sessionId}/end`, {
+              method: "POST", headers: { authorization: `Bearer ${auth.token}`, "content-type": "application/json" }, body: "{}", keepalive: true,
+            }).catch(() => undefined);
+            pickerRequest.current = null;
+            setSessionId(null); setStudentPicker(null); setLookupBrief(null); setMarkOpen(null);
+            authRef.current = null;
+            setGlassesSource(null);
+            setGlassesConnected(false);
             clearAuth();
             setAuth(null);
           }}
@@ -1114,12 +1149,14 @@ export function App() {
         </button>
       </header>
 
+      <GlassesControl onSource={selectGlassesSource} />
       <div className="lens-viewport">
         <video ref={videoRef} playsInline muted />
-        {!camReady && !camErr && (
+        {glassesSource && <div className="frame-cover">Camera: {glassesSource}. Tap the shutter to capture.</div>}
+        {!glassesSource && !camReady && !camErr && (
           <div className="frame-cover">Requesting camera access…</div>
         )}
-        {camErr && (
+        {!glassesSource && camErr && (
           <div className="frame-cover">
             Camera unavailable: {camErr}. Lens still works — the shutter runs the
             same server call, just without a captured frame.

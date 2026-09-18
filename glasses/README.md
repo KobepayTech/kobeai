@@ -24,6 +24,8 @@ Lens, classroom PC + TV, admin PC, parent phone, cameras, optional AR glasses).
 | `src/adapters/simulator/` | Software glasses that record what was shown and spoken — what the tests and laptop development run against |
 | `src/adapters/brilliant/` | Brilliant Labs Frame / Halo over WebBluetooth, including the Lua the Frame runs |
 | `src/adapters/mentra/` | MentraOS devices (Mentra Live, Even Realities, Vuzix Z100, NIMO) |
+| `src/adapters/native/` | Android WebMessage adapter for Rokid, HeyCyan and RayNeo, used by Teacher Lens |
+| `android/` | Native SDK bindings and bundled Teacher Lens app; [build and pairing guide](android/README.md) |
 | `src/k9/` | `K9Api` (the school server's existing lens endpoints) and `K9GlassesController` (lookup, marking, assistant, translate, safety) |
 | `tests/` | `node --test` over the simulator and both adapters, no hardware needed |
 
@@ -74,13 +76,15 @@ These are the facts the adapters are written against, not assumptions:
   (Apache-2.0) covers Rokid, Meta, Frame, RayNeo, INMO Air3, Omi, Even G1 and a
   simulator, but ships **Kotlin, Swift and a Python CLI — no JavaScript or
   TypeScript binding**. It therefore cannot be a TypeScript adapter here. It
-  belongs on the native side of the mobile shell (or behind a small local
-  bridge) and would appear to K9 as one more `GlassesAdapter` implemented in
-  `mobile/`. Nothing in `src/` pretends otherwise.
+  is now used on the native side of `android/`. `NativeAdapter` in TypeScript
+  calls the origin-restricted Android WebMessage bridge; it does not call Kotlin
+  methods directly. Rokid/HeyCyan use the phone build, while the RayNeo build
+  runs on the glasses. See the Android guide for licences and hardware gates.
 
 ## Local-first
 
-Glasses never need a vendor cloud for K9 to work:
+K9 inference stays on the school server. Vendor setup requirements still apply
+(for example Rokid developer authorization):
 
 ```text
 glasses  --bluetooth-->  teacher phone / K9 hub  --wifi-->  school K9 server  -->  local models
