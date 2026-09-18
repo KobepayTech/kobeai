@@ -91,7 +91,7 @@ const assert = require("node:assert/strict");
     0,
     "Workspace should not start phone camera",
   );
-  await page.getByRole("button", { name: "Students", exact: true }).click();
+  await page.getByRole("tab", { name: "Students", exact: true }).click();
   await page.getByLabel("Search students").fill("Neema");
   await page.getByRole("button", { name: "Search", exact: true }).click();
   await page.getByRole("button", { name: /Neema/ }).click();
@@ -104,18 +104,30 @@ const assert = require("node:assert/strict");
   const saved = requests.find((r) => r.path.endsWith("/behavior/event"));
   assert.equal(JSON.parse(saved.body).student_code, "K9-001");
   assert.equal(saved.auth, "Bearer teacher-test");
-  await page.getByRole("button", { name: "Ask Kobe", exact: true }).click();
+  await page.getByRole("tab", { name: "Ask Kobe", exact: true }).click();
   await page
     .getByLabel("Question", { exact: true })
     .fill("Suggest an activity");
-  await page
-    .getByRole("button", { name: "Ask Kobe", exact: true })
-    .last()
-    .click();
+  await page.getByRole("button", { name: "Ask Kobe", exact: true }).click();
   await page.getByText("Use a leaf for the activity.").waitFor();
   await page.getByText("Source: ollama · qwen").waitFor();
-  await page.getByRole("button", { name: "Activity", exact: true }).click();
+  await page.getByRole("tab", { name: "Activity", exact: true }).click();
   await page.getByText(/No captures sent yet/).waitFor();
+  // The skill map is what a teacher acts on, so it must survive a student
+  // whose profile the server has nothing for yet.
+  await page.getByRole("tab", { name: "Students", exact: true }).click();
+  await page.getByText("What to teach next", { exact: true }).waitFor();
+
+  // Tabs must never be disabled: a teacher mid-lesson has to be able to leave
+  // a slow panel rather than wait on it.
+  assert.equal(
+    await page.evaluate(() =>
+      Array.from(document.querySelectorAll('[role="tab"]')).some((t) => t.disabled),
+    ),
+    false,
+    "Workspace tabs must stay usable while a request is in flight",
+  );
+
   await page.getByRole("button", { name: "Open Lens", exact: true }).click();
   await page.getByRole("button", { name: "Sign out", exact: true }).click();
   await page.getByRole("button", { name: "Sign in", exact: true }).waitFor();

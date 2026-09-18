@@ -105,7 +105,7 @@ export function GlassesControl({
   }, []);
   if (!window.KobeNative)
     return (
-      <div style={{ padding: "6px 16px", fontSize: 12 }}>
+      <div className="glasses-hint">
         To connect Rokid, open this school account in the KobeAI Lens Android
         app. Phone camera works here.
       </div>
@@ -145,8 +145,8 @@ export function GlassesControl({
     }
   };
   return (
-    <section aria-label="Glasses connection" style={{ padding: "8px 16px" }}>
-      <div style={{ display: "flex", gap: 8 }}>
+    <section className="glasses-control" aria-label="Glasses connection">
+      <div className="glasses-row">
         <select
           aria-label="Camera source"
           className="mark-input"
@@ -169,7 +169,7 @@ export function GlassesControl({
           {busy ? "Connecting…" : "Connect"}
         </button>
       </div>
-      <div role="status" style={{ fontSize: 12, paddingTop: 6 }}>
+      <div role="status" className="glasses-status">
         {status}
       </div>
       {error && (

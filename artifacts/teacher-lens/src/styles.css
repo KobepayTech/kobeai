@@ -323,3 +323,27 @@ select.mark-input option { background: #16161f; color: var(--brand-fg); }
   background: transparent; border: none; color: var(--brand-muted);
   font-size: 14px; padding: 8px; cursor: pointer;
 }
+
+/* Glasses connection strip, which sits above the Lens viewfinder. */
+.glasses-control {
+  padding: 8px 16px;
+}
+.glasses-row {
+  display: flex;
+  gap: 8px;
+}
+.glasses-row select {
+  flex: 1;
+  min-width: 0;
+}
+.glasses-status,
+.glasses-hint {
+  font-size: 12px;
+  color: var(--brand-muted);
+}
+.glasses-status {
+  padding-top: 6px;
+}
+.glasses-hint {
+  padding: 6px 16px;
+}

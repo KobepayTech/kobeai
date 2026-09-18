@@ -1,10 +1,31 @@
+/* ---------------------------------------------------------------------------
+   Teacher workspace.
+   
+   Built on the Lens's own brand tokens (styles.css) rather than its own set of
+   greens: the workspace, the Lens and the dashboard are one product, and a
+   teacher switching between them should not feel they have changed apps.
+   KobeAI green is #00A86B and the ground is the Lens's near-black, both via
+   the variables so a rebrand is one file.
+   --------------------------------------------------------------------------- */
+:root {
+  --ws-ground: var(--brand-bg, #0e0e14);
+  --ws-surface: var(--brand-card, rgba(255, 255, 255, 0.06));
+  --ws-line: var(--brand-card-border, rgba(255, 255, 255, 0.14));
+  --ws-fg: var(--brand-fg, #f4f5f7);
+  --ws-muted: var(--brand-muted, rgba(244, 245, 247, 0.7));
+  --ws-accent: var(--brand-green, #00a86b);
+  --ws-accent-soft: rgba(0, 168, 107, 0.16);
+  --ws-danger: var(--brand-danger, #ef476f);
+  --ws-warn: var(--brand-warn, #f4a261);
+}
+
 .teacher-workspace {
   position: fixed;
   inset: 0;
   z-index: 15;
   overflow-y: auto;
-  background: #101915;
-  color: #eff7f1;
+  background: var(--ws-ground);
+  color: var(--ws-fg);
   padding: max(20px, env(safe-area-inset-top))
     max(18px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom));
   box-sizing: border-box;
@@ -18,9 +39,9 @@
   box-sizing: border-box;
 }
 .teacher-workspace button {
-  border: 1px solid #3a5043;
-  background: #21392b;
-  color: #f1fff5;
+  border: 1px solid var(--ws-line);
+  background: var(--ws-surface);
+  color: var(--ws-fg);
   border-radius: 12px;
   padding: 12px 16px;
   cursor: pointer;
@@ -34,7 +55,7 @@
 .teacher-workspace input:focus-visible,
 .teacher-workspace textarea:focus-visible,
 .teacher-workspace select:focus-visible {
-  outline: 3px solid #9fdfaa;
+  outline: 3px solid var(--ws-accent);
   outline-offset: 3px;
 }
 .teacher-heading {
@@ -47,7 +68,7 @@
 .teacher-eyebrow {
   font-size: 11px;
   letter-spacing: 0.18em;
-  color: #9fdfaa;
+  color: var(--ws-accent);
 }
 .teacher-heading h1 {
   font-size: clamp(23px, 5vw, 34px);
@@ -56,7 +77,7 @@
 }
 .teacher-heading p,
 .teacher-muted {
-  color: #acc1b2;
+  color: var(--ws-muted);
   font-size: 13px;
   line-height: 1.6;
 }
@@ -65,13 +86,13 @@
   align-items: center;
   gap: 12px;
   padding: 16px;
-  background: #1b2c22;
-  border: 1px solid #35493d;
+  background: var(--ws-surface);
+  border: 1px solid var(--ws-line);
   border-radius: 16px;
 }
 .teacher-workspace small {
   display: block;
-  color: #acc1b2;
+  color: var(--ws-muted);
   line-height: 1.6;
   font-size: 12px;
   margin-top: 4px;
@@ -80,11 +101,11 @@
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  background: #dbac65;
+  background: var(--ws-warn);
   flex-shrink: 0;
 }
 .teacher-dot.connected {
-  background: #9fdfaa;
+  background: var(--ws-accent);
 }
 .teacher-nav {
   display: grid;
@@ -99,8 +120,8 @@
   border-color: transparent;
 }
 .teacher-nav button[aria-current] {
-  background: #d9edca;
-  color: #17291c;
+  background: var(--ws-accent);
+  color: var(--ws-surface);
 }
 .teacher-content {
   padding-bottom: 30px;
@@ -113,12 +134,12 @@
 .teacher-actions button {
   text-align: left;
   padding: 22px 18px;
-  background: #253d2d;
+  background: var(--ws-surface);
   min-height: 165px;
 }
 .teacher-actions span {
   display: block;
-  color: #a5d58f;
+  color: var(--ws-accent);
   font-size: 12px;
   margin-bottom: 26px;
 }
@@ -143,19 +164,19 @@
   display: flex;
   align-items: center;
   gap: 16px;
-  border-bottom: 1px solid #35493d;
+  border-bottom: 1px solid var(--ws-line);
   padding: 18px 0;
 }
 .teacher-period > span {
-  color: #c4dfb8;
+  color: var(--ws-muted);
   font-size: 12px;
 }
 .teacher-period > div {
   flex: 1;
 }
 .teacher-card {
-  background: #192a20;
-  border: 1px solid #35493d;
+  background: var(--ws-surface);
+  border: 1px solid var(--ws-line);
   border-radius: 16px;
   padding: 20px;
   margin-top: 22px;
@@ -168,7 +189,7 @@
   display: block;
   font-size: 13px;
   margin: 16px 0;
-  color: #c4dfb8;
+  color: var(--ws-muted);
 }
 .teacher-workspace input,
 .teacher-workspace textarea,
@@ -178,10 +199,10 @@
   display: block;
   margin-top: 8px;
   padding: 13px;
-  border: 1px solid #4b6253;
+  border: 1px solid var(--ws-line);
   border-radius: 10px;
-  background: #112018;
-  color: #f1fff5;
+  background: var(--ws-ground);
+  color: var(--ws-fg);
   font: inherit;
   font-size: 16px;
 }
@@ -205,7 +226,7 @@
   text-align: left;
 }
 .teacher-students button[aria-pressed="true"] {
-  border-color: #a5d58f;
+  border-color: var(--ws-accent);
 }
 .teacher-prewrap {
   white-space: pre-wrap;
@@ -218,12 +239,12 @@
   line-height: 1.5;
 }
 .teacher-error {
-  background: #4a222c;
-  color: #ffdce4;
+  background: rgba(239, 71, 111, 0.18);
+  color: var(--ws-danger);
 }
 .teacher-success {
-  background: #23402d;
-  color: #cdf0d5;
+  background: var(--ws-surface);
+  color: var(--ws-accent);
 }
 @media (min-width: 800px) {
   .teacher-workspace {
@@ -232,4 +253,46 @@
   .teacher-actions button {
     min-height: 185px;
   }
+}
+
+/* Skill map — the part of a student card a teacher acts on. */
+.teacher-priority {
+  margin: 0 0 14px;
+  padding-left: 20px;
+  display: grid;
+  gap: 10px;
+}
+.teacher-priority li strong {
+  display: block;
+}
+.teacher-priority li small,
+.teacher-skill-row span:first-child {
+  color: var(--ws-muted);
+}
+.teacher-skill-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 96px 44px;
+  align-items: center;
+  gap: 10px;
+  margin: 6px 0;
+  font-size: 14px;
+}
+.teacher-skill-row b {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+/* A bar, not a ring: it reads at a glance in a classroom, and the number is
+   always beside it for anyone who cannot separate the colours. */
+.teacher-mastery {
+  display: block;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--ws-line);
+  overflow: hidden;
+  margin: 4px 0;
+}
+.teacher-mastery i {
+  display: block;
+  height: 100%;
+  background: var(--ws-accent);
 }
