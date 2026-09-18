@@ -114,7 +114,10 @@ before crossing into JavaScript.
 
 After first provisioning, Rokid reconnects at sign-in without prompting again.
 Only successful provisioning is saved, encrypted with an Android Keystore AES-GCM
-key. Forget pairing removes the stored credentials. Choosing Phone camera pauses
+key. Forget pairing removes the stored credentials **and** the Rokid client's own
+reconnect cache (`xgglass_rokid_bt_reconnect`: `socket_uuid`, `mac_address`),
+which `ensureBluetoothConnected` dials before it will scan for anything else.
+Clearing only ours left the phone still bound to the previous glasses. Choosing Phone camera pauses
 automatic reconnection; explicitly connecting Rokid enables it again.
 
 A connected-device foreground service keeps the current SDK session eligible
@@ -123,7 +126,11 @@ a Pause action — which on Android 13+ requires `POST_NOTIFICATIONS`, asked for
 alongside the Bluetooth permissions on a Rokid connect. It is asked as an
 optional permission: refusing it costs the teacher the Pause action, not the
 glasses, so a denial never fails the connection. Dropped Rokid connections retry at 3, 6, 12, 24, 48 then 60-second
-intervals, with a 30-second attempt timeout. Photos and microphone recording are
+intervals. Each attempt is bounded by the hardware's own connect budget
+(`RokidOptions.connectTimeoutMs`, pinned at 30s) plus 20s of headroom: the SDK
+wraps its whole handshake — cached-MAC reconnect, scan, init, BT socket, Wi-Fi
+P2P — in that budget, so a watchdog sized at the same 30s fired first every time
+and cancelled the handshake mid-scan. Photos and microphone recording are
 not started in the background. Signing out cancels retries and disconnects.
 
 First-time provisioning is interactive — a dialog for the developer client

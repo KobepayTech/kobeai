@@ -19,6 +19,36 @@ import kotlin.coroutines.resumeWithException
 
 object ProviderFactory {
     val providers = listOf("rokid", "heycyan")
+
+    /**
+     * The budget handed to RokidOptions.connectTimeoutMs, which the SDK wraps
+     * around its whole connect: cached-MAC reconnect, then scan, then init, then
+     * the BT socket, then Wi-Fi P2P. It is set explicitly rather than inherited,
+     * so an SDK upgrade cannot silently move it out from under the watchdog in
+     * MainActivity that has to stay above it.
+     */
+    const val ROKID_CONNECT_TIMEOUT_MS = 30_000L
+
+    /**
+     * Forgetting a pairing has to forget it everywhere, and the Rokid client keeps
+     * a reconnect cache of its own: RokidGlassesClient.ensureBluetoothConnected
+     * reads socket_uuid and mac_address out of its "xgglass_rokid_bt_reconnect"
+     * preferences and dials that device before it will scan for any other. Clearing
+     * only our credentials left the SDK still bound to the previous glasses, so a
+     * teacher who forgot the pairing to move the phone to a different pair would
+     * silently be reconnected to the old one whenever it was in range — which, in a
+     * staffroom holding several pairs, is most of the time. The SDK's own
+     * clearReconnectInfo() is private, but it publishes these key names for exactly
+     * this purpose.
+     */
+    fun forgetProvisioning(activity: MainActivity) {
+        RokidCredentials.forget(activity)
+        activity.getSharedPreferences(RokidGlassesClient.PREFS_BT, android.content.Context.MODE_PRIVATE)
+            .edit()
+            .remove(RokidGlassesClient.PREF_KEY_SOCKET_UUID)
+            .remove(RokidGlassesClient.PREF_KEY_MAC_ADDRESS)
+            .commit()
+    }
     suspend fun create(activity: MainActivity, provider: String, scope: CoroutineScope, automatic: Boolean = false, onLost: () -> Unit): Hardware {
         require(provider in providers)
         // From API 31 the manifest declares BLUETOOTH_SCAN neverForLocation, so a
@@ -55,8 +85,9 @@ object ProviderFactory {
                 val secret = saved?.second ?: promptSecret(activity)
                 val license = saved?.first ?: activity.pickLicense()
                 val delegate = XgHardware(RokidGlassesClient(activity, RokidGlassesClient.RokidOptions(
+                    connectTimeoutMs = ROKID_CONNECT_TIMEOUT_MS,
                     authorization = RokidGlassesClient.RokidAuthorization(license, secret)
-                )), scope, onLost)
+                )), scope, onLost, ROKID_CONNECT_TIMEOUT_MS)
                 object : Hardware by delegate {
                     private var remembered = false
                     override suspend fun connect() {

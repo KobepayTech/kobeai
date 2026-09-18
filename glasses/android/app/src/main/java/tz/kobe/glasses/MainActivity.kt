@@ -170,7 +170,7 @@ class MainActivity : AppCompatActivity() {
             }
             "disconnect" -> { stopConnection(); null }
             "pause" -> { RokidCredentials.enable(this, false); stopConnection(); null }
-            "forget" -> { stopConnection(); RokidCredentials.forget(this); null }
+            "forget" -> { stopConnection(); ProviderFactory.forgetProvisioning(this); null }
             "capture" -> {
                 val bytes = requireHardware().capture()
                 val jpeg = withContext(Dispatchers.Default) { normalizeJpeg(bytes) }
@@ -212,7 +212,15 @@ class MainActivity : AppCompatActivity() {
                 val connected = gate.withLock {
                     val candidate = hardware ?: return@withLock false
                     try {
-                        withTimeout(30_000) { candidate.disconnect(); candidate.connect() }
+                        // Strictly above the hardware's own connect budget. This watchdog
+                        // exists only to break a wedged attempt; sized at the SDK's own 30s
+                        // it fired first every time, cancelling the handshake mid-scan and
+                        // discarding the SDK's diagnosis for a bare cancellation — so a
+                        // reconnect that legitimately needed its full budget could never
+                        // finish, and retried from scratch forever.
+                        withTimeout(candidate.connectBudgetMs + RECONNECT_WATCHDOG_MARGIN_MS) {
+                            candidate.disconnect(); candidate.connect()
+                        }
                         hardwareConnected = true; sendConnectionEvent("reconnected"); true
                     } catch (e: kotlinx.coroutines.CancellationException) {
                         if (!isActive) throw e
@@ -263,6 +271,9 @@ class MainActivity : AppCompatActivity() {
         const val HOST = "appassets.androidplatform.net"
         const val ORIGIN = "https://$HOST"
         const val DEFAULT_BUDGET_MS = 75_000L
+        // Headroom over the hardware's own connect budget: enough for the disconnect
+        // that precedes the retry and for the SDK to report its own failure first.
+        const val RECONNECT_WATCHDOG_MARGIN_MS = 20_000L
         // Must stay below INTERACTIVE_CONNECT_TIMEOUT_MS in NativeAdapter.ts, so
         // the teacher is shown this side's message rather than a bare JS timeout.
         const val INTERACTIVE_BUDGET_MS = 10 * 60_000L

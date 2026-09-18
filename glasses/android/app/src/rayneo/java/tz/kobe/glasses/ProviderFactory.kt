@@ -6,6 +6,9 @@ import kotlinx.coroutines.CoroutineScope
 
 object ProviderFactory {
     val providers = listOf("rayneo")
+
+    /** This flavour runs on the glasses themselves and stores no pairing. */
+    fun forgetProvisioning(activity: MainActivity) = RokidCredentials.forget(activity)
     suspend fun create(activity: MainActivity, provider: String, scope: CoroutineScope, automatic: Boolean = false, onLost: () -> Unit): Hardware {
         require(provider == "rayneo")
         // Install this flavor on RayNeo X2 itself, not on a phone. The runtime

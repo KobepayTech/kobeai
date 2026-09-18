@@ -16,11 +16,22 @@ interface Hardware {
     suspend fun display(text: String)
     suspend fun speak(text: String)
     fun capabilities(): JSONObject
+    /**
+     * How long this hardware's own connect() may run before the vendor SDK gives
+     * up and reports a diagnosis of its own. Any watchdog we wrap around connect()
+     * has to sit above this, or it cancels the SDK mid-handshake and throws away
+     * the better error. See RokidGlassesClient.doConnect, which wraps the whole
+     * BT + Wi-Fi P2P handshake in withTimeout(options.connectTimeoutMs).
+     */
+    val connectBudgetMs: Long get() = DEFAULT_CONNECT_BUDGET_MS
 }
+
+const val DEFAULT_CONNECT_BUDGET_MS = 30_000L
 
 /** Only advertise features exposed by this app, rather than every upstream feature. */
 class XgHardware(private val client: GlassesClient, private val scope: CoroutineScope,
-                 private val onLost: () -> Unit) : Hardware {
+                 private val onLost: () -> Unit,
+                 override val connectBudgetMs: Long = DEFAULT_CONNECT_BUDGET_MS) : Hardware {
     private var watcher: Job? = null
     override suspend fun connect() {
         client.connect().getOrThrow()
