@@ -62,3 +62,10 @@ __pycache__/
 k9-cameras*.json
 cameras.json
 !cameras.example.json
+
+# Native glasses dependencies, build outputs and device credentials
+/glasses/android/.gradle/
+/glasses/android/local.properties
+/glasses/android/**/build/
+/glasses/android/app/libs/*.aar
+*.lc

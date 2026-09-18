@@ -1,3 +1,8 @@
+import { useServerConnection } from "./serverConnection";
+import { Connections } from "./Connections";
+import { TeacherWorkspace, type CaptureActivity } from "./TeacherWorkspace";
+import { useCamera } from "./camera";
+import { captureGlasses, GlassesControl, speakThroughGlasses } from "./glasses";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 // ---------------------------------------------------------------------------
@@ -79,6 +84,7 @@ async function apiGet<T>(auth: StoredAuth, path: string): Promise<T | null> {
 // practice). Falls back gracefully on browsers without support.
 // ---------------------------------------------------------------------------
 function speak(text: string): void {
+  if (speakThroughGlasses(text)) return;
   if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
   const u = new SpeechSynthesisUtterance(text);
   u.rate = 1.05;
@@ -91,10 +97,10 @@ function speak(text: string): void {
 // ---------------------------------------------------------------------------
 // Setup screen — one-time login. Uses the existing /v1/auth/teacher/login.
 // ---------------------------------------------------------------------------
-function Setup({ onReady }: { onReady: (a: StoredAuth) => void }) {
-  const [apiBase, setApiBase] = useState(DEFAULT_API_BASE);
-  const [email, setEmail] = useState("teacher@school.tz");
-  const [password, setPassword] = useState("teacher123");
+function Setup({ onReady, initialServer }: { onReady: (a: StoredAuth) => void; initialServer: string }) {
+  const [apiBase, setApiBase] = useState(initialServer || DEFAULT_API_BASE);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -103,6 +109,9 @@ function Setup({ onReady }: { onReady: (a: StoredAuth) => void }) {
     setBusy(true);
     try {
       const base = apiBase.replace(/\/$/, "") || window.location.origin;
+      const parsed = new URL(base);
+      if (!["https:", "http:"].includes(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash) throw new Error("Enter a valid school server address without credentials, query or fragment.");
+      if (window.KobeNative && parsed.protocol !== "https:") throw new Error("The Android app requires your school server’s HTTPS address.");
       const res = await fetch(`${base}/api/v1/auth/teacher/login`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -130,15 +139,14 @@ function Setup({ onReady }: { onReady: (a: StoredAuth) => void }) {
         <span style={{ color: "var(--brand-green)" }}>KobeAI</span> Lens
       </h1>
       <p style={{ color: "var(--brand-muted)", marginTop: -6, marginBottom: 20 }}>
-        The teacher-worn phone / glasses client. Sign in once — the phone stays
-        paired to the school after that.
+        Step 1: connect to your school server. Join the school Wi-Fi and enter the HTTPS address supplied by your administrator. Sign in with your school teacher account, then connect Rokid from Connections.
       </p>
-      <label>School server URL</label>
-      <input value={apiBase} onChange={(e) => setApiBase(e.target.value)} placeholder="https://school.local" />
-      <label>Email</label>
-      <input value={email} onChange={(e) => setEmail(e.target.value)} />
-      <label>Password</label>
-      <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" />
+      <label htmlFor="school-server">School server URL</label>
+      <input id="school-server" value={apiBase} onChange={(e) => setApiBase(e.target.value)} placeholder="https://school.local" />
+      <label htmlFor="teacher-email">Email</label>
+      <input id="teacher-email" value={email} onChange={(e) => setEmail(e.target.value)} />
+      <label htmlFor="teacher-password">Password</label>
+      <input id="teacher-password" value={password} onChange={(e) => setPassword(e.target.value)} type="password" />
       <button className="setup-btn" onClick={login} disabled={busy}>
         {busy ? "Signing in…" : "Sign in"}
       </button>
@@ -153,58 +161,6 @@ function Setup({ onReady }: { onReady: (a: StoredAuth) => void }) {
 // (server accepts the structured event without it) but ready for a future
 // wire-up to /v1/teacher-lens/frame.
 // ---------------------------------------------------------------------------
-function useCamera() {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const [ready, setReady] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  useEffect(() => {
-    let stream: MediaStream | null = null;
-    (async () => {
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio: false,
-          video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 } },
-        });
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          await videoRef.current.play();
-          setReady(true);
-        }
-      } catch (e) {
-        setErr(e instanceof Error ? e.message : String(e));
-      }
-    })();
-    return () => stream?.getTracks().forEach((t) => t.stop());
-  }, []);
-  const captureFrame = useCallback((): string | null => {
-    const v = videoRef.current;
-    if (!v || v.videoWidth === 0) return null;
-    const canvas = document.createElement("canvas");
-    canvas.width = v.videoWidth;
-    canvas.height = v.videoHeight;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return null;
-    ctx.drawImage(v, 0, 0);
-    return canvas.toDataURL("image/jpeg", 0.7);
-  }, []);
-  // Frames are scaled down so the K9 models answer faster on a school PC.
-  const captureBlob = useCallback(async (maxSide = 1600): Promise<Blob | null> => {
-    const v = videoRef.current;
-    if (!v || v.videoWidth === 0) return null;
-    const scale = Math.min(1, maxSide / Math.max(v.videoWidth, v.videoHeight));
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.round(v.videoWidth * scale);
-    canvas.height = Math.round(v.videoHeight * scale);
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return null;
-    ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
-    return await new Promise<Blob | null>((resolve) =>
-      canvas.toBlob((b) => resolve(b), "image/jpeg", 0.75),
-    );
-  }, []);
-  return { videoRef, ready, err, captureFrame, captureBlob };
-}
-
 // ---------------------------------------------------------------------------
 // Wake-word listener. Uses webkitSpeechRecognition (Chromium; iOS Safari
 // exposes it under a vendor prefix). Falls back silently on unsupported
@@ -877,6 +833,16 @@ function MarkPanel({
 // ---------------------------------------------------------------------------
 export function App() {
   const [auth, setAuth] = useState<StoredAuth | null>(() => loadAuth());
+  const serverStatus = useServerConnection(auth);
+  const authRef = useRef(auth);
+  authRef.current = auth;
+  const [connectionsOpen, setConnectionsOpen] = useState(false);
+  const [initialServer, setInitialServer] = useState("");
+  const [workspaceOpen, setWorkspaceOpen] = useState(true);
+  const [captures, setCaptures] = useState<CaptureActivity[]>([]);
+  const [glassesConnected, setGlassesConnected] = useState(false);
+  const [glassesSource, setGlassesSource] = useState<string | null>(null);
+  const shutterBusy = useRef(false);
   const [mode, setMode] = useState<Mode>("lookup");
   const [sessionId, setSessionId] = useState<number | null>(null);
   const [lookupBrief, setLookupBrief] = useState<StudentBrief | null>(null);
@@ -896,22 +862,28 @@ export function App() {
   useEffect(() => {
     if (!studentPicker) pickerRequest.current = null;
   }, [studentPicker]);
-  const { videoRef, ready: camReady, err: camErr, captureFrame, captureBlob } = useCamera();
+  const { videoRef, ready: camReady, err: camErr, captureFrame, captureBlob } = useCamera(!!auth && !glassesSource && !workspaceOpen && !connectionsOpen);
 
   // Start a session as soon as we have auth.
   useEffect(() => {
     if (!auth || sessionId != null) return;
+    let cancelled = false;
     (async () => {
       try {
         const r = await apiPost<{ session: { id: number } }>(auth, "/v1/teacher-lens/session", {
           mode,
           device: navigator.userAgent,
         });
+        if (cancelled || authRef.current !== auth) {
+          await apiPost(auth, `/v1/teacher-lens/session/${r.session.id}/end`, {});
+          return;
+        }
         setSessionId(r.session.id);
       } catch {
         setToast("Couldn't start lens session — check the server URL.");
       }
     })();
+    return () => { cancelled = true; };
   }, [auth, mode, sessionId]);
 
   useWhisperPoll(auth ?? ({ api_base: "", token: "", teacher_name: "" } as StoredAuth), sessionId);
@@ -929,6 +901,12 @@ export function App() {
     window.addEventListener("pagehide", handler);
     return () => window.removeEventListener("pagehide", handler);
   }, [auth, sessionId]);
+
+  useEffect(() => {
+    const handler = (event: Event) => setToast((event as CustomEvent<string>).detail);
+    window.addEventListener("kobe-glasses-error", handler);
+    return () => window.removeEventListener("kobe-glasses-error", handler);
+  }, []);
 
   // Toast auto-dismiss.
   useEffect(() => {
@@ -968,7 +946,8 @@ export function App() {
   // the teacher still picks the student or types the marks.
   const uploadFrame = useCallback(async (): Promise<LensUpload | null> => {
     if (!auth) return null;
-    const blob = await captureBlob(mode === "mark" ? 1600 : 1280);
+    const blob = await captureGlasses() ?? await captureBlob(mode === "mark" ? 1600 : 1280);
+    if (authRef.current !== auth) throw new Error("Session ended — sign in again");
     if (!blob) return null;
     const examId = mode === "mark" ? storedExamId() : null;
     try {
@@ -985,6 +964,7 @@ export function App() {
       });
       if (!res.ok) return null;
       const body = await res.json();
+      if (authRef.current === auth && body?.request?.id) setCaptures(previous => [{ id: body.request.id, mode, at: new Date().toISOString() }, ...previous].slice(0, 20));
       return { request_id: body?.request?.id ?? null, image_key: body?.image_key ?? null };
     } catch {
       return null;
@@ -1051,31 +1031,35 @@ export function App() {
   );
 
   const onShutter = useCallback(async () => {
-    if (!auth) return;
-    // Priming the SpeechSynthesis on the first user gesture is critical
-    // on iOS/Android — later background whispers only fire if we've spoken
-    // at least once from a direct tap.
-    speak(mode === "lookup" ? "Looking up." : "Reading the paper.");
-    captureFrame(); // for local UX polish; the upload path uses captureBlob
+    if (!auth || shutterBusy.current) return;
+    shutterBusy.current = true;
+    try {
+      // Priming the SpeechSynthesis on the first user gesture is critical
+      // on iOS/Android — later background whispers only fire if we've spoken
+      // at least once from a direct tap.
+      speak(mode === "lookup" ? "Looking up." : "Reading the paper.");
+      if (!glassesSource) captureFrame();
 
-    if (mode === "lookup") {
-      // The picker opens straight away; a recognised face replaces it.
-      const upload = uploadFrame();
-      const recent = await fetchRecentStudents();
-      const uploaded = await upload;
-      const requestId = uploaded?.request_id ?? null;
-      pickerRequest.current = requestId;
-      setStudentPicker({ students: recent, imageKey: uploaded?.image_key ?? null, requestId, recognising: requestId !== null, hint: null });
-      if (requestId !== null) watchLookup(requestId);
-    } else {
-      const uploaded = await uploadFrame();
-      setMarkOpen({ requestId: uploaded?.request_id ?? null, imageKey: uploaded?.image_key ?? null });
-    }
-  }, [auth, mode, captureFrame, uploadFrame, fetchRecentStudents, watchLookup]);
+      if (mode === "lookup") {
+        // The picker opens straight away; a recognised face replaces it.
+        const [uploaded, recent] = await Promise.all([uploadFrame(), fetchRecentStudents()]);
+        if (authRef.current !== auth) return;
+        const requestId = uploaded?.request_id ?? null;
+        pickerRequest.current = requestId;
+        setStudentPicker({ students: recent, imageKey: uploaded?.image_key ?? null, requestId, recognising: requestId !== null, hint: null });
+        if (requestId !== null) watchLookup(requestId);
+      } else {
+        const uploaded = await uploadFrame();
+        if (authRef.current !== auth) return;
+        setMarkOpen({ requestId: uploaded?.request_id ?? null, imageKey: uploaded?.image_key ?? null });
+      }
+    } catch (error) { setToast(errorDetail(error)); }
+    finally { shutterBusy.current = false; }
+  }, [auth, mode, glassesSource, captureFrame, uploadFrame, fetchRecentStudents, watchLookup]);
 
   // Wake-word toggle — when on, saying "Kobe" fires the shutter.
   useWakeWord({
-    enabled: wakeWordOn,
+    enabled: wakeWordOn && !workspaceOpen && !connectionsOpen && !!auth,
     onFire: () => {
       if (mode === "lookup" && !studentPicker && !lookupBrief) onShutter();
       // Deliberately no auto-shutter in mark mode: the teacher usually
@@ -1084,10 +1068,29 @@ export function App() {
     },
   });
 
+  const selectGlassesSource = useCallback((source: string | null, connected = false) => {
+    setGlassesSource(source); setGlassesConnected(connected);
+  }, []);
+
   const uptimeLabel = useMemo(() => `Session ${sessionId ?? "starting…"}`, [sessionId]);
 
+  const signOut = () => {
+            if (auth && sessionId != null) void fetch(`${auth.api_base}/api/v1/teacher-lens/session/${sessionId}/end`, {
+              method: "POST", headers: { authorization: `Bearer ${auth.token}`, "content-type": "application/json" }, body: "{}", keepalive: true,
+            }).catch(() => undefined);
+            pickerRequest.current = null;
+            setSessionId(null); setStudentPicker(null); setLookupBrief(null); setMarkOpen(null);
+            authRef.current = null;
+            setGlassesSource(null);
+            setGlassesConnected(false);
+            setCaptures([]); setWorkspaceOpen(true); setWakeWordOn(false);
+            clearAuth();
+            setAuth(null);
+            setConnectionsOpen(false);
+  };
+
   if (!auth) {
-    return <Setup onReady={setAuth} />;
+    return <Setup onReady={setAuth} initialServer={initialServer} />;
   }
 
   return (
@@ -1098,28 +1101,30 @@ export function App() {
             <span className="k">Kobe</span>AI Lens
           </div>
           <div className="lens-mode">
-            <span className={"lens-status-dot " + (camReady ? "ok" : "bad")} />
+            <span className={"lens-status-dot " + ((camReady || glassesConnected) ? "ok" : "bad")} />
             {mode === "lookup" ? "Lookup" : "Mark paper"} · {uptimeLabel}
           </div>
         </div>
         <button
           className="lens-secondary"
           style={{ padding: "8px 12px", fontSize: 12 }}
-          onClick={() => {
-            clearAuth();
-            setAuth(null);
-          }}
+          onClick={signOut}
         >
           Sign out
         </button>
       </header>
 
+      <button className="lens-secondary" onClick={() => setWorkspaceOpen(true)}>Teacher workspace</button>
+      <Connections auth={auth} open={connectionsOpen} onClose={() => setConnectionsOpen(false)} onChangeServer={() => { setInitialServer(auth.api_base); signOut(); }}>
+        <GlassesControl onSource={selectGlassesSource} />
+      </Connections>
       <div className="lens-viewport">
         <video ref={videoRef} playsInline muted />
-        {!camReady && !camErr && (
+        {glassesSource && <div className="frame-cover">Camera: {glassesSource}. Tap the shutter to capture.</div>}
+        {!glassesSource && !camReady && !camErr && (
           <div className="frame-cover">Requesting camera access…</div>
         )}
-        {camErr && (
+        {!glassesSource && camErr && (
           <div className="frame-cover">
             Camera unavailable: {camErr}. Lens still works — the shutter runs the
             same server call, just without a captured frame.
@@ -1167,6 +1172,8 @@ export function App() {
         </button>
       </div>
 
+      {workspaceOpen && <TeacherWorkspace serverStatus={serverStatus} auth={auth} connected={glassesConnected} source={glassesSource} captures={captures}
+        onConnections={() => setConnectionsOpen(true)} onClose={() => setWorkspaceOpen(false)} onCapture={next => { setMode(next); setWorkspaceOpen(false); }} onSpeak={speak} />}
       {toast && <div className="lens-toast">{toast}</div>}
 
       {studentPicker && (
