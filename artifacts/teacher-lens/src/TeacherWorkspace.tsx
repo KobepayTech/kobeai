@@ -76,6 +76,35 @@ export async function teacherRequest<T>(
   return response.json();
 }
 
+function ToolIcon({ name }: { name: string }) {
+  const paths: Record<string, string> = {
+    Today: "M3 10 12 3l9 7M5 9v12h5v-7h4v7h5V9",
+    Students:
+      "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M20 21v-2a4 4 0 0 0-3-3.9M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M17 3a4 4 0 0 1 0 8",
+    "Ask Kobe": "m12 3 2.6 6.4L21 12l-6.4 2.6L12 21l-2.6-6.4L3 12l6.4-2.6L12 3",
+    Activity: "M3 12h4l3-8 4 16 3-8h4",
+    lens: "M8 4H4v4M16 4h4v4M4 16v4h4M20 16v4h-4M16 12a4 4 0 1 0-8 0 4 4 0 0 0 8 0",
+    paper: "M14 2H5v20h14V7l-5-5v5h5M8 12h8M8 16h5",
+    glasses:
+      "M2 13h3m14 0h3M10 13h4M2 13l2-7h3m15 7-2-7h-3M10 14a4 4 0 1 0-8 0 4 4 0 0 0 8 0M22 14a4 4 0 1 0-8 0 4 4 0 0 0 8 0",
+  };
+  return (
+    <svg
+      width="22"
+      height="22"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d={paths[name] ?? paths.Today} />
+    </svg>
+  );
+}
+
 export function TeacherWorkspace({
   auth,
   connected,
@@ -94,6 +123,10 @@ export function TeacherWorkspace({
   onSpeak: (text: string) => void;
 }) {
   const [tab, setTab] = useState("Today");
+  const workspaceRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    workspaceRef.current?.scrollTo({ top: 0 });
+  }, [tab]);
   const [context, setContext] = useState<Context | null>(null);
   const [search, setSearch] = useState("");
   const [students, setStudents] = useState<Student[]>([]);
@@ -202,25 +235,40 @@ export function TeacherWorkspace({
   );
 
   return (
-    <section className="teacher-workspace" aria-label="Teacher workspace">
+    <section
+      ref={workspaceRef}
+      className="teacher-workspace"
+      aria-label="Teacher workspace"
+    >
       <header className="teacher-heading">
         <div>
-          <span className="teacher-eyebrow">KOBEAI · TEACHER</span>
-          <h1>Hello, {auth.teacher_name}</h1>
-          <p>Your lesson, your students, your assistant.</p>
+          <span className="teacher-eyebrow">
+            <span className="teacher-logo">k.</span> KobeAI{" "}
+            <span className="teacher-edition">FOR TEACHERS</span>
+          </span>
+          <h1>
+            Hello, {auth.teacher_name.split(" ")[0]}{" "}
+            <span className="teacher-greeting">✦</span>
+          </h1>
+          <p>A little support. A bigger impact.</p>
         </div>
-        <button onClick={onClose}>Open Lens</button>
+        <button className="teacher-lens-button" onClick={onClose}>
+          <ToolIcon name="lens" />
+          <span>Open Lens</span>
+        </button>
       </header>
       <div className="teacher-device">
-        <span className={connected ? "teacher-dot connected" : "teacher-dot"} />
+        <span className="teacher-device-icon">
+          <ToolIcon name="glasses" />
+        </span>
         <div>
           <strong>
-            {connected ? `${source} connected` : "Rokid companion"}
+            {connected ? `${source} connected` : "Your Rokid glasses"}
           </strong>
           <small>
             {connected
               ? "Ready for photos and teacher prompts"
-              : "Open Lens to connect Rokid or use the phone camera"}
+              : "Connect for hands-free teaching"}
           </small>
         </div>
       </div>
@@ -236,7 +284,8 @@ export function TeacherWorkspace({
               setNotice("");
             }}
           >
-            {t}
+            <ToolIcon name={t} />
+            <span>{t}</span>
           </button>
         ))}
       </nav>
@@ -254,16 +303,47 @@ export function TeacherWorkspace({
         )}
         {tab === "Today" && (
           <>
+            <article className="teacher-hero">
+              <div className="teacher-hero-kicker">
+                <ToolIcon name="Ask Kobe" /> YOUR TEACHING COMPANION
+              </div>
+              <h2>
+                More time to teach.
+                <br />
+                More room to inspire.
+              </h2>
+              <p>
+                Plan a lesson, find the right explanation,
+                <br />
+                or give a student a little extra help.
+              </p>
+              <button onClick={() => setTab("Ask Kobe")}>
+                Let’s prepare a lesson <span aria-hidden="true">↗</span>
+              </button>
+              <div className="teacher-orbit" aria-hidden="true">
+                <i />
+                <i />
+                <i />
+              </div>
+            </article>
+            <div className="teacher-section-title">
+              <h2>Your teaching tools</h2>
+              <span className="teacher-muted">Made for your day</span>
+            </div>
             <div className="teacher-actions">
               <button onClick={() => onCapture("lookup")}>
-                <span>01</span>
-                <strong>Know your student</strong>
-                <small>Look up learning strengths and support needs</small>
+                <span className="teacher-tool-icon">
+                  <ToolIcon name="Students" />
+                </span>
+                <strong>Student insights</strong>
+                <small>See strengths & support needs</small>
               </button>
               <button onClick={() => onCapture("mark")}>
-                <span>02</span>
-                <strong>Review a paper</strong>
-                <small>Capture, check the reading, then record marks</small>
+                <span className="teacher-tool-icon">
+                  <ToolIcon name="paper" />
+                </span>
+                <strong>Mark a paper</strong>
+                <small>Capture, review & record</small>
               </button>
             </div>
             <div className="teacher-section-title">
@@ -273,8 +353,7 @@ export function TeacherWorkspace({
               </button>
             </div>
             <p className="teacher-muted">
-              School-wide schedule in the server’s local time; not a personal
-              teaching assignment.
+              School-wide schedule · School server time
             </p>
             {context?.current_period && (
               <>
@@ -288,8 +367,8 @@ export function TeacherWorkspace({
               context.upcoming_periods.length === 0 && (
                 <p>No current or upcoming lessons recorded.</p>
               )}
-            <aside className="teacher-card">
-              <h3>Ready for class?</h3>
+            <aside className="teacher-card teacher-tip">
+              <h3>A thoughtful teaching partner</h3>
               <p>
                 Connect Rokid, check the school server, then open Lens. Review
                 AI suggestions before recording marks.
