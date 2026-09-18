@@ -2,7 +2,7 @@ import { test } from "node:test";
 import { strict as assert } from "node:assert";
 
 import { BrilliantAdapter, BrilliantGlasses, type BrilliantBleLike } from "../src/adapters/brilliant/BrilliantAdapter";
-import { MentraAdapter, type MentraClient } from "../src/adapters/mentra/MentraAdapter";
+import { MentraAdapter, MentraGlasses, toK9State, type MentraClient } from "../src/adapters/mentra/MentraAdapter";
 import { CLEAR_DISPLAY, displayText } from "../src/adapters/brilliant/frameLua";
 
 /** Stands in for brilliant-ble's BrilliantBle, which needs a browser. */
@@ -72,25 +72,118 @@ test("the Brilliant adapter is unavailable without WebBluetooth", async () => {
 test("the Mentra adapter stays unavailable until the mobile app injects its client", async () => {
   const withoutClient = new MentraAdapter({ client: null });
   assert.equal(await withoutClient.isAvailable(), false);
-  await assert.rejects(() => withoutClient.discover(), /React Native app only/);
+  await assert.rejects(() => withoutClient.discover(), /React Native or native app only/);
+});
 
-  const client: MentraClient = {
-    scan: async () => [{ id: "g1", model: "Even Realities G1" }],
+/** The documented Mentra Live surface: camera by webhook, mic, battery, no display. */
+function fakeMentra(overrides: Partial<MentraClient> = {}): MentraClient {
+  return {
+    scan: async () => [{ id: "g1", name: "Mentra Live", model: "Mentra Live" }],
     connect: async () => undefined,
     disconnect: async () => undefined,
-    features: async () => ({ display: true, microphone: true }),
-    displayText: async () => undefined,
-    clearDisplay: async () => undefined,
+    requestPhoto: async (options) => ({ uploadUrl: options.webhookUrl, contentType: "image/jpeg" }),
+    setMicState: async () => undefined,
     batteryPercent: async () => 64,
+    ...overrides,
   };
-  const adapter = new MentraAdapter({ client });
+}
+
+test("Mentra Live reports camera and microphone but never a display", async () => {
+  // The Bluetooth SDK's documented feature set has no screen — display output
+  // belongs to the Miniapp SDK. Claiming one here would turn a missing feature
+  // into a silent no-op.
+  const adapter = new MentraAdapter({ client: fakeMentra() });
   assert.equal(await adapter.isAvailable(), true);
   const [device] = await adapter.discover();
+  assert.equal(device!.model, "Mentra Live");
+
   const glasses = await adapter.open(device!);
   await glasses.connect();
   const caps = await glasses.getCapabilities();
-  assert.equal(caps.display, true);
-  assert.equal(caps.camera, false, "no takePhoto means no camera capability");
+  assert.equal(caps.display, false);
+  assert.equal(caps.camera, true);
+  assert.equal(caps.microphone, true);
   assert.equal(await glasses.battery(), 64);
-  await assert.rejects(() => glasses.camera.capture(), /no camera/);
+  await assert.rejects(() => glasses.display.text("hello"), /no display|display/i);
+});
+
+test("capture() refuses rather than pretending it can return bytes", async () => {
+  // requestPhoto() uploads to a webhook and never hands the app the JPEG, so
+  // the Uint8Array contract cannot be honoured. Failing loudly beats returning
+  // an empty buffer to keep the types quiet.
+  const adapter = new MentraAdapter({ client: fakeMentra() });
+  const glasses = await adapter.open((await adapter.discover())[0]!);
+  await glasses.connect();
+  await assert.rejects(() => glasses.camera.capture(), /webhook/);
+});
+
+test("a photo is uploaded to the school server, not a vendor cloud", async () => {
+  let asked: { webhookUrl: string; authToken?: string } | null = null;
+  const adapter = new MentraAdapter({
+    client: fakeMentra({
+      requestPhoto: async (options) => {
+        asked = options;
+        return { uploadUrl: options.webhookUrl };
+      },
+    }),
+    photoTarget: { baseUrl: "http://192.168.1.10:8088/", token: "teacher-jwt" },
+  });
+  const glasses = (await adapter.open((await adapter.discover())[0]!)) as MentraGlasses;
+  await glasses.connect();
+  await glasses.requestPhotoToK9({ mode: "mark", sessionId: 7, examId: 3 });
+
+  const sent = asked as unknown as { webhookUrl: string; authToken?: string };
+  assert.ok(sent, "requestPhoto was never called");
+  assert.match(sent.webhookUrl, /^http:\/\/192\.168\.1\.10:8088\/api\/v1\/teacher-lens\/mentra\/photo\?/);
+  assert.match(sent.webhookUrl, /mode=mark/);
+  assert.match(sent.webhookUrl, /sessionId=7/);
+  assert.match(sent.webhookUrl, /examId=3/);
+  assert.equal(sent.authToken, "teacher-jwt", "the teacher's own JWT authenticates the upload");
+});
+
+test("without a school server to upload to, the photo request is refused", async () => {
+  const adapter = new MentraAdapter({ client: fakeMentra() });
+  const glasses = (await adapter.open((await adapter.discover())[0]!)) as MentraGlasses;
+  await glasses.connect();
+  await assert.rejects(() => glasses.requestPhotoToK9(), /no K9 photo target/);
+});
+
+test("the SDK's own event names reach K9's", async () => {
+  let emit: ((event: { type: string; payload?: Record<string, unknown> }) => void) | null = null;
+  const adapter = new MentraAdapter({
+    client: fakeMentra({
+      subscribe: (handler) => {
+        emit = handler;
+        return () => undefined;
+      },
+    }),
+  });
+  const glasses = await adapter.open((await adapter.discover())[0]!);
+  await glasses.connect();
+
+  const shutters: string[] = [];
+  let battery = 0;
+  glasses.on("shutter", (e) => shutters.push(e.source));
+  glasses.on("battery", (e) => (battery = e.percent));
+
+  const fire = emit as unknown as (event: { type: string; payload?: Record<string, unknown> }) => void;
+  fire({ type: "button_press" });
+  fire({ type: "touch_event" });
+  fire({ type: "battery_status", payload: { percent: 41 } });
+  // Not K9's business — belongs to the shell, and must not be mapped onto
+  // something that means something else.
+  fire({ type: "mic_pcm", payload: {} });
+
+  assert.deepEqual(shutters, ["button", "touch"]);
+  assert.equal(battery, 41);
+});
+
+test("bonding and a half-booted connection are not 'connected'", async () => {
+  // A session that is connected but not fullyBooted cannot be handed a
+  // shutter press yet, so K9 must not report it as ready.
+  assert.equal(toK9State("bonding"), "connecting");
+  assert.equal(toK9State("scanning"), "connecting");
+  assert.equal(toK9State("connected", false), "connecting");
+  assert.equal(toK9State("connected", true), "connected");
+  assert.equal(toK9State("disconnected"), "disconnected");
 });

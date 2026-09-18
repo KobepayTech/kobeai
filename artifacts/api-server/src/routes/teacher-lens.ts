@@ -1,4 +1,5 @@
 import express, { Router, type Request, type Response } from "express";
+import multer from "multer";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { pool } from "@workspace/db";
@@ -29,6 +30,12 @@ import {
 } from "../lib/results";
 
 const router = Router();
+
+// Mentra uploads a photo as multipart form-data to a webhook, so this one
+// route needs a multipart parser. Memory storage with the same 6 MB ceiling
+// the raw-frame route uses: the bytes go straight to the frame directory and
+// are never held beyond the request.
+const lensPhotoUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 6 * 1024 * 1024 } });
 
 // Teacher-lens is a staff surface — the teacher wearing the phone/glasses
 // authenticates as themselves, not as a shared kiosk. That way every
@@ -773,88 +780,182 @@ router.get(
  * can't fill the frame directory. The route uses its own body parser
  * because the app-level express.json() would otherwise reject non-JSON.
  */
+/**
+ * The shared frame-ingest path. Every way a photo can reach K9 — the Teacher
+ * Lens PWA posting raw JPEG, or Mentra glasses uploading to the webhook below
+ * — lands here, so there is exactly one place that writes a frame, enqueues
+ * the vision question and whispers back.
+ */
+async function ingestLensFrame(args: {
+  bytes: Buffer;
+  mode: string;
+  sessionId: number | null;
+  examId: number | null;
+  teacherUserId: number | null;
+}): Promise<{ request: Awaited<ReturnType<typeof enqueueVisionAnalysis>> | null; image_key: string | null; error?: string }> {
+  await ensureTables();
+  const kind = args.mode === "mark" ? "mark_paper" : "lookup";
+  // The exam picked on the mark sheet tells the brain the subject and total.
+  const exam = kind === "mark_paper" && args.examId ? await getExam(args.examId).catch(() => null) : null;
+
+  const framesDir = resolve(process.env["KOBEAI_LENS_FRAMES_DIR"] ?? "/var/lib/kobeai/lens-frames");
+  const today = new Date().toISOString().slice(0, 10);
+  const dayDir = join(framesDir, today);
+  try {
+    await mkdir(dayDir, { recursive: true });
+  } catch (err) {
+    // Directory creation can fail on read-only sandboxes — still enqueue
+    // the request with a null image path so the worker sees the event.
+    logger.warn(
+      { err: err instanceof Error ? err.message : String(err), dayDir },
+      "lens frame dir mkdir failed; enqueueing without image",
+    );
+  }
+  const stamp = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+  const filename = `${stamp}.${kind}.jpg`;
+  const fullPath = join(dayDir, filename);
+  let key: string | null = null;
+  try {
+    await writeFile(fullPath, args.bytes);
+    key = join(today, filename);
+  } catch (err) {
+    logger.warn({ err: err instanceof Error ? err.message : String(err) }, "lens frame write failed");
+  }
+
+  // Enqueue the appropriate vision question. Priority 3 (higher than
+  // the auto-enqueued wrong_location questions from presence).
+  const question =
+    kind === "mark_paper"
+      ? "OCR this student paper and extract per-question (question_number, question_text, question_topic, student_answer, expected_answer, is_correct) items. Return JSON."
+      : "Face-recognise the closest / largest face in this frame and return the matched student_code + confidence. Return JSON.";
+  let request;
+  try {
+    request = await enqueueVisionAnalysis({
+      question,
+      reason: `lens:${kind}`,
+      requestedBy: args.teacherUserId,
+      priority: 3,
+      context: {
+        image_key: key,
+        image_bytes: args.bytes.length,
+        lens_session_id: args.sessionId,
+        lens_mode: args.mode,
+        ...(exam ? { exam_id: exam.id, subject: exam.subject, total_marks: exam.total_marks } : {}),
+      },
+    });
+  } catch (err) {
+    return { request: null, image_key: key, error: err instanceof Error ? err.message : "enqueue_failed" };
+  }
+
+  // Also drop a whisper so the teacher hears "sent to Kobe" immediately —
+  // the worker's actual answer will replace that once it's ready.
+  await enqueueWhisper({
+    sessionId: args.sessionId,
+    teacherUserId: args.teacherUserId,
+    text: kind === "mark_paper" ? "Paper sent to Kobe." : "Looking that student up.",
+    priority: 7,
+  }).catch(() => undefined);
+
+  return { request, image_key: key };
+}
+
+/**
+ * POST /v1/teacher-lens/frame
+ * Accepts a raw JPEG frame from the lens client. Saves it to
+ * KOBEAI_LENS_FRAMES_DIR (default /var/lib/kobeai/lens-frames), enqueues
+ * a vision-analysis request that a Youtu-VL / SCRFD worker drains, and
+ * returns immediately with the storage key + queue id. The client then
+ * polls /v1/vision/analyze/pending... via the worker path OR (simpler)
+ * awaits a whisper on /whisper/next once the worker completes.
+ *
+ * The body is raw octet-stream — capped at 6 MB so a lens client
+ * can't fill the frame directory. The route uses its own body parser
+ * because the app-level express.json() would otherwise reject non-JSON.
+ */
 router.post(
   "/v1/teacher-lens/frame",
   express.raw({ type: ["image/jpeg", "image/png", "application/octet-stream"], limit: "6mb" }),
   requireTeacher,
   async (req, res) => {
-    await ensureTables();
     if (!Buffer.isBuffer(req.body) || req.body.length < 512) {
       res.status(400).json({ error: "empty or too-small image body" });
       return;
     }
     const sessionId = Number(req.header("x-lens-session-id"));
     const mode = text(req.header("x-lens-mode"), 40) ?? "lookup";
-    const kind = mode === "mark" ? "mark_paper" : "lookup";
-    // The exam picked on the mark sheet tells the brain the subject and total.
-    const examId = kind === "mark_paper" ? positiveInt(req.header("x-lens-exam-id")) : null;
-    const exam = examId ? await getExam(examId).catch(() => null) : null;
-
-    const framesDir = resolve(process.env["KOBEAI_LENS_FRAMES_DIR"] ?? "/var/lib/kobeai/lens-frames");
-    const today = new Date().toISOString().slice(0, 10);
-    const dayDir = join(framesDir, today);
-    try {
-      await mkdir(dayDir, { recursive: true });
-    } catch (err) {
-      // Directory creation can fail on read-only sandboxes — still enqueue
-      // the request with a null image path so the worker sees the event.
-      logger.warn(
-        { err: err instanceof Error ? err.message : String(err), dayDir },
-        "lens frame dir mkdir failed; enqueueing without image",
-      );
-    }
-    const stamp = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
-    const filename = `${stamp}.${kind}.jpg`;
-    const fullPath = join(dayDir, filename);
-    let key: string | null = null;
-    try {
-      await writeFile(fullPath, req.body);
-      key = join(today, filename);
-    } catch (err) {
-      logger.warn(
-        { err: err instanceof Error ? err.message : String(err) },
-        "lens frame write failed",
-      );
-    }
-
-    // Enqueue the appropriate vision question. Priority 3 (higher than
-    // the auto-enqueued wrong_location questions from presence).
-    const question =
-      kind === "mark_paper"
-        ? "OCR this student paper and extract per-question (question_number, question_text, question_topic, student_answer, expected_answer, is_correct) items. Return JSON."
-        : "Face-recognise the closest / largest face in this frame and return the matched student_code + confidence. Return JSON.";
-    let request;
-    try {
-      request = await enqueueVisionAnalysis({
-        question,
-        reason: `lens:${kind}`,
-        requestedBy: req.auth?.user_id ?? null,
-        priority: 3,
-        context: {
-          image_key: key,
-          image_bytes: req.body.length,
-          lens_session_id: Number.isFinite(sessionId) ? sessionId : null,
-          lens_mode: mode,
-          ...(exam ? { exam_id: exam.id, subject: exam.subject, total_marks: exam.total_marks } : {}),
-        },
-      });
-    } catch (err) {
-      res.status(500).json({
-        error: err instanceof Error ? err.message : "enqueue_failed",
-      });
+    const out = await ingestLensFrame({
+      bytes: req.body,
+      mode,
+      sessionId: Number.isFinite(sessionId) ? sessionId : null,
+      examId: mode === "mark" ? positiveInt(req.header("x-lens-exam-id")) : null,
+      teacherUserId: req.auth?.user_id ?? null,
+    });
+    if (out.error) {
+      res.status(500).json({ error: out.error });
       return;
     }
+    res.status(202).json({ request: out.request, image_key: out.image_key });
+  },
+);
 
-    // Also drop a whisper so the teacher hears "sent to Kobe" immediately —
-    // the worker's actual answer will replace that once it's ready.
-    await enqueueWhisper({
+/**
+ * POST /v1/teacher-lens/mentra/photo
+ * The webhook Mentra glasses upload a photo to.
+ *
+ * MentraOS's Bluetooth SDK does not hand the app photo bytes: `requestPhoto()`
+ * takes a `webhookUrl` and an optional bearer `authToken`, and the JPEG is
+ * POSTed there as multipart form-data with a `photo` file and a `requestId`.
+ * The call resolves only once that upload has succeeded.
+ *
+ * That turns out to suit K9 exactly. Point the webhook at THIS endpoint on the
+ * school's own server and the photo goes glasses → teacher's phone → school
+ * LAN, and never near a vendor cloud — the same promise the rest of K9 makes.
+ * The auth token is the teacher's ordinary JWT, so the frame is attributed to
+ * the person wearing the glasses like any other lens frame.
+ *
+ * Mentra keeps `requestId` as the correlation key, so it is echoed back
+ * alongside K9's own queue id.
+ */
+router.post(
+  "/v1/teacher-lens/mentra/photo",
+  requireTeacher,
+  lensPhotoUpload.single("photo"),
+  async (req, res) => {
+    const file = (req as Request & { file?: { buffer: Buffer } }).file;
+    if (!file?.buffer || file.buffer.length < 512) {
+      res.status(400).json({ error: "no photo in the upload" });
+      return;
+    }
+    // Mentra sends its own requestId in the form body; the mode and session
+    // ride along as fields the shell sets when it calls requestPhoto().
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const mentraRequestId = text(body["requestId"], 120);
+    const mode = text(body["mode"], 40) ?? "lookup";
+    const sessionId = Number(body["sessionId"]);
+    const out = await ingestLensFrame({
+      bytes: file.buffer,
+      mode,
       sessionId: Number.isFinite(sessionId) ? sessionId : null,
+      examId: mode === "mark" ? positiveInt(body["examId"]) : null,
       teacherUserId: req.auth?.user_id ?? null,
-      text: kind === "mark_paper" ? "Paper sent to Kobe." : "Looking that student up.",
-      priority: 7,
-    }).catch(() => undefined);
-
-    res.status(202).json({ request, image_key: key });
+    });
+    if (out.error) {
+      res.status(500).json({ error: out.error });
+      return;
+    }
+    logger.info(
+      { mentraRequestId, mode, bytes: file.buffer.length },
+      "mentra glasses photo received",
+    );
+    // The SDK reads the webhook's JSON back as photo metadata, so give it the
+    // fields it understands plus K9's own ids.
+    res.status(202).json({
+      requestId: mentraRequestId,
+      contentType: "image/jpeg",
+      fileSizeBytes: file.buffer.length,
+      image_key: out.image_key,
+      request: out.request,
+    });
   },
 );
 
