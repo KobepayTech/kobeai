@@ -19,11 +19,11 @@ import org.json.JSONObject
  */
 class HeyCyanHardware(private val activity: MainActivity, private val address: String,
                       private val onLost: () -> Unit) : Hardware {
-    private var connected = false
+    @Volatile private var connected = false
     private var registered = false
-    private var closed = false
+    @Volatile private var closed = false
     private var ready = CompletableDeferred<Unit>()
-    private var photo: CompletableDeferred<ByteArray>? = null
+    @Volatile private var photo: CompletableDeferred<ByteArray>? = null
     private val receiver = object : QCBluetoothCallbackCloneReceiver() {
         override fun connectStatue(device: BluetoothDevice?, connected: Boolean) {
             if (!connected && !closed) {
@@ -77,6 +77,10 @@ class HeyCyanHardware(private val activity: MainActivity, private val address: S
                 // Acceptance is not capture completion. Wait for notify + JPEG.
             }
             return withTimeout(25_000) { pending.await() }
+        } catch (e: Exception) {
+            // Retire this BLE connection so a delayed preview cannot satisfy
+            // the next capture request. Reconnection creates fresh listeners.
+            disconnect(); onLost(); throw e
         } finally { if (photo === pending) photo = null }
     }
     override suspend fun disconnect() {
