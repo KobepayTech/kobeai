@@ -125,3 +125,40 @@ test("bridge times out when native host does not reply", async () => {
   const transport = new NativeTransport({ postMessage() {} }, 5);
   await assert.rejects(transport.request("capture"), /timed out/);
 });
+
+test("an interactive pairing outlasts the default budget, an automatic reconnect does not", async () => {
+  // The Android host puts a password dialog and Android's document picker in
+  // front of the teacher during a first Rokid pairing, so a budget sized for a
+  // machine-to-machine call expires while they are still reading. An automatic
+  // reconnect has nobody in front of it and must still fail fast.
+  const silent = new NativeTransport({ postMessage() {} }, 30);
+  const adapter = new NativeAdapter(silent);
+  const device = await adapter.open({
+    id: "rokid",
+    vendor: "native",
+    model: "Rokid Glasses",
+  });
+
+  await assert.rejects(
+    device.connect({ automatic: true }),
+    /timed out/,
+    "an unattended reconnect should give up on the default budget",
+  );
+
+  const interactive = device.connect().then(
+    () => "settled",
+    () => "settled",
+  );
+  const outcome = await Promise.race([
+    interactive,
+    new Promise((resolve) => setTimeout(() => resolve("still waiting"), 200)),
+  ]);
+  assert.equal(
+    outcome,
+    "still waiting",
+    "an interactive pairing must not be cut short while the teacher is mid-dialog",
+  );
+  // Release the long timer, or the test run holds the event loop open for it.
+  silent.dispose();
+  await interactive;
+});

@@ -22,6 +22,13 @@ export type NativeProvider = "rokid" | "heycyan" | "rayneo";
 export type NativeHost = { postMessage(message: string): void };
 export type NativeReply = { id: string; result?: unknown; error?: string };
 
+/**
+ * Budget for an interactive `connect`, which includes however long the teacher
+ * takes over the native pairing dialogs. Kept above the Android host's own
+ * interactive budget so the host's message is what the teacher sees.
+ */
+export const INTERACTIVE_CONNECT_TIMEOUT_MS = 11 * 60_000;
+
 /** Origin-restricted WebMessage bridge supplied by the Android Lens app. No network listener. */
 export class NativeTransport {
   private sequence = 0;
@@ -37,7 +44,18 @@ export class NativeTransport {
     private host: NativeHost,
     private timeoutMs = 90_000,
   ) {}
-  request<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
+  /**
+   * `timeoutMs` overrides the default budget for one call. A machine-to-machine
+   * call should be given the default; a call that waits on the teacher — the
+   * first Rokid pairing puts a password dialog and Android's document picker in
+   * front of them — needs far longer, and must outlast the native side's own
+   * budget so the reply that arrives is the native error, not a bare timeout.
+   */
+  request<T>(
+    method: string,
+    params: Record<string, unknown> = {},
+    timeoutMs = this.timeoutMs,
+  ): Promise<T> {
     const id = String(++this.sequence);
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -45,7 +63,7 @@ export class NativeTransport {
         reject(
           new Error(`Glasses ${method} timed out. Reconnect and try again.`),
         );
-      }, this.timeoutMs);
+      }, timeoutMs);
       this.pending.set(id, {
         resolve: resolve as (value: unknown) => void,
         reject,
@@ -131,10 +149,17 @@ export class NativeGlasses implements KobeGlasses {
     try {
       const result = await this.transport.request<{
         capabilities: Partial<GlassesCapabilities>;
-      }>("connect", {
-        provider: this.id,
-        ...(options.automatic ? { automatic: true } : {}),
-      });
+      }>(
+        "connect",
+        {
+          provider: this.id,
+          ...(options.automatic ? { automatic: true } : {}),
+        },
+        // An automatic reconnect is unattended and should fail fast. A manual
+        // one may sit on the vendor's setup dialogs; see INTERACTIVE_BUDGET_MS
+        // in the Android host, which this must stay above.
+        options.automatic ? undefined : INTERACTIVE_CONNECT_TIMEOUT_MS,
+      );
       this.caps = capabilities({
         camera: result.capabilities.camera === true,
         display: result.capabilities.display === true,

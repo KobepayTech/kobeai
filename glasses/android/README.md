@@ -7,11 +7,11 @@ No alternate database or AI cloud is introduced.
 
 ## Hardware paths
 
-| Build | Install on | SDK binding | Exposed today |
-|---|---|---|---|
-| `companion` / Rokid | Teacher's Android phone (Android 10+) | xg.glass `RokidGlassesClient` → Rokid CXR-M | JPEG capture, text display, vendor TTS |
+| Build                 | Install on                            | SDK binding                                                                    | Exposed today                                                                      |
+| --------------------- | ------------------------------------- | ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------- |
+| `companion` / Rokid   | Teacher's Android phone (Android 10+) | xg.glass `RokidGlassesClient` → Rokid CXR-M                                    | JPEG capture, text display, vendor TTS                                             |
 | `companion` / HeyCyan | Teacher's Android phone (Android 10+) | Vendor `glasses_sdk_20250723_v01.aar`, `BleOperateManager`, `LargeDataHandler` | BLE connection + fresh AI-preview JPEG capture; phone TTS follows OS audio routing |
-| `rayneo` | RayNeo X2 itself | xg.glass `RayNeoRuntimeGlassesClient` (Camera2 on glasses) | JPEG capture, runtime text display; speech uses Android TTS if installed |
+| `rayneo`              | RayNeo X2 itself                      | xg.glass `RayNeoRuntimeGlassesClient` (Camera2 on glasses)                     | JPEG capture, runtime text display; speech uses Android TTS if installed           |
 
 These are implemented bindings, **not a hardware certification**. RayNeo X3 Pro
 is untested upstream. RayNeo Air display-only models cannot use this runtime.
@@ -61,6 +61,10 @@ Gradle wrapper is from xg.glass commit `c697e7faadde27762c9aa3954f6ed7e65961c28f
    in Lens. The bearer token stays in the existing app's local storage, not in
    the glasses firmware. Android backup is disabled for this app.
 4. Choose the glasses type and tap **Connect**. Grant the requested permissions.
+   From Android 12 these are nearby-device permissions only: `BLUETOOTH_SCAN` is
+   declared `neverForLocation`, so no location permission is requested and the
+   Precise/Approximate choice cannot block a pairing. Android 10–11, where a BLE
+   scan genuinely requires it, still asks for location.
    - Rokid: enter the developer client secret and select the device-SN `.lc`
      licence downloaded from the Rokid developer console. After successful pairing, both are encrypted on this phone using Android Keystore.
    - HeyCyan: choose the device from the native BLE scan. Disconnect the HeyCyan
@@ -115,9 +119,19 @@ automatic reconnection; explicitly connecting Rokid enables it again.
 
 A connected-device foreground service keeps the current SDK session eligible
 while the app is minimised. Android shows an ongoing connection notification with
-a Pause action. Dropped Rokid connections retry at 3, 6, 12, 24, 48 then 60-second
+a Pause action — which on Android 13+ requires `POST_NOTIFICATIONS`, asked for
+alongside the Bluetooth permissions on a Rokid connect. It is asked as an
+optional permission: refusing it costs the teacher the Pause action, not the
+glasses, so a denial never fails the connection. Dropped Rokid connections retry at 3, 6, 12, 24, 48 then 60-second
 intervals, with a 30-second attempt timeout. Photos and microphone recording are
 not started in the background. Signing out cancels retries and disconnects.
+
+First-time provisioning is interactive — a dialog for the developer client
+secret, then Android's document picker for the `.lc` licence — so that one call
+is given ten minutes rather than the 75 seconds every other bridge call gets.
+The previous flat budget expired while the picker was still open and reported
+the connection as failed. Unattended reconnects keep the short budget: nobody is
+waiting on a dialog, and a wedged one should give up quickly.
 
 The upstream Rokid client requires an Activity. Activity destruction, task
 removal, force-stop or process death ends this session; reopening the app resumes

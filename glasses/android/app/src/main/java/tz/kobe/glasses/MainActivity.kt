@@ -43,14 +43,14 @@ class MainActivity : AppCompatActivity() {
     private var hardwareConnected = false
     private var reconnectJob: Job? = null
     private var visible = false
-    private var permissionResult: CompletableDeferred<Boolean>? = null
+    private var permissionResult: CompletableDeferred<Map<String, Boolean>>? = null
     private var fileResult: CompletableDeferred<ByteArray>? = null
     private val gate = Mutex()
     private val permissionGate = Mutex()
     private val speechReady = CompletableDeferred<Unit>()
     private lateinit var tts: TextToSpeech
     private val permissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
-        permissionResult?.complete(result.values.all { it }); permissionResult = null
+        permissionResult?.complete(result); permissionResult = null
     }
     private val filePicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         try {
@@ -113,7 +113,7 @@ class MainActivity : AppCompatActivity() {
             lifecycleScope.launch {
                 val response = JSONObject().put("id", id)
                 try {
-                    val result = withTimeout(75_000) { gate.withLock { dispatch(request) } }
+                    val result = withTimeout(budgetFor(request)) { gate.withLock { dispatch(request) } }
                     response.put("result", result ?: JSONObject.NULL)
                 } catch (e: Exception) {
                     // Never include user credentials or raw vendor exceptions in a JS/log response.
@@ -127,6 +127,21 @@ class MainActivity : AppCompatActivity() {
             }
         }
         web.loadUrl("$ORIGIN/index.html")
+    }
+
+    /**
+     * A first Rokid pairing is a conversation with the teacher: a dialog to type
+     * the developer client secret into, then Android's document picker to find
+     * the device's .lc licence file, and only then the SDK handshake. The flat
+     * 75s budget was fine for every machine-to-machine call and wrong for this
+     * one — it expired while the picker was still open and told the teacher the
+     * connection had failed. Interactive setup gets its own budget; the rest are
+     * unchanged, so a wedged capture still gives up quickly.
+     */
+    private fun budgetFor(request: JSONObject): Long {
+        val interactive = request.optString("method") == "connect" &&
+            request.optJSONObject("params")?.optBoolean("automatic") != true
+        return if (interactive) INTERACTIVE_BUDGET_MS else DEFAULT_BUDGET_MS
     }
 
     private suspend fun dispatch(request: JSONObject): Any? {
@@ -211,13 +226,20 @@ class MainActivity : AppCompatActivity() {
     } }
     override fun onStart() { super.onStart(); visible = true }
     override fun onStop() { visible = false; super.onStop() }
-    suspend fun ensurePermissions(required: Array<String>) = permissionGate.withLock {
-        val missing = required.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
+    /**
+     * Asks for [required] and [optional] in one prompt. Only [required] can fail
+     * the call: a teacher who refuses notifications loses the Pause action in the
+     * connection notification, which is not a reason to refuse them their glasses.
+     */
+    suspend fun ensurePermissions(required: Array<String>, optional: Array<String> = emptyArray()) = permissionGate.withLock {
+        val granted = { permission: String -> ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED }
+        val missing = (required + optional).filter { !granted(it) }
         if (missing.isNotEmpty()) {
             check(permissionResult == null) { "Permission request still open" }
-            val pending = CompletableDeferred<Boolean>(); permissionResult = pending
+            val pending = CompletableDeferred<Map<String, Boolean>>(); permissionResult = pending
             permissions.launch(missing.toTypedArray())
-            check(pending.await()) { "Required permission denied" }
+            val result = pending.await()
+            check(required.all { result[it] ?: granted(it) }) { "Required permission denied" }
         }
     }
     suspend fun pickLicense(): ByteArray {
@@ -237,7 +259,14 @@ class MainActivity : AppCompatActivity() {
         if (::web.isInitialized) { WebViewCompat.removeWebMessageListener(web, "KobeNative"); web.destroy() }
         super.onDestroy()
     }
-    companion object { const val HOST = "appassets.androidplatform.net"; const val ORIGIN = "https://$HOST" }
+    companion object {
+        const val HOST = "appassets.androidplatform.net"
+        const val ORIGIN = "https://$HOST"
+        const val DEFAULT_BUDGET_MS = 75_000L
+        // Must stay below INTERACTIVE_CONNECT_TIMEOUT_MS in NativeAdapter.ts, so
+        // the teacher is shown this side's message rather than a bare JS timeout.
+        const val INTERACTIVE_BUDGET_MS = 10 * 60_000L
+    }
 }
 
 private fun java.io.InputStream.readBytesBounded(max: Int): ByteArray {

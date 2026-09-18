@@ -21,13 +21,31 @@ object ProviderFactory {
     val providers = listOf("rokid", "heycyan")
     suspend fun create(activity: MainActivity, provider: String, scope: CoroutineScope, automatic: Boolean = false, onLost: () -> Unit): Hardware {
         require(provider in providers)
-        val permissions = mutableListOf(Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION)
-        if (Build.VERSION.SDK_INT >= 31) permissions += listOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
+        // From API 31 the manifest declares BLUETOOTH_SCAN neverForLocation, so a
+        // BLE scan needs no location permission at all. Asking anyway was not
+        // harmless: Android 12+ offers the teacher Precise or Approximate, and
+        // picking Approximate leaves ACCESS_FINE_LOCATION denied — which the
+        // all-granted checks below then turned into a refused Rokid connection,
+        // over a permission this app never uses to locate anyone. Only API 29–30,
+        // where a BLE scan genuinely requires it, still asks.
+        val permissions = mutableListOf<String>()
+        if (Build.VERSION.SDK_INT >= 31) {
+            permissions += listOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
+        } else {
+            permissions += listOf(Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION)
+        }
         if (Build.VERSION.SDK_INT >= 33) permissions += Manifest.permission.NEARBY_WIFI_DEVICES
+        // Rokid holds the connection open behind a foreground-service notification
+        // whose Pause action is the only way to stop automatic reconnection from
+        // outside the app. On API 33+ that notification is silently suppressed
+        // without POST_NOTIFICATIONS, so ask — but never fail the connection over
+        // it, which is why it is optional rather than required.
+        val optional = if (provider == "rokid" && Build.VERSION.SDK_INT >= 33)
+            arrayOf(Manifest.permission.POST_NOTIFICATIONS) else emptyArray<String>()
         if (automatic) {
             check(provider == "rokid" && RokidCredentials.automatic(activity)) { "Setup required" }
             check(permissions.all { ContextCompat.checkSelfPermission(activity, it) == PackageManager.PERMISSION_GRANTED }) { "Permissions required" }
-        } else activity.ensurePermissions(permissions.toTypedArray())
+        } else activity.ensurePermissions(permissions.toTypedArray(), optional)
         val bluetooth = activity.getSystemService(BluetoothManager::class.java).adapter
         check(bluetooth != null && bluetooth.isEnabled) { "Enable Bluetooth first" }
         return when (provider) {
