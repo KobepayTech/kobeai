@@ -69,7 +69,7 @@ export function Connections({
             <div>
               <span className="teacher-eyebrow">KobeAI · CONNECTIONS</span>
               <h1>Ready to connect</h1>
-              <p>Two connections. One teacher assistant.</p>
+              <p>One-time setup. Automatic reconnection.</p>
             </div>
             <button onClick={onClose}>Done</button>
           </header>
@@ -130,7 +130,11 @@ export function Connections({
                 </li>
               </ol>
               <p>
-                The licence and secret come from Rokid’s developer console; your
+                Setup is encrypted on this phone after a successful connection.
+                Rokid reconnects automatically when you return or the connection
+                drops. Android shows a connection notification while the app is
+                minimised. Use Forget pairing to remove the saved setup. The
+                licence and secret come from Rokid’s developer console; your
                 school password cannot replace them.
               </p>
             </details>

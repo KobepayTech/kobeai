@@ -146,6 +146,119 @@ const assert = require("node:assert/strict");
     "http://127.0.0.1:5178",
   );
   assert.deepEqual(errors, []);
+  // Native protocol fixture: returning teachers reconnect without a button or credentials in JS.
+  const nativePage = await browser.newPage({
+    viewport: { width: 390, height: 844 },
+  });
+  await nativePage.addInitScript(() => {
+    localStorage.setItem(
+      "k9-lens.auth",
+      JSON.stringify({
+        api_base: location.origin,
+        token: "native-teacher",
+        teacher_name: "Asha",
+      }),
+    );
+    window.nativeCalls = [];
+    let enabled = true,
+      connected = false,
+      provider = null;
+    window.KobeNative = {
+      postMessage(raw) {
+        const call = JSON.parse(raw);
+        window.nativeCalls.push(call);
+        let result = null;
+        if (call.method === "info")
+          result = {
+            version: 1,
+            providers: ["rokid"],
+            automaticRokid: enabled,
+            connected,
+            provider,
+          };
+        if (call.method === "connect") {
+          connected = true;
+          provider = "rokid";
+          result = {
+            capabilities: {
+              camera: true,
+              display: true,
+              speaker: true,
+              speechSynthesis: true,
+            },
+          };
+        }
+        if (["pause", "forget"].includes(call.method)) {
+          enabled = false;
+          connected = false;
+          provider = null;
+        }
+        if (call.method === "disconnect") {
+          connected = false;
+          provider = null;
+        }
+        setTimeout(
+          () =>
+            window.KobeNative.onmessage?.({
+              data: JSON.stringify({ id: call.id, result }),
+            }),
+          0,
+        );
+      },
+    };
+  });
+  await nativePage.route("**/api/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.includes("/whisper/next")) return route.fulfill({ status: 204 });
+    return route.fulfill({
+      json: path.endsWith("/session")
+        ? { session: { id: 20 } }
+        : { current_period: null, upcoming_periods: [] },
+    });
+  });
+  await nativePage.goto("http://127.0.0.1:5178");
+  await nativePage
+    .getByText("Rokid Glasses connected", { exact: true })
+    .waitFor();
+  assert.equal(
+    await nativePage.evaluate(
+      () =>
+        window.nativeCalls.find((c) => c.method === "connect").params.automatic,
+    ),
+    true,
+  );
+  await nativePage
+    .getByRole("button", {
+      name: "Connections: school server and Rokid glasses",
+    })
+    .click();
+  await nativePage.getByLabel("Camera source").selectOption("");
+  await nativePage
+    .getByRole("button", { name: "Connect", exact: true })
+    .click();
+  await nativePage.getByText(/automatic glasses connection paused/).waitFor();
+  const connectionCount = await nativePage.evaluate(
+    () => window.nativeCalls.filter((c) => c.method === "connect").length,
+  );
+  await nativePage.waitForTimeout(3500);
+  assert.equal(
+    await nativePage.evaluate(
+      () => window.nativeCalls.filter((c) => c.method === "connect").length,
+    ),
+    connectionCount,
+  );
+  await nativePage.getByRole("button", { name: "Forget pairing" }).click();
+  await nativePage.getByText(/Pairing removed/).waitFor();
+  await nativePage
+    .getByRole("button", { name: "Change server / sign in" })
+    .click();
+  await nativePage
+    .getByRole("button", { name: "Sign in", exact: true })
+    .waitFor();
+  await nativePage.waitForFunction(
+    () => window.nativeCalls.at(-1).method === "disconnect",
+  );
+  await nativePage.close();
   await browser.close();
   console.log(
     "PASS: mobile dashboard, camera gating, student summary, authenticated observation, AI source, empty activity, sign-out",

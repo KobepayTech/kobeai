@@ -1,8 +1,9 @@
 # Rokid teacher workspace
 
 Rokid is the preferred device for the teacher companion app. On Android, Lens
-preselects Rokid when the native host advertises it; pairing still requires an
-explicit Connect action and the Rokid developer secret/device licence. The web
+preselects Rokid when the native host advertises it; first pairing requires an
+explicit Connect action and the Rokid developer secret/device licence. Subsequent
+sessions reuse encrypted provisioning and reconnect automatically. The web
 version offers the phone camera and explains where to connect Rokid.
 
 ## Teacher features

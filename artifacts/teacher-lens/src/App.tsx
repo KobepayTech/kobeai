@@ -1,3 +1,4 @@
+import { useServerConnection } from "./serverConnection";
 import { Connections } from "./Connections";
 import { TeacherWorkspace, type CaptureActivity } from "./TeacherWorkspace";
 import { useCamera } from "./camera";
@@ -832,6 +833,7 @@ function MarkPanel({
 // ---------------------------------------------------------------------------
 export function App() {
   const [auth, setAuth] = useState<StoredAuth | null>(() => loadAuth());
+  const serverStatus = useServerConnection(auth);
   const authRef = useRef(auth);
   authRef.current = auth;
   const [connectionsOpen, setConnectionsOpen] = useState(false);
@@ -1170,7 +1172,7 @@ export function App() {
         </button>
       </div>
 
-      {workspaceOpen && <TeacherWorkspace auth={auth} connected={glassesConnected} source={glassesSource} captures={captures}
+      {workspaceOpen && <TeacherWorkspace serverStatus={serverStatus} auth={auth} connected={glassesConnected} source={glassesSource} captures={captures}
         onConnections={() => setConnectionsOpen(true)} onClose={() => setWorkspaceOpen(false)} onCapture={next => { setMode(next); setWorkspaceOpen(false); }} onSpeak={speak} />}
       {toast && <div className="lens-toast">{toast}</div>}
 

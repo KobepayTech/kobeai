@@ -126,12 +126,15 @@ export class NativeGlasses implements KobeGlasses {
     this.id = device.id;
     this.model = device.model;
   }
-  async connect(): Promise<void> {
+  async connect(options: { automatic?: boolean } = {}): Promise<void> {
     this.state = "connecting";
     try {
       const result = await this.transport.request<{
         capabilities: Partial<GlassesCapabilities>;
-      }>("connect", { provider: this.id });
+      }>("connect", {
+        provider: this.id,
+        ...(options.automatic ? { automatic: true } : {}),
+      });
       this.caps = capabilities({
         camera: result.capabilities.camera === true,
         display: result.capabilities.display === true,

@@ -114,7 +114,9 @@ export function TeacherWorkspace({
   onClose,
   onSpeak,
   onConnections,
+  serverStatus,
 }: {
+  serverStatus: string;
   auth: TeacherAuth;
   connected: boolean;
   source: string | null;
@@ -274,11 +276,14 @@ export function TeacherWorkspace({
           <small>
             {connected
               ? "Ready for photos and teacher prompts"
-              : "Connect for hands-free teaching"}
+              : "Automatic after first setup"}
           </small>
         </div>
-        <span className="connection-link">Set up ↗</span>
+        <span className="connection-link">Settings ↗</span>
       </button>
+      <p className="teacher-muted" role="status">
+        {serverStatus}
+      </p>
       <nav className="teacher-nav" aria-label="Teacher tools">
         {["Today", "Students", "Ask Kobe", "Activity"].map((t) => (
           <button
