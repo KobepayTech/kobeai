@@ -18,7 +18,7 @@ import type {
   GlassesConnectionState,
 } from "../../core/KobeGlasses";
 
-export type NativeProvider = "rokid" | "heycyan" | "rayneo";
+export type NativeProvider = "rokid" | "rayneo";
 export type NativeHost = { postMessage(message: string): void };
 export type NativeReply = { id: string; result?: unknown; error?: string };
 
@@ -118,13 +118,12 @@ export class NativeAdapter implements GlassesAdapter {
       vendor: this.vendor,
       model: {
         rokid: "Rokid Glasses",
-        heycyan: "HeyCyan-compatible glasses",
         rayneo: "RayNeo on-glasses",
       }[provider],
     }));
   }
   async open(device: GlassesDescriptor): Promise<NativeGlasses> {
-    if (!["rokid", "heycyan", "rayneo"].includes(device.id))
+    if (!["rokid", "rayneo"].includes(device.id))
       throw new Error("Unknown native glasses provider");
     return new NativeGlasses(device, this.transport);
   }

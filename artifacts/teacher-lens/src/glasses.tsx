@@ -48,8 +48,8 @@ export async function captureGlasses(): Promise<Blob | null> {
 export function speakThroughGlasses(text: string): boolean {
   const bridge = native();
   if (!bridge) return false;
-  // Native TTS follows the phone's selected Bluetooth audio output for HeyCyan;
-  // Rokid uses its SDK TTS. Errors are visible rather than silently discarded.
+  // Rokid speaks through its own SDK TTS; the phone's engine is the fallback
+  // when no glasses are connected. Errors are visible rather than discarded.
   const speech =
     active?.state === "connected"
       ? active.speaker.speak(text)

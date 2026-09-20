@@ -35,9 +35,9 @@ const jpeg = Uint8Array.from([255, 216, 255, 224, 1, 2, 255, 217]);
 
 test("native photo follows the authenticated K9 frame contract without a vendor cloud", async () => {
   const transport = fixture((method, params) => {
-    if (method === "info") return { version: 1, providers: ["heycyan"] };
+    if (method === "info") return { version: 1, providers: ["rokid"] };
     if (method === "connect") {
-      assert.equal(params.provider, "heycyan");
+      assert.equal(params.provider, "rokid");
       return { capabilities: { camera: true } };
     }
     if (method === "capture")

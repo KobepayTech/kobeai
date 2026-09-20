@@ -31,10 +31,6 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     implementation("io.github.hkust-spark:xgglass-core:0.3.0")
     "companionImplementation"("io.github.hkust-spark:xgglass-device-rokid:0.3.0")
-    "companionImplementation"(files("libs/glasses_sdk_20250723_v01.aar"))
-    "companionImplementation"("androidx.localbroadcastmanager:localbroadcastmanager:1.1.0")
-    "companionImplementation"("com.google.code.gson:gson:2.14.0")
-    "companionImplementation"("org.greenrobot:eventbus:3.2.0")
     "rayneoImplementation"("io.github.hkust-spark:xgglass-device-rayneo-runtime:0.3.0")
 }
 
@@ -44,8 +40,3 @@ tasks.register("verifyLensAssets") {
     } }
 }
 tasks.matching { it.name == "preBuild" }.configureEach { dependsOn("verifyLensAssets") }
-tasks.matching { it.name == "preCompanionDebugBuild" || it.name == "preCompanionReleaseBuild" }.configureEach {
-    doFirst { check(file("libs/glasses_sdk_20250723_v01.aar").isFile) {
-        "Supply the licensed HeyCyan SDK: python3 ../scripts/fetch_heycyan.py"
-    } }
-}

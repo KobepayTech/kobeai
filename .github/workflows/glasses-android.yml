@@ -49,9 +49,6 @@ jobs:
             sleep 1
           done
           NODE_PATH="$RUNNER_TEMP/lens-browser/node_modules" node artifacts/teacher-lens/tests/workspace.cjs
-      - name: Fetch pinned HeyCyan SDK for compilation only
-        run: python3 glasses/scripts/fetch_heycyan.py
       - name: Compile both native hardware variants
         working-directory: glasses/android
         run: ./gradlew :app:assembleCompanionDebug :app:assembleRayneoDebug --stacktrace
-      # Do not distribute an APK containing the proprietary SDK automatically.

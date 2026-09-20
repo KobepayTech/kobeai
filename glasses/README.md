@@ -18,16 +18,16 @@ Lens, classroom PC + TV, admin PC, parent phone, cameras, optional AR glasses).
 
 ## What is here
 
-| Path | What it is |
-|---|---|
-| `src/core/` | `KobeGlasses` interface, capabilities, typed events, adapter contract, `GlassesManager` |
-| `src/adapters/simulator/` | Software glasses that record what was shown and spoken — what the tests and laptop development run against |
-| `src/adapters/brilliant/` | Brilliant Labs Frame / Halo over WebBluetooth, including the Lua the Frame runs |
-| `src/adapters/mentra/` | MentraOS devices (Mentra Live, Even Realities, Vuzix Z100, NIMO) |
-| `src/adapters/native/` | Android WebMessage adapter for Rokid, HeyCyan and RayNeo, used by Teacher Lens |
-| `android/` | Native SDK bindings and bundled Teacher Lens app; [build and pairing guide](android/README.md) |
-| `src/k9/` | `K9Api` (the school server's existing lens endpoints) and `K9GlassesController` (lookup, marking, assistant, translate, safety) |
-| `tests/` | `node --test` over the simulator and both adapters, no hardware needed |
+| Path                      | What it is                                                                                                                      |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `src/core/`               | `KobeGlasses` interface, capabilities, typed events, adapter contract, `GlassesManager`                                         |
+| `src/adapters/simulator/` | Software glasses that record what was shown and spoken — what the tests and laptop development run against                      |
+| `src/adapters/brilliant/` | Brilliant Labs Frame / Halo over WebBluetooth, including the Lua the Frame runs                                                 |
+| `src/adapters/mentra/`    | MentraOS devices (Mentra Live, Even Realities, Vuzix Z100, NIMO)                                                                |
+| `src/adapters/native/`    | Android WebMessage adapter for Rokid and RayNeo, used by Teacher Lens                                                           |
+| `android/`                | Native SDK bindings and bundled Teacher Lens app; [build and pairing guide](android/README.md)                                  |
+| `src/k9/`                 | `K9Api` (the school server's existing lens endpoints) and `K9GlassesController` (lookup, marking, assistant, translate, safety) |
+| `tests/`                  | `node --test` over the simulator and both adapters, no hardware needed                                                          |
 
 ```cmd
 pnpm --filter @workspace/glasses run test
@@ -57,7 +57,6 @@ These are the facts the adapters are written against, not assumptions:
 - **Mentra** — now written against the published
   [API reference](https://docs.mentraglass.com/bluetooth-sdk/api-reference),
   not against guesses. Three of those facts contradict the obvious assumption:
-
   - **The Bluetooth SDK has no display.** It covers scanning, pairing, device
     status, microphone, camera, speaker, streaming, Wi-Fi and hardware events
     for Mentra Live. Screen output belongs to the separate **Miniapp SDK**, so
@@ -88,7 +87,7 @@ These are the facts the adapters are written against, not assumptions:
 - **Mentra Miniapp SDK** — the other half of Mentra's offering: `@mentra/miniapp`
   plus the `mentra-miniapp` CLI, a background JS layer driving the glasses and a
   React WebView UI layer, running on the phone inside the Mentra App with no
-  cloud. It *does* have display layouts, TTS, STT and translation. K9 does not
+  cloud. It _does_ have display layouts, TTS, STT and translation. K9 does not
   use it, for one blunt reason the docs state outright: **there is currently no
   way to distribute a miniapp built with the Miniapp SDK.** Until the Mentra
   Miniapp Store exists, a school cannot install one. Worth revisiting when it
@@ -107,8 +106,8 @@ These are the facts the adapters are written against, not assumptions:
   TypeScript binding**. It therefore cannot be a TypeScript adapter here. It
   is now used on the native side of `android/`. `NativeAdapter` in TypeScript
   calls the origin-restricted Android WebMessage bridge; it does not call Kotlin
-  methods directly. Rokid/HeyCyan use the phone build, while the RayNeo build
-  runs on the glasses. See the Android guide for licences and hardware gates.
+  methods directly. Rokid uses the phone build, while the RayNeo build runs on
+  the glasses. See the Android guide for licences and hardware gates.
 
 ## Local-first
 

@@ -7,11 +7,10 @@ No alternate database or AI cloud is introduced.
 
 ## Hardware paths
 
-| Build                 | Install on                            | SDK binding                                                                    | Exposed today                                                                      |
-| --------------------- | ------------------------------------- | ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------- |
-| `companion` / Rokid   | Teacher's Android phone (Android 10+) | xg.glass `RokidGlassesClient` → Rokid CXR-M                                    | JPEG capture, text display, vendor TTS                                             |
-| `companion` / HeyCyan | Teacher's Android phone (Android 10+) | Vendor `glasses_sdk_20250723_v01.aar`, `BleOperateManager`, `LargeDataHandler` | BLE connection + fresh AI-preview JPEG capture; phone TTS follows OS audio routing |
-| `rayneo`              | RayNeo X2 itself                      | xg.glass `RayNeoRuntimeGlassesClient` (Camera2 on glasses)                     | JPEG capture, runtime text display; speech uses Android TTS if installed           |
+| Build               | Install on                            | SDK binding                                                | Exposed today                                                            |
+| ------------------- | ------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `companion` / Rokid | Teacher's Android phone (Android 10+) | xg.glass `RokidGlassesClient` → Rokid CXR-M                | JPEG capture, text display, vendor TTS                                   |
+| `rayneo`            | RayNeo X2 itself                      | xg.glass `RayNeoRuntimeGlassesClient` (Camera2 on glasses) | JPEG capture, runtime text display; speech uses Android TTS if installed |
 
 These are implemented bindings, **not a hardware certification**. RayNeo X3 Pro
 is untested upstream. RayNeo Air display-only models cannot use this runtime.
@@ -22,30 +21,50 @@ OpenXR ARDK: Lens does not need a Unity scene or stereoscopic 3D renderer.
 Live glasses microphone input, continuous video, image display and sensor streams
 are deliberately not exposed in this bridge. The existing browser wake-word
 feature is separate and is not guaranteed inside Android WebView. Use the Lens
-shutter. HeyCyan preview images may be insufficient for small exam handwriting;
-use the phone camera until a sample confirms legibility. No direct full-resolution
-Wi-Fi album download or vendor assistant replacement is claimed.
+shutter. No direct full-resolution Wi-Fi album download or vendor assistant
+replacement is claimed.
+
+### Why HeyCyan was removed
+
+The companion build previously also bound a HeyCyan-compatible BLE device
+through a proprietary vendor AAR. It was dropped, because the trade was a bad
+one in all three directions:
+
+- **It could not do the main job.** Its capture path was
+  `LargeDataHandler.getPictureThumbnails` — a thumbnail over BLE. This file used
+  to warn that those previews "may be insufficient for small exam handwriting".
+  Reading a marked script is the product; Rokid captures 2400×1800 at q90 over
+  Wi-Fi P2P.
+- **It was half a device.** `display()` and `speak()` both raised, so it
+  advertised `{"camera": true}` and nothing else. The teacher whisper — the name,
+  the weak skill, what to ask next, on the lens — needs a display.
+- **There was no licence to ship it under.** The AAR came from a third-party
+  republication whose own README says "This SDK is proprietary software. Contact
+  HeyCyan for licensing information." Because `companion` is one flavour, that
+  binary rode along in every Rokid build too, guarded only by a comment.
+
+Rokid, by contrast, is an Apache-2.0 wrapper over a vendor SDK with a per-device
+`.lc` licence obtained from Rokid's own developer console — a relationship that
+can actually be entered.
 
 ## Build
 
-Requirements: JDK 17, Android SDK platform 36, pnpm 9.15.9, network access to
-Google/Maven Central/Rokid Maven/Gradle, and a vendor licence for SDK distribution.
+Requirements: JDK 17, Android SDK platform 36, pnpm 9.15.9, and network access to
+Google/Maven Central/Rokid Maven/Gradle.
 
 From the repository root:
 
 ```sh
 corepack pnpm@9.15.9 --filter @workspace/glasses --filter @workspace/teacher-lens --filter @workspace/scripts install --frozen-lockfile
 corepack pnpm@9.15.9 --filter @workspace/teacher-lens build
-python3 glasses/scripts/fetch_heycyan.py
 cd glasses/android
 ./gradlew :app:assembleCompanionDebug :app:assembleRayneoDebug
 ```
 
 Set `ANDROID_HOME` or an untracked `local.properties` with `sdk.dir` first.
-The AAR fetch pins commit `f76a8bf40928d96387d1cc28984e7a29a9cd7ad1` and verifies
-SHA-256. It is ignored by git, remains unmodified and is proprietary. Confirm the
-vendor's commercial terms before distributing the companion APK. The RayNeo build
-does not require the HeyCyan AAR. SDK build artifacts use xg.glass Maven 0.3.0.
+No proprietary binary is fetched or vendored: every SDK artifact resolves from
+Maven Central at xg.glass 0.3.0. Distributing the companion APK still needs a
+Rokid device licence, which is per device and comes from Rokid, not from us.
 
 `Glasses Android` CI compiles both variants without publishing APKs. The checked-in
 Gradle wrapper is from xg.glass commit `c697e7faadde27762c9aa3954f6ed7e65961c28f`.
@@ -67,9 +86,6 @@ Gradle wrapper is from xg.glass commit `c697e7faadde27762c9aa3954f6ed7e65961c28f
    scan genuinely requires it, still asks for location.
    - Rokid: enter the developer client secret and select the device-SN `.lc`
      licence downloaded from the Rokid developer console. After successful pairing, both are encrypted on this phone using Android Keystore.
-   - HeyCyan: choose the device from the native BLE scan. Disconnect the HeyCyan
-     app first if it holds the connection. Pair its audio output in Android's
-     Bluetooth settings to hear phone speech through the glasses.
    - RayNeo: run the RayNeo build on the glasses and allow Camera access.
 5. Choose **Lookup** or **Mark paper**, then tap the shutter. A real JPEG is
    required before upload. Results use the existing session and whisper queue.
@@ -101,8 +117,6 @@ For each sample record model, firmware, Android version and SDK licence:
 
 - https://github.com/hkust-spark/xg-glass-sdk — Android SDK, Apache-2.0; vendor
   dependencies carry their own licences.
-- https://github.com/ebowwa/HeyCyanSmartGlassesSDK — proprietary vendor SDK mirror,
-  development guide and sample. A generic W610 label does not prove compatibility.
 - https://ar.rokid.com/sprite?lang=en — Rokid developer authorization.
 
 The bridge is only exposed to the bundled asset origin's main frame. It does not
