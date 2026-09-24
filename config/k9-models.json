@@ -19,7 +19,8 @@
     "brain/existing holds hard links to the KobeOS GGUFs, so they take no extra disk space.",
     "Logical agents share resident models; there is not one model process per agent.",
     "Heavy models must be lazy-loaded or served as resident workers according to available GPU memory.",
-    "Anything under optional/ is a benchmark or hardware-tier alternative and is never required."
+    "Anything under optional/ is a benchmark or hardware-tier alternative and is never required.",
+    "`use` is the licence position for shipping a weight in a paid build: commercial | review | restricted. model_warehouse.route() refuses anything that is not 'commercial', so a restricted weight cannot reach a school by accident."
   ],
   "runtime": {
     "python": {
@@ -35,7 +36,13 @@
     "ollama": {
       "note": "K9's brain runs through Ollama, built from the registry files below by `node scripts/k9-models.mjs ollama-sync`. The api-server uses the first of these that Ollama has; OLLAMA_MODEL pins one instead.",
       "text_model": "qwen3_vl_8b",
-      "text_fallbacks": ["qwen", "mistral", "llama3", "phi3", "deepseek"],
+      "text_fallbacks": [
+        "qwen",
+        "mistral",
+        "llama3",
+        "phi3",
+        "deepseek"
+      ],
       "vision_note": "Models that can read a picture. The paper reader (photographed class lists and subject-option sheets) and any image question go here; a school without one types the names in by hand instead.",
       "vision_model": "qwen3_vl_8b",
       "vision_fallbacks": []
@@ -67,12 +74,12 @@
       {
         "from": "tencent/agents/hunyuan-0.5b-instruct",
         "to": "optional/unused/hunyuan-0.5b-instruct",
-        "note": "Not used by K9 (Hunyuan-4B covers this role) — safe to delete to reclaim disk space."
+        "note": "Not used by K9 (Hunyuan-4B covers this role) \u2014 safe to delete to reclaim disk space."
       },
       {
         "from": "tencent/agents/hunyuan-7b-instruct",
         "to": "optional/unused/hunyuan-7b-instruct",
-        "note": "Not used by K9 and only partially downloaded — safe to delete to reclaim disk space."
+        "note": "Not used by K9 and only partially downloaded \u2014 safe to delete to reclaim disk space."
       }
     ],
     "redundant_hard_links": [
@@ -89,13 +96,23 @@
   "models": {
     "qwen": {
       "category": "brain",
-      "role": "KobeOS text model (Qwen2.5-7B-Instruct) — K9's first fallback brain",
+      "role": "KobeOS text model (Qwen2.5-7B-Instruct) \u2014 K9's first fallback brain",
       "root": "base",
       "path": "qwen.gguf",
       "kind": "file",
       "required": true,
-      "source": { "type": "external", "note": "Owned by KobeOS at the models root; K9 never downloads or modifies it." },
-      "ollama": { "name": "k9-qwen", "parameters": { "temperature": 0.4, "num_ctx": 8192 } }
+      "source": {
+        "type": "external",
+        "note": "Owned by KobeOS at the models root; K9 never downloads or modifies it."
+      },
+      "ollama": {
+        "name": "k9-qwen",
+        "parameters": {
+          "temperature": 0.4,
+          "num_ctx": 8192
+        }
+      },
+      "use": "commercial"
     },
     "deepseek": {
       "category": "brain",
@@ -103,8 +120,18 @@
       "path": "brain/existing/deepseek.gguf",
       "kind": "file",
       "required": true,
-      "source": { "type": "link", "from": "base:deepseek.gguf" },
-      "ollama": { "name": "k9-deepseek", "parameters": { "temperature": 0.4, "num_ctx": 8192 } }
+      "source": {
+        "type": "link",
+        "from": "base:deepseek.gguf"
+      },
+      "ollama": {
+        "name": "k9-deepseek",
+        "parameters": {
+          "temperature": 0.4,
+          "num_ctx": 8192
+        }
+      },
+      "use": "commercial"
     },
     "llama3": {
       "category": "brain",
@@ -112,8 +139,18 @@
       "path": "brain/existing/llama3.gguf",
       "kind": "file",
       "required": true,
-      "source": { "type": "link", "from": "base:llama3.gguf" },
-      "ollama": { "name": "k9-llama3", "parameters": { "temperature": 0.4, "num_ctx": 8192 } }
+      "source": {
+        "type": "link",
+        "from": "base:llama3.gguf"
+      },
+      "ollama": {
+        "name": "k9-llama3",
+        "parameters": {
+          "temperature": 0.4,
+          "num_ctx": 8192
+        }
+      },
+      "use": "commercial"
     },
     "mistral": {
       "category": "brain",
@@ -121,8 +158,18 @@
       "path": "brain/existing/mistral.gguf",
       "kind": "file",
       "required": true,
-      "source": { "type": "link", "from": "base:mistral.gguf" },
-      "ollama": { "name": "k9-mistral", "parameters": { "temperature": 0.4, "num_ctx": 8192 } }
+      "source": {
+        "type": "link",
+        "from": "base:mistral.gguf"
+      },
+      "ollama": {
+        "name": "k9-mistral",
+        "parameters": {
+          "temperature": 0.4,
+          "num_ctx": 8192
+        }
+      },
+      "use": "commercial"
     },
     "phi3": {
       "category": "brain",
@@ -130,17 +177,30 @@
       "path": "brain/existing/phi3.gguf",
       "kind": "file",
       "required": true,
-      "source": { "type": "link", "from": "base:phi3.gguf" },
-      "ollama": { "name": "k9-phi3", "parameters": { "temperature": 0.4, "num_ctx": 8192 } }
+      "source": {
+        "type": "link",
+        "from": "base:phi3.gguf"
+      },
+      "ollama": {
+        "name": "k9-phi3",
+        "parameters": {
+          "temperature": 0.4,
+          "num_ctx": 8192
+        }
+      },
+      "use": "commercial"
     },
-
     "youtu_llm_2b": {
       "category": "tencent-agents",
       "role": "lightweight K9 agents",
       "path": "tencent/agents/youtu-llm-2b",
       "kind": "dir",
       "required": true,
-      "source": { "type": "hf", "repo": "tencent/Youtu-LLM-2B" }
+      "source": {
+        "type": "hf",
+        "repo": "tencent/Youtu-LLM-2B"
+      },
+      "use": "commercial"
     },
     "hunyuan_4b_instruct": {
       "category": "tencent-agents",
@@ -148,7 +208,11 @@
       "path": "tencent/agents/hunyuan-4b-instruct",
       "kind": "dir",
       "required": true,
-      "source": { "type": "hf", "repo": "tencent/Hunyuan-4B-Instruct" }
+      "source": {
+        "type": "hf",
+        "repo": "tencent/Hunyuan-4B-Instruct"
+      },
+      "use": "commercial"
     },
     "youtu_vl_4b_instruct": {
       "category": "tencent-vision",
@@ -156,7 +220,11 @@
       "path": "tencent/vision/youtu-vl-4b-instruct",
       "kind": "dir",
       "required": true,
-      "source": { "type": "hf", "repo": "tencent/Youtu-VL-4B-Instruct" }
+      "source": {
+        "type": "hf",
+        "repo": "tencent/Youtu-VL-4B-Instruct"
+      },
+      "use": "commercial"
     },
     "hunyuan_ocr_1_5": {
       "category": "tencent-ocr",
@@ -164,7 +232,15 @@
       "path": "tencent/ocr/hunyuan-ocr-1.5",
       "kind": "dir",
       "required": true,
-      "source": { "type": "hf", "repo": "tencent/HunyuanOCR", "exclude": ["v1.0/*", "dflash/*"] }
+      "source": {
+        "type": "hf",
+        "repo": "tencent/HunyuanOCR",
+        "exclude": [
+          "v1.0/*",
+          "dflash/*"
+        ]
+      },
+      "use": "commercial"
     },
     "tencentdb_agent_memory": {
       "category": "tencent-memory",
@@ -172,7 +248,11 @@
       "path": "tencent/memory/TencentDB-Agent-Memory",
       "kind": "repo",
       "required": true,
-      "source": { "type": "git", "url": "https://github.com/TencentCloud/TencentDB-Agent-Memory.git" }
+      "source": {
+        "type": "git",
+        "url": "https://github.com/TencentCloud/TencentDB-Agent-Memory.git"
+      },
+      "use": "commercial"
     },
     "romem": {
       "category": "tencent-memory",
@@ -180,16 +260,23 @@
       "path": "tencent/memory/RoMem",
       "kind": "repo",
       "required": true,
-      "source": { "type": "git", "url": "https://github.com/Tencent/RoMem.git" }
+      "source": {
+        "type": "git",
+        "url": "https://github.com/Tencent/RoMem.git"
+      },
+      "use": "commercial"
     },
-
     "yolo26m": {
       "category": "detection",
       "role": "always-on object / person detector",
       "path": "detection/yolo26m.pt",
       "kind": "file",
       "required": true,
-      "source": { "type": "link", "from": "base:Sports/shared/yolo26m.pt" }
+      "source": {
+        "type": "link",
+        "from": "base:Sports/shared/yolo26m.pt"
+      },
+      "use": "commercial"
     },
     "yolo26m_seg": {
       "category": "detection",
@@ -197,7 +284,11 @@
       "path": "detection/yolo26m-seg.pt",
       "kind": "file",
       "required": false,
-      "source": { "type": "link", "from": "base:Sports/shared/yolo26m-seg.pt" }
+      "source": {
+        "type": "link",
+        "from": "base:Sports/shared/yolo26m-seg.pt"
+      },
+      "use": "commercial"
     },
     "yolo26m_cls": {
       "category": "detection",
@@ -205,7 +296,11 @@
       "path": "detection/yolo26m-cls.pt",
       "kind": "file",
       "required": false,
-      "source": { "type": "link", "from": "base:Sports/shared/yolo26m-cls.pt" }
+      "source": {
+        "type": "link",
+        "from": "base:Sports/shared/yolo26m-cls.pt"
+      },
+      "use": "commercial"
     },
     "yoloe_26m_seg": {
       "category": "detection",
@@ -213,7 +308,11 @@
       "path": "detection/yoloe-26m-seg.pt",
       "kind": "file",
       "required": false,
-      "source": { "type": "link", "from": "base:Sports/shared/yoloe-26m-seg.pt" }
+      "source": {
+        "type": "link",
+        "from": "base:Sports/shared/yoloe-26m-seg.pt"
+      },
+      "use": "commercial"
     },
     "yolo26m_pose": {
       "category": "pose",
@@ -221,16 +320,23 @@
       "path": "pose/yolo26m-pose.pt",
       "kind": "file",
       "required": true,
-      "source": { "type": "link", "from": "base:Sports/shared/yolo26m-pose.pt" }
+      "source": {
+        "type": "link",
+        "from": "base:Sports/shared/yolo26m-pose.pt"
+      },
+      "use": "commercial"
     },
-
     "bytetrack": {
       "category": "tracking",
       "role": "single-camera tracking",
       "path": "tracking/ByteTrack",
       "kind": "repo",
       "required": true,
-      "source": { "type": "git", "url": "https://github.com/FoundationVision/ByteTrack.git" }
+      "source": {
+        "type": "git",
+        "url": "https://github.com/FoundationVision/ByteTrack.git"
+      },
+      "use": "commercial"
     },
     "deep_person_reid": {
       "category": "reid",
@@ -239,7 +345,11 @@
       "code": "torchreid/models/osnet_ain.py",
       "kind": "repo",
       "required": true,
-      "source": { "type": "git", "url": "https://github.com/KaiyangZhou/deep-person-reid.git" }
+      "source": {
+        "type": "git",
+        "url": "https://github.com/KaiyangZhou/deep-person-reid.git"
+      },
+      "use": "commercial"
     },
     "osnet_ain_x1_0_msmt17": {
       "category": "reid",
@@ -250,9 +360,12 @@
       ],
       "kind": "file",
       "required": true,
-      "source": { "type": "gdown", "id": "1SigwBE6mPdqiJMqhuIY4aqC7--5CsMal" }
+      "source": {
+        "type": "gdown",
+        "id": "1SigwBE6mPdqiJMqhuIY4aqC7--5CsMal"
+      },
+      "use": "commercial"
     },
-
     "yunet": {
       "category": "face",
       "role": "face detection",
@@ -260,7 +373,12 @@
       "weights": "face_detection_yunet_2023mar.onnx",
       "kind": "dir",
       "required": true,
-      "source": { "type": "hf", "repo": "opencv/face_detection_yunet" }
+      "source": {
+        "type": "hf",
+        "repo": "opencv/face_detection_yunet"
+      },
+      "capability": "face-detection",
+      "use": "commercial"
     },
     "sface": {
       "category": "face",
@@ -269,16 +387,24 @@
       "weights": "face_recognition_sface_2021dec.onnx",
       "kind": "dir",
       "required": true,
-      "source": { "type": "hf", "repo": "opencv/face_recognition_sface" }
+      "source": {
+        "type": "hf",
+        "repo": "opencv/face_recognition_sface"
+      },
+      "capability": "face-recognition",
+      "use": "commercial"
     },
-
     "pp_ocr_v6_tiny_det": {
       "category": "ocr",
       "role": "tiny edge OCR detector",
       "path": "ocr/pp-ocr-v6-tiny-det",
       "kind": "dir",
       "required": false,
-      "source": { "type": "hf", "repo": "PaddlePaddle/PP-OCRv6_tiny_det" }
+      "source": {
+        "type": "hf",
+        "repo": "PaddlePaddle/PP-OCRv6_tiny_det"
+      },
+      "use": "commercial"
     },
     "pp_ocr_v6_tiny_rec": {
       "category": "ocr",
@@ -286,7 +412,11 @@
       "path": "ocr/pp-ocr-v6-tiny-rec",
       "kind": "dir",
       "required": false,
-      "source": { "type": "hf", "repo": "PaddlePaddle/PP-OCRv6_tiny_rec" }
+      "source": {
+        "type": "hf",
+        "repo": "PaddlePaddle/PP-OCRv6_tiny_rec"
+      },
+      "use": "commercial"
     },
     "pp_ocr_v6_small_det": {
       "category": "ocr",
@@ -294,7 +424,11 @@
       "path": "ocr/pp-ocr-v6-small-det",
       "kind": "dir",
       "required": false,
-      "source": { "type": "hf", "repo": "PaddlePaddle/PP-OCRv6_small_det" }
+      "source": {
+        "type": "hf",
+        "repo": "PaddlePaddle/PP-OCRv6_small_det"
+      },
+      "use": "commercial"
     },
     "pp_ocr_v6_small_rec": {
       "category": "ocr",
@@ -302,7 +436,11 @@
       "path": "ocr/pp-ocr-v6-small-rec",
       "kind": "dir",
       "required": false,
-      "source": { "type": "hf", "repo": "PaddlePaddle/PP-OCRv6_small_rec" }
+      "source": {
+        "type": "hf",
+        "repo": "PaddlePaddle/PP-OCRv6_small_rec"
+      },
+      "use": "commercial"
     },
     "pp_ocr_v6_medium_det": {
       "category": "ocr",
@@ -310,7 +448,11 @@
       "path": "ocr/pp-ocr-v6-medium-det",
       "kind": "dir",
       "required": true,
-      "source": { "type": "hf", "repo": "PaddlePaddle/PP-OCRv6_medium_det" }
+      "source": {
+        "type": "hf",
+        "repo": "PaddlePaddle/PP-OCRv6_medium_det"
+      },
+      "use": "commercial"
     },
     "pp_ocr_v6_medium_rec": {
       "category": "ocr",
@@ -318,9 +460,12 @@
       "path": "ocr/pp-ocr-v6-medium-rec",
       "kind": "dir",
       "required": true,
-      "source": { "type": "hf", "repo": "PaddlePaddle/PP-OCRv6_medium_rec" }
+      "source": {
+        "type": "hf",
+        "repo": "PaddlePaddle/PP-OCRv6_medium_rec"
+      },
+      "use": "commercial"
     },
-
     "silero_vad": {
       "category": "audio",
       "role": "voice activity detection",
@@ -328,7 +473,12 @@
       "weights": "src/silero_vad/data/silero_vad.jit",
       "kind": "repo",
       "required": true,
-      "source": { "type": "git", "url": "https://github.com/snakers4/silero-vad.git" }
+      "source": {
+        "type": "git",
+        "url": "https://github.com/snakers4/silero-vad.git"
+      },
+      "capability": "vad",
+      "use": "commercial"
     },
     "whisper_large_v3_turbo": {
       "category": "audio",
@@ -336,7 +486,12 @@
       "path": "audio/whisper-large-v3-turbo",
       "kind": "dir",
       "required": true,
-      "source": { "type": "hf", "repo": "openai/whisper-large-v3-turbo" }
+      "source": {
+        "type": "hf",
+        "repo": "openai/whisper-large-v3-turbo"
+      },
+      "capability": "speech-to-text",
+      "use": "commercial"
     },
     "titanet_large": {
       "category": "audio",
@@ -344,7 +499,12 @@
       "path": "audio/titanet-large",
       "kind": "dir",
       "required": true,
-      "source": { "type": "hf", "repo": "nvidia/speakerverification_en_titanet_large" }
+      "source": {
+        "type": "hf",
+        "repo": "nvidia/speakerverification_en_titanet_large"
+      },
+      "capability": "speaker-id",
+      "use": "commercial"
     },
     "pyannote_segmentation_3_0": {
       "category": "audio",
@@ -353,8 +513,15 @@
       "kind": "dir",
       "required": true,
       "gated": true,
-      "expect": ["pytorch_model.bin"],
-      "source": { "type": "hf", "repo": "pyannote/segmentation-3.0" }
+      "expect": [
+        "pytorch_model.bin"
+      ],
+      "source": {
+        "type": "hf",
+        "repo": "pyannote/segmentation-3.0"
+      },
+      "capability": "speaker-segmentation",
+      "use": "review"
     },
     "pyannote_speaker_diarization_3_1": {
       "category": "audio",
@@ -363,26 +530,44 @@
       "kind": "dir",
       "required": true,
       "gated": true,
-      "expect": ["config.yaml"],
-      "source": { "type": "hf", "repo": "pyannote/speaker-diarization-3.1" }
+      "expect": [
+        "config.yaml"
+      ],
+      "source": {
+        "type": "hf",
+        "repo": "pyannote/speaker-diarization-3.1"
+      },
+      "capability": "diarization",
+      "use": "review"
     },
-
     "bge_m3": {
       "category": "embeddings",
       "role": "school knowledge and memory embeddings",
       "path": "embeddings/bge-m3",
       "kind": "dir",
       "required": true,
-      "source": { "type": "hf", "repo": "BAAI/bge-m3", "exclude": ["onnx/*"] }
+      "source": {
+        "type": "hf",
+        "repo": "BAAI/bge-m3",
+        "exclude": [
+          "onnx/*"
+        ]
+      },
+      "capability": "embeddings",
+      "use": "commercial"
     },
-
     "kokoro_82m": {
       "category": "tts",
       "role": "local English voice output",
       "path": "tts/kokoro-82m",
       "kind": "dir",
       "required": true,
-      "source": { "type": "hf", "repo": "hexgrad/Kokoro-82M" }
+      "source": {
+        "type": "hf",
+        "repo": "hexgrad/Kokoro-82M"
+      },
+      "capability": "text-to-speech",
+      "use": "commercial"
     },
     "piper_swahili": {
       "category": "tts",
@@ -395,103 +580,174 @@
         "sw/sw_CD/lanfrica/medium/MODEL_CARD"
       ],
       "required": true,
-      "source": { "type": "hf-files", "repo": "rhasspy/piper-voices" }
+      "source": {
+        "type": "hf-files",
+        "repo": "rhasspy/piper-voices"
+      },
+      "capability": "text-to-speech",
+      "use": "commercial"
     },
-
     "rtdetr_v2_r50vd": {
       "category": "optional-detection",
       "role": "alternative all-box detector benchmark",
       "path": "optional/detection/rtdetr-v2-r50vd",
-      "legacy_paths": ["detection/rtdetr-v2-r50vd"],
+      "legacy_paths": [
+        "detection/rtdetr-v2-r50vd"
+      ],
       "kind": "dir",
       "required": false,
-      "source": { "type": "hf", "repo": "PekingU/RTDetrV2_r50vd" }
+      "source": {
+        "type": "hf",
+        "repo": "PekingU/RTDetrV2_r50vd"
+      },
+      "use": "commercial"
     },
     "yolo_master": {
       "category": "optional-detection",
       "role": "Tencent YOLO-Master runtime / source",
       "path": "optional/detection/YOLO-Master",
-      "legacy_paths": ["tencent/vision/YOLO-Master"],
+      "legacy_paths": [
+        "tencent/vision/YOLO-Master"
+      ],
       "kind": "repo",
       "required": false,
-      "source": { "type": "git", "url": "https://github.com/Tencent/YOLO-Master.git" }
+      "source": {
+        "type": "git",
+        "url": "https://github.com/Tencent/YOLO-Master.git"
+      },
+      "use": "commercial"
     },
     "yolo_master_esmoe_n": {
       "category": "optional-detection",
       "role": "Tencent detector, low-power tier",
       "path": "optional/detection/YOLO-Master-EsMoE-N.pt",
-      "legacy_paths": ["tencent/vision/YOLO-Master-EsMoE-N.pt"],
+      "legacy_paths": [
+        "tencent/vision/YOLO-Master-EsMoE-N.pt"
+      ],
       "kind": "file",
       "required": false,
-      "source": { "type": "url", "url": "https://github.com/Tencent/YOLO-Master/releases/download/YOLO-Master-v26.02/YOLO-Master-EsMoE-N.pt" }
+      "source": {
+        "type": "url",
+        "url": "https://github.com/Tencent/YOLO-Master/releases/download/YOLO-Master-v26.02/YOLO-Master-EsMoE-N.pt"
+      },
+      "use": "commercial"
     },
     "yolo_master_esmoe_s": {
       "category": "optional-detection",
       "role": "Tencent detector, balanced tier",
       "path": "optional/detection/YOLO-Master-EsMoE-S.pt",
-      "legacy_paths": ["tencent/vision/YOLO-Master-EsMoE-S.pt"],
+      "legacy_paths": [
+        "tencent/vision/YOLO-Master-EsMoE-S.pt"
+      ],
       "kind": "file",
       "required": false,
-      "source": { "type": "url", "url": "https://github.com/Tencent/YOLO-Master/releases/download/YOLO-Master-v26.02/YOLO-Master-EsMoE-S.pt" }
+      "source": {
+        "type": "url",
+        "url": "https://github.com/Tencent/YOLO-Master/releases/download/YOLO-Master-v26.02/YOLO-Master-EsMoE-S.pt"
+      },
+      "use": "commercial"
     },
     "yolo_master_esmoe_m": {
       "category": "optional-detection",
       "role": "Tencent detector, high-accuracy tier",
       "path": "optional/detection/YOLO-Master-EsMoE-M.pt",
-      "legacy_paths": ["tencent/vision/YOLO-Master-EsMoE-M.pt"],
+      "legacy_paths": [
+        "tencent/vision/YOLO-Master-EsMoE-M.pt"
+      ],
       "kind": "file",
       "required": false,
-      "source": { "type": "url", "url": "https://github.com/Tencent/YOLO-Master/releases/download/YOLO-Master-v26.02/YOLO-Master-EsMoE-M.pt" }
+      "source": {
+        "type": "url",
+        "url": "https://github.com/Tencent/YOLO-Master/releases/download/YOLO-Master-v26.02/YOLO-Master-EsMoE-M.pt"
+      },
+      "use": "commercial"
     },
     "yolo_world": {
       "category": "optional-detection",
       "role": "open-vocabulary detector runtime / source",
       "path": "optional/detection/YOLO-World",
-      "legacy_paths": ["tencent/vision/YOLO-World"],
+      "legacy_paths": [
+        "tencent/vision/YOLO-World"
+      ],
       "kind": "repo",
       "required": false,
-      "source": { "type": "git", "url": "https://github.com/AILab-CVC/YOLO-World.git", "recursive": true }
+      "source": {
+        "type": "git",
+        "url": "https://github.com/AILab-CVC/YOLO-World.git",
+        "recursive": true
+      },
+      "use": "commercial"
     },
     "yolo_world_v2_1": {
       "category": "optional-detection",
       "role": "open-vocabulary visual search weights",
       "path": "optional/detection/yolo-world-v2.1-weights",
-      "legacy_paths": ["tencent/vision/yolo-world-v2.1-weights"],
+      "legacy_paths": [
+        "tencent/vision/yolo-world-v2.1-weights"
+      ],
       "kind": "dir",
       "required": false,
-      "source": { "type": "hf", "repo": "wondervictor/YOLO-World-V2.1" }
+      "source": {
+        "type": "hf",
+        "repo": "wondervictor/YOLO-World-V2.1"
+      },
+      "use": "commercial"
     },
     "locate_anything_3b": {
       "category": "optional-vision",
       "role": "precision visual grounding",
       "path": "optional/vision/locateanything-3b",
-      "legacy_paths": ["vision/locateanything-3b"],
+      "legacy_paths": [
+        "vision/locateanything-3b"
+      ],
       "kind": "dir",
       "required": false,
-      "source": { "type": "hf", "repo": "nvidia/LocateAnything-3B" }
+      "source": {
+        "type": "hf",
+        "repo": "nvidia/LocateAnything-3B"
+      },
+      "use": "commercial"
     },
     "qwen3_vl_8b": {
       "category": "brain",
-      "role": "K9 brain — Qwen3-VL-8B-Instruct: teacher and classroom assistant, marking help, image questions",
+      "role": "K9 brain \u2014 Qwen3-VL-8B-Instruct: teacher and classroom assistant, marking help, image questions",
       "path": "brain/qwen3-vl-8b",
       "kind": "dir",
       "required": true,
-      "expect": ["model.safetensors.index.json", "*.safetensors"],
-      "source": { "type": "external", "note": "Qwen models are managed outside the K9 downloader." },
+      "expect": [
+        "model.safetensors.index.json",
+        "*.safetensors"
+      ],
+      "source": {
+        "type": "external",
+        "note": "Qwen models are managed outside the K9 downloader."
+      },
       "ollama": {
         "name": "k9-qwen3-vl",
         "quantize": "q4_K_M",
-        "parameters": { "temperature": 0.7, "top_p": 0.8, "top_k": 20, "num_ctx": 8192 }
-      }
+        "parameters": {
+          "temperature": 0.7,
+          "top_p": 0.8,
+          "top_k": 20,
+          "num_ctx": 8192
+        }
+      },
+      "use": "commercial"
     },
     "paddleocr_vl_1_6": {
       "category": "optional-ocr",
       "role": "document / layout OCR benchmark",
       "path": "optional/ocr/paddleocr-vl-1.6",
-      "legacy_paths": ["ocr/paddleocr-vl-1.6"],
+      "legacy_paths": [
+        "ocr/paddleocr-vl-1.6"
+      ],
       "kind": "dir",
       "required": false,
-      "source": { "type": "hf", "repo": "PaddlePaddle/PaddleOCR-VL-1.6" }
+      "source": {
+        "type": "hf",
+        "repo": "PaddlePaddle/PaddleOCR-VL-1.6"
+      },
+      "use": "commercial"
     }
   }
 }
