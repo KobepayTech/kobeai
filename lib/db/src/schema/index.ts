@@ -2684,3 +2684,47 @@ export const classroomAnswerQueueTable = pgTable(
 );
 export type ClassroomAnswerQueueItem =
   typeof classroomAnswerQueueTable.$inferSelect;
+
+/**
+ * What a student did on their own tablet.
+ *
+ * Every interaction is recorded; `moves_mastery` says whether the evidence gate
+ * (`lib/evidence.ts`) judged it a measurement. Storing the verdict alongside
+ * the event means a later change to the rules can be replayed against what
+ * actually happened, rather than silently rewriting history — and it makes the
+ * rule auditable: anyone can ask how many hinted answers were ever counted as
+ * mastery, and the answer should be none.
+ *
+ * Attribution needs no gate here. A tablet session is authoritative identity;
+ * the child signed in.
+ */
+export const studentInteractionsTable = pgTable(
+  "student_interactions",
+  {
+    id: serial("id").primaryKey(),
+    student_id: integer("student_id")
+      .notNull()
+      .references(() => usersTable.id, { onDelete: "cascade" }),
+    /** One of lib/evidence.ts EVIDENCE_KINDS. */
+    kind: text("kind").notNull(),
+    subject: text("subject"),
+    skill_id: integer("skill_id").references(() => skillsTable.id, {
+      onDelete: "set null",
+    }),
+    /** Was help given before this attempt? A hinted right answer is not mastery. */
+    assisted: boolean("assisted").notNull().default(false),
+    correct: boolean("correct"),
+    moves_mastery: boolean("moves_mastery").notNull().default(false),
+    detail: text("detail"),
+    created_at: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    student_time_idx: index("student_interactions_student_time_idx").on(
+      t.student_id,
+      t.created_at,
+    ),
+    // The audit query: which interactions were ever allowed to move mastery.
+    moves_idx: index("student_interactions_moves_idx").on(t.moves_mastery, t.created_at),
+  }),
+);
+export type StudentInteraction = typeof studentInteractionsTable.$inferSelect;
