@@ -134,6 +134,19 @@ the TypeScript API. Two implementations of one rule is a divergence risk, so
 if they disagree. If the live gate ever stopped matching the measured gate, the
 number the school was given would stop describing what its classroom does.
 
+## The SQL has been run
+
+Every table, index and query in this feature has been created and exercised
+against a real Postgres — `db-integration.test.ts`, skipped unless
+`K9_TEST_DATABASE_URL` is set. That covers what typechecking cannot: the
+enrolment transaction, the `NOT NULL` consent columns refusing an insert, the
+partial unique indexes, the `ON CONFLICT … WHERE` clauses, the interval casts,
+and that `rosterFor()` excludes an expired profile in the query rather than
+afterwards.
+
+It is not a substitute for running the models. It removes one class of "works
+until 8am on a school day" from the other.
+
 ## Roster scope
 
 Identification compares against **the class in the room**, never the whole
