@@ -399,13 +399,32 @@ export function computeMastery(observations: Observation[], now = new Date()): M
  * uncertain: sending a teacher after a 20% built on one question wastes the
  * intervention that a 43% built on nine would have earned.
  */
-export function priorityScore(m: { mastery: number; confidence: number; trend: number }): number {
+/**
+ * How badly this student needs help on this skill.
+ *
+ * `recent_questions` is how a classroom question reaches the teacher without
+ * ever touching a mastery score. Asking is not evidence of weakness — the most
+ * curious student in the room asks the most questions — so it never moves
+ * mastery. What it does is break the tie between two topics a student is
+ * equally weak at: the one they asked about is the one they are ready to hear
+ * an answer to. It multiplies the gap rather than adding to it, so a student
+ * who has mastered a skill has a gap of zero and no number of questions can
+ * manufacture a reason to reteach it.
+ */
+export function priorityScore(m: {
+  mastery: number;
+  confidence: number;
+  trend: number;
+  recent_questions?: number;
+}): number {
   const gap = Math.max(0, WEAK_THRESHOLD + 20 - m.mastery);
   const evidence = m.confidence / 100;
   // A student already climbing needs less help than one standing still at the
   // same score, so improvement discounts the priority rather than hiding it.
   const momentum = m.trend > 10 ? 0.7 : m.trend < -10 ? 1.2 : 1;
-  return Math.round(gap * evidence * momentum);
+  // Capped, so one talkative child cannot dominate a class list.
+  const asked = Math.min(3, Math.max(0, m.recent_questions ?? 0));
+  return Math.round(gap * evidence * momentum * (1 + asked * 0.17));
 }
 
 const clamp = (n: number) => Math.max(0, Math.min(100, Math.round(n)));
@@ -715,7 +734,13 @@ export async function studentSkillProfile(studentCode: string): Promise<StudentS
     .innerJoin(skillsTable, eq(skillsTable.id, studentSkillMasteryTable.skill_id))
     .where(eq(studentSkillMasteryTable.student_id, student.id));
 
-  const skills: SkillRow[] = rows.map((r) => ({ ...r, priority: priorityScore(r) }));
+  // What they asked about lately breaks ties between equally weak skills — see
+  // priorityScore. It never reaches `mastery`, which stays the teacher's alone.
+  const asked = await recentQuestionCounts(student.id);
+  const skills: SkillRow[] = rows.map((r) => ({
+    ...r,
+    priority: priorityScore({ ...r, recent_questions: asked.get(r.skill_id) ?? 0 }),
+  }));
 
   const bySubject = new Map<string, SkillRow[]>();
   for (const s of skills) {
@@ -959,4 +984,141 @@ export async function skillsByCode(codes: string[]): Promise<Map<string, Skill>>
   if (codes.length === 0) return new Map();
   const rows = await db.select().from(skillsTable).where(inArray(skillsTable.code, codes));
   return new Map(rows.map((r) => [r.code, r]));
+}
+
+// ===========================================================================
+// Classroom questions.
+//
+// A second kind of evidence, kept strictly apart from the first.
+//
+//   a marked paper   → what a student can DO             → mastery
+//   a spoken question → what they are THINKING ABOUT     → priority only
+//
+// They are never added together. Mastery answers "how good are they at this",
+// and only a teacher's mark can answer that. Feeding questions into it would
+// invert the measurement: the most curious child in the room asks the most
+// questions, and a lost, silent one asks none. recomputeMastery() reads
+// observations alone, and classroom-questions.test.ts fails the build if
+// anything below ever reaches that table.
+// ===========================================================================
+
+/** How far back a question still counts towards priority. */
+export const QUESTION_WINDOW_DAYS = 14;
+
+export type ClassroomQuestionInput = {
+  /** Null when the speaker gate refused to name anyone. The question still counts. */
+  studentId: number | null;
+  classId: number | null;
+  subject: string | null;
+  periodId: number | null;
+  questionText: string;
+  source?: string;
+  attributionConfidence?: number | null;
+  insightId?: number | null;
+};
+
+/**
+ * Place a classroom question on the syllabus and record it.
+ *
+ * An unmappable question is still stored with a null skill: a lesson's worth of
+ * questions nobody could place is exactly the signal that the taxonomy is
+ * missing a topic.
+ */
+export async function ingestClassroomQuestion(
+  input: ClassroomQuestionInput,
+): Promise<{ id: number; skill_id: number | null } | null> {
+  const text = input.questionText.trim();
+  if (!text) return null;
+
+  // The same mapper marked papers use, so a spoken question and an exam item
+  // about the same thing land on the same skill. Keyword-first and cached,
+  // which matters here: classroom questions arrive far faster than marked
+  // papers and repeat far more, so the model is consulted for a phrasing once
+  // rather than once per child who asks it.
+  const match = await mapToSkill(input.subject, text);
+
+  const { rows } = await pool.query(
+    `INSERT INTO classroom_skill_questions
+       (student_id, class_id, skill_id, subject, period_id, question_text,
+        source, mapped_by, map_confidence, attribution_confidence, insight_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+     ON CONFLICT (insight_id) WHERE insight_id IS NOT NULL DO NOTHING
+     RETURNING id, skill_id`,
+    [
+      input.studentId,
+      input.classId,
+      match?.skill.id ?? null,
+      input.subject,
+      input.periodId,
+      text.slice(0, 800),
+      input.source ?? "classroom_voice",
+      match?.mapped_by ?? null,
+      match?.confidence ?? null,
+      input.attributionConfidence ?? null,
+      input.insightId ?? null,
+    ],
+  );
+  if (!rows.length) return null; // already ingested
+  return { id: rows[0].id as number, skill_id: rows[0].skill_id as number | null };
+}
+
+/** Recent question counts for one student, keyed by skill. */
+export async function recentQuestionCounts(
+  studentId: number,
+  windowDays = QUESTION_WINDOW_DAYS,
+): Promise<Map<number, number>> {
+  const { rows } = await pool.query(
+    `SELECT skill_id, COUNT(*)::int AS n
+       FROM classroom_skill_questions
+      WHERE student_id = $1
+        AND skill_id IS NOT NULL
+        AND asked_at > now() - ($2 || ' days')::interval
+      GROUP BY skill_id`,
+    [studentId, String(windowDays)],
+  );
+  return new Map(rows.map((r) => [r.skill_id as number, r.n as number]));
+}
+
+export type SkillDemand = {
+  skill_id: number | null;
+  code: string | null;
+  name: string;
+  subject: string | null;
+  questions: number;
+  students: number;
+};
+
+/**
+ * What a class asked about, most-asked first.
+ *
+ * `students` is counted separately from `questions` on purpose: one child
+ * asking eight times about fractions is a conversation with that child, while
+ * eight children asking once is tomorrow's lesson. A single count conflates
+ * them and points the teacher at the wrong intervention.
+ *
+ * Unattributed questions still count, because nobody needs to be named for
+ * "this class is stuck on elimination" to be true and useful.
+ */
+export async function classSkillDemand(
+  classId: number,
+  sinceDays = 7,
+  limit = 10,
+): Promise<SkillDemand[]> {
+  const { rows } = await pool.query(
+    `SELECT q.skill_id,
+            s.code,
+            COALESCE(s.name, 'Unplaced questions') AS name,
+            COALESCE(s.subject, q.subject) AS subject,
+            COUNT(*)::int AS questions,
+            COUNT(DISTINCT q.student_id)::int AS students
+       FROM classroom_skill_questions q
+       LEFT JOIN skills s ON s.id = q.skill_id
+      WHERE q.class_id = $1
+        AND q.asked_at > now() - ($2 || ' days')::interval
+      GROUP BY q.skill_id, s.code, s.name, s.subject, q.subject
+      ORDER BY students DESC, questions DESC
+      LIMIT $3`,
+    [classId, String(sinceDays), limit],
+  );
+  return rows as SkillDemand[];
 }

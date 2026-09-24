@@ -270,3 +270,44 @@ rate above, in the open, with a school choosing to opt in.
 It is also not a ranking. Mastery is per skill and per student; there is no
 league table in this subsystem and adding one would change what teachers mark
 for.
+
+## Classroom questions: a second kind of evidence
+
+K9's classroom listener maps spoken questions onto the same skills marked
+papers use, so a teacher's summary can name the topic — "11 students asked
+about negative multiplication" — rather than just count questions.
+
+**Questions never move a mastery score.** They live in
+`classroom_skill_questions`, not `skill_observations`, and `recomputeMastery()`
+reads observations alone. The reason is not tidiness:
+
+> A confident, curious student asks the most questions. A lost, silent one asks
+> none. Score them by what they asked and the curious child looks weak, the
+> struggling child looks fine, and the class learns that asking is punished.
+
+A marked paper is evidence of what a student can *do*. A question is evidence
+of what they are *thinking about*. Both are useful; adding them together
+inverts what mastery measures. `classroom-questions.test.ts` fails the build if
+anything in the classroom path ever reaches `skill_observations` — and it was
+checked against a deliberately introduced violation, not just observed to pass.
+
+What a question does move is **priority** — which topic to reteach next.
+`priorityScore()` takes a `recent_questions` count and multiplies the existing
+gap by up to 1.5. Multiplying rather than adding is the safeguard: a student
+who has mastered a skill has a gap of zero, so no number of questions about it
+can manufacture a reason to reteach. Curiosity breaks ties between two skills a
+student is equally weak at; it never outranks a genuinely weaker one. The lift
+caps at three questions, so one talkative child cannot dominate a class list.
+
+### Unattributed questions still count
+
+`classroom_skill_questions.student_id` is nullable, because
+`docs/K9_VOICE_IDENTITY.md` expects the speaker gate to refuse attribution
+often — and refusing is correct behaviour, not a failure. A question with no
+name attached keeps its full class-level value. `classSkillDemand()` counts
+questions and distinct students separately, since one child asking eight times
+about fractions is a conversation with that child, while eight children asking
+once is tomorrow's lesson. `GET /v1/staff/classroom-insights/demand` serves it.
+
+So the teacher-intelligence half of the classroom design works whether or not
+voice identification turns out to be viable.

@@ -2510,3 +2510,80 @@ export const voiceAuditTable = pgTable(
   }),
 );
 export type VoiceAudit = typeof voiceAuditTable.$inferSelect;
+
+/**
+ * Classroom questions, mapped to the skill they were about.
+ *
+ * This is deliberately NOT `skill_observations`, and the distinction is the
+ * whole design. An observation is a mark a teacher awarded: evidence of what a
+ * student can *do*. A question is evidence of what a student is *thinking
+ * about*, and the two must never be added together.
+ *
+ * Feeding questions into mastery would invert the thing it is meant to measure.
+ * A confident, curious student asks the most questions; a lost, silent one asks
+ * none. Score them by what they asked and the curious child looks weak and the
+ * struggling child looks fine — and worse, the class learns that asking is
+ * punished. `recomputeMastery()` reads only `skill_observations`, so nothing
+ * here can reach a mastery score.
+ *
+ * What a question does move is *priority*: which topic to reteach, and to whom.
+ * "Eleven children asked about negative multiplication this week" is the single
+ * most useful line on a teacher's end-of-lesson summary, and it needs no one to
+ * be named.
+ *
+ * `student_id` is nullable on purpose. When voice identification refuses to
+ * attribute — which `docs/K9_VOICE_IDENTITY.md` expects to be common — the
+ * question is still worth every bit of its class-level value. A question with
+ * no name attached is not a failure; guessing the name would be.
+ */
+export const classroomSkillQuestionsTable = pgTable(
+  "classroom_skill_questions",
+  {
+    id: serial("id").primaryKey(),
+    /** Null whenever attribution was refused. The question still counts. */
+    student_id: integer("student_id").references(() => usersTable.id, {
+      onDelete: "cascade",
+    }),
+    class_id: integer("class_id").references(() => classesTable.id, {
+      onDelete: "set null",
+    }),
+    /** Null when the mapper could not place the question on the syllabus. */
+    skill_id: integer("skill_id").references(() => skillsTable.id, {
+      onDelete: "set null",
+    }),
+    subject: text("subject"),
+    period_id: integer("period_id"),
+    question_text: text("question_text").notNull(),
+    // 'classroom_voice' | 'kobe_chat' | 'lens'
+    source: text("source").notNull().default("classroom_voice"),
+    // 'keyword' | 'model' | 'topic' — how this question reached this skill.
+    mapped_by: text("mapped_by"),
+    map_confidence: integer("map_confidence"),
+    /** 0-100 from the speaker gate, kept so a threshold change can be replayed. */
+    attribution_confidence: integer("attribution_confidence"),
+    /** The `classroom_discussion_insights` row this came from. */
+    insight_id: integer("insight_id"),
+    asked_at: timestamp("asked_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    skill_time_idx: index("classroom_questions_skill_time_idx").on(
+      t.skill_id,
+      t.asked_at,
+    ),
+    class_time_idx: index("classroom_questions_class_time_idx").on(
+      t.class_id,
+      t.asked_at,
+    ),
+    student_time_idx: index("classroom_questions_student_time_idx").on(
+      t.student_id,
+      t.asked_at,
+    ),
+    // One question per insight row. Re-running the mapper over a lesson must
+    // not make a topic look twice as asked-about as it was.
+    insight_idx: uniqueIndex("classroom_questions_insight_idx")
+      .on(t.insight_id)
+      .where(sql`insight_id IS NOT NULL`),
+  }),
+);
+export type ClassroomSkillQuestion =
+  typeof classroomSkillQuestionsTable.$inferSelect;
