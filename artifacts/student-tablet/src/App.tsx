@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { DrawWorking, ScanQuestion } from "./capture";
+import { Learn } from "./Learn";
+import { School } from "./School";
 import {
   api,
   loadAuth,
   record,
+  recordClip,
   saveAuth,
   type Auth,
   type LearningMap,
@@ -200,7 +203,7 @@ export function App() {
 
             <button className="hero" onClick={() => setTab("K9")}>
               <strong>Ask me anything</strong>
-              <span>Type · Scan · Draw</span>
+              <span>Talk · Type · Scan · Draw</span>
             </button>
 
             <h2>Your day</h2>
@@ -275,12 +278,9 @@ export function App() {
           </>
         )}
 
-        {(tab === "Learn" || tab === "School") && (
-          <>
-            <h1>{tab}</h1>
-            <p className="muted">Coming soon.</p>
-          </>
-        )}
+        {tab === "Learn" && <Learn auth={auth} focus={map?.focus?.name ?? null} />}
+
+        {tab === "School" && <School auth={auth} />}
       </main>
 
       <nav role="tablist" aria-label="K9">
@@ -314,6 +314,16 @@ function AskK9({ auth, subject }: { auth: Auth; subject: string | null }) {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
   const [capture, setCapture] = useState<"scan" | "draw" | null>(null);
+  const [listening, setListening] = useState(false);
+  // Kept per device, not on the server: a child's recent questions are theirs,
+  // and the ones worth keeping are already learning evidence.
+  const [recent, setRecent] = useState<string[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("k9-student.recent") ?? "[]") as string[];
+    } catch {
+      return [];
+    }
+  });
 
   async function scan(image: string, kind: "question" | "working") {
     setCapture(null);
@@ -364,6 +374,15 @@ function AskK9({ auth, subject }: { auth: Auth; subject: string | null }) {
     setTurns((t) => [...t, { from: "you", text: trimmed }]);
     setQuestion("");
     record(auth, kind, { subject, detail: trimmed });
+    setRecent((previous) => {
+      const next = [trimmed, ...previous.filter((q) => q !== trimmed)].slice(0, 5);
+      try {
+        localStorage.setItem("k9-student.recent", JSON.stringify(next));
+      } catch {
+        /* a locked-down tablet may refuse storage */
+      }
+      return next;
+    });
     try {
       const answer = await api<{ answer: string }>(auth, "/v1/classroom/ask", undefined, {
         question: trimmed,
@@ -423,13 +442,50 @@ function AskK9({ auth, subject }: { auth: Auth; subject: string | null }) {
       )}
 
       <div className="ways">
-        <button onClick={() => setCapture("scan")} disabled={busy}>
+        <button
+          onClick={async () => {
+            if (listening) return;
+            setListening(true);
+            setNote("Listening… speak your question.");
+            try {
+              const { wav } = await recordClip(8);
+              setNote("");
+              const heard = await api<{ text: string }>(auth, "/v1/student/listen", undefined, {
+                audio: wav,
+              });
+              await ask(heard.text);
+            } catch (e) {
+              setNote(
+                e instanceof Error && e.message.includes("catch")
+                  ? e.message
+                  : "K9 could not use the microphone. You can type instead.",
+              );
+            } finally {
+              setListening(false);
+            }
+          }}
+          disabled={busy || listening}
+        >
+          {listening ? "🎙 Listening…" : "🎙 Talk"}
+        </button>
+        <button onClick={() => setCapture("scan")} disabled={busy || listening}>
           📷 Scan a question
         </button>
-        <button onClick={() => setCapture("draw")} disabled={busy}>
+        <button onClick={() => setCapture("draw")} disabled={busy || listening}>
           ✏️ Show your working
         </button>
       </div>
+
+      {turns.length === 0 && recent.length > 0 && (
+        <>
+          <h2>Recent</h2>
+          {recent.map((text, i) => (
+            <button key={i} className="recent" onClick={() => void ask(text)}>
+              {text}
+            </button>
+          ))}
+        </>
+      )}
 
       <form
         className="composer"

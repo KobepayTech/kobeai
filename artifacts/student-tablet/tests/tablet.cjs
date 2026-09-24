@@ -54,6 +54,38 @@ const assert = require("node:assert/strict");
       } });
     if (path.endsWith("/v1/classroom/ask"))
       return route.fulfill({ json: { answer: "Negative acceleration points the opposite way to motion." } });
+    if (path.endsWith("/v1/student/notes"))
+      return route.fulfill({ json: { entitled: true, notes: [
+        { id: 1, subject: "Physics", topic: "Negative acceleration", body_markdown: "Acceleration opposes motion when it is negative." },
+      ] } });
+    if (path.endsWith("/v1/student/practice"))
+      return route.fulfill({ json: { entitled: true, practice: [
+        { id: 5, subject: "Physics", difficulty_level: "standard", questions: 2 },
+      ] } });
+    if (path.endsWith("/v1/student/practice/5"))
+      return route.fulfill({ json: { id: 5, subject: "Physics", items: [
+        { id: 51, topic: "Negative acceleration", question_text: "A car slows from 10 m/s at -2 m/s^2. What is v after 3 s?" },
+        { id: 52, topic: "Negative acceleration", question_text: "Is the car still moving forward?" },
+      ] } });
+    if (path.endsWith("/v1/student/practice/5/answer")) {
+      const body = JSON.parse(route.request().postData() || "{}");
+      // The server's rule, mirrored: a hinted right answer is not a measurement.
+      return route.fulfill({ json: {
+        correct: true, moves_mastery: !body.used_hint,
+        suggest_assessment: !!body.used_hint,
+        reason: body.used_hint ? "assisted_attempt_measures_the_hint" : "independent_demonstration",
+      } });
+    }
+    if (path.endsWith("/v1/student/school"))
+      return route.fulfill({ json: {
+        week: [
+          { day_of_week: 1, subject: "Mathematics", room: "A", start_minute: 480, end_minute: 520 },
+          { day_of_week: 4, subject: "Physics", room: "B", start_minute: 560, end_minute: 600 },
+        ],
+        results: [{ subject: "Physics", marks_awarded: 34, marks_possible: 50, created_at: "2026-09-01T00:00:00Z" }],
+        attendance_rate: 95, kp_balance: 120,
+        subscription: { status: "active", expires_at: "2027-01-01T00:00:00Z" },
+      } });
     if (path.endsWith("/v1/student/scan"))
       return route.fulfill({ json: {
         read: "v = u + at, a = -2", answer: "Check the sign on the -2 when you substitute.",
@@ -105,6 +137,30 @@ const assert = require("node:assert/strict");
   await page.waitForFunction(() => window.__stopped === true, null, { timeout: 5000 })
     .catch(() => { throw new Error("the camera track must be stopped when Scan is closed"); });
 
+  // Learn: a practice answered ALONE counts; the same answer after a hint does
+  // not, and the child is told so rather than quietly downgraded.
+  await page.getByRole("tab", { name: "Learn", exact: true }).click();
+  await page.getByText("Revision notes").waitFor();
+  await page.getByRole("button", { name: /Physics/ }).first().click();
+  await page.getByLabel("Your answer").fill("4 m/s");
+  await page.getByRole("button", { name: "Check" }).click();
+  await page.getByText(/worked that out on your own/).waitFor();
+  await page.getByRole("button", { name: "Next question" }).click();
+  await page.getByRole("button", { name: "Give me a hint" }).click();
+  await page.getByLabel("Your answer").fill("yes");
+  await page.getByRole("button", { name: "Check" }).click();
+  await page.getByText(/used a hint, so this one doesn’t change your learning map/).waitFor();
+  await page.getByText(/asking is how you learn/).waitFor();
+
+  // School: the child's own record. Marks ARE numbers here — the
+  // no-percentages rule is about inferred mastery, not a teacher's mark.
+  await page.getByRole("tab", { name: "School", exact: true }).click();
+  await page.getByText("Your timetable").waitFor();
+  const school = await page.locator("body").innerText();
+  assert.ok(school.includes("34/50"), "a teacher's mark is the child's to see");
+  assert.ok(school.includes("95%") && school.includes("120"), "attendance and KP render");
+  assert.ok(school.includes("Thursday"), "the whole week renders");
+
   // Navigation is never disabled by a request in flight.
   assert.deepEqual(
     await page.getByRole("tab").evaluateAll((els) => els.map((e) => e.disabled)),
@@ -112,5 +168,5 @@ const assert = require("node:assert/strict");
   );
   assert.deepEqual(errors, []);
   await browser.close();
-  console.log("PASS: home, timetable, banded map with no percentages, ask, honest follow-up, draw, scan, camera released");
+  console.log("PASS: home, banded map, ask, draw, scan, camera released, practice hint downgrade, school record");
 })().catch((e) => { console.error(e); process.exit(1); });
