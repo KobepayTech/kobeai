@@ -10,14 +10,30 @@
 const { chromium } = require("playwright");
 const assert = require("node:assert/strict");
 (async () => {
-  const browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage({ viewport: { width: 820, height: 1180 } });
+  // A real fake camera, so the component's actual getUserMedia path runs.
+  const browser = await chromium.launch({
+    headless: true,
+    args: ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream"],
+  });
+  const context = await browser.newContext({
+    viewport: { width: 820, height: 1180 },
+    permissions: ["camera"],
+  });
+  const page = await context.newPage();
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
   await page.addInitScript(() => {
     localStorage.setItem("k9-student.auth", JSON.stringify({
       api_base: location.origin, token: "t", name: "Amani", student_code: "K9-001",
     }));
+    // Watch the real track being released. A tablet left with its camera light
+    // on in a classroom is both a battery problem and an unsettling one.
+    window.__stopped = false;
+    const stop = MediaStreamTrack.prototype.stop;
+    MediaStreamTrack.prototype.stop = function () {
+      window.__stopped = true;
+      return stop.apply(this, arguments);
+    };
   });
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
@@ -38,6 +54,11 @@ const assert = require("node:assert/strict");
       } });
     if (path.endsWith("/v1/classroom/ask"))
       return route.fulfill({ json: { answer: "Negative acceleration points the opposite way to motion." } });
+    if (path.endsWith("/v1/student/scan"))
+      return route.fulfill({ json: {
+        read: "v = u + at, a = -2", answer: "Check the sign on the -2 when you substitute.",
+        moves_mastery: false,
+      } });
     if (path.endsWith("/v1/student/interaction"))
       return route.fulfill({ json: { record: true, moves_mastery: false, suggest_assessment: false, reason: "x" } });
     return route.fulfill({ json: {} });
@@ -62,6 +83,28 @@ const assert = require("node:assert/strict");
   await page.getByRole("button", { name: "I understand ✓" }).click();
   await page.getByText(/doesn’t change your marks/).waitFor();
 
+  // Draw your working: the pad, a stroke, and the scan round trip.
+  await page.getByRole("button", { name: /Show your working/ }).click();
+  await page.getByLabel("Draw your working").waitFor();
+  const pad = page.getByLabel("Draw your working");
+  const box = await pad.boundingBox();
+  await page.mouse.move(box.x + 40, box.y + 40);
+  await page.mouse.down();
+  await page.mouse.move(box.x + 160, box.y + 110);
+  await page.mouse.up();
+  await page.getByRole("button", { name: "Ask K9", exact: true }).click();
+  await page.getByText(/I read:/).waitFor();
+  await page.getByText(/Check the sign on the -2/).waitFor();
+
+  // Scan: the camera must be released when the view closes, or a tablet is
+  // left with its light on in a classroom.
+  await page.getByRole("button", { name: /Scan a question/ }).click();
+  await page.getByLabel("Camera").waitFor();
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await page.getByLabel("Ask a question").waitFor();
+  await page.waitForFunction(() => window.__stopped === true, null, { timeout: 5000 })
+    .catch(() => { throw new Error("the camera track must be stopped when Scan is closed"); });
+
   // Navigation is never disabled by a request in flight.
   assert.deepEqual(
     await page.getByRole("tab").evaluateAll((els) => els.map((e) => e.disabled)),
@@ -69,5 +112,5 @@ const assert = require("node:assert/strict");
   );
   assert.deepEqual(errors, []);
   await browser.close();
-  console.log("PASS: home, timetable, banded learning map with no percentages, ask, honest follow-up");
+  console.log("PASS: home, timetable, banded map with no percentages, ask, honest follow-up, draw, scan, camera released");
 })().catch((e) => { console.error(e); process.exit(1); });

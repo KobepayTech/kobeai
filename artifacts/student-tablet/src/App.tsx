@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { DrawWorking, ScanQuestion } from "./capture";
 import {
   api,
   loadAuth,
@@ -199,7 +200,7 @@ export function App() {
 
             <button className="hero" onClick={() => setTab("K9")}>
               <strong>Ask me anything</strong>
-              <span>Talk · Type · Scan · Draw</span>
+              <span>Type · Scan · Draw</span>
             </button>
 
             <h2>Your day</h2>
@@ -312,6 +313,48 @@ function AskK9({ auth, subject }: { auth: Auth; subject: string | null }) {
   const [question, setQuestion] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
+  const [capture, setCapture] = useState<"scan" | "draw" | null>(null);
+
+  async function scan(image: string, kind: "question" | "working") {
+    setCapture(null);
+    setBusy(true);
+    setNote("");
+    setTurns((t) => [
+      ...t,
+      { from: "you", text: kind === "working" ? "Here is my working." : "Here is the question." },
+    ]);
+    try {
+      const out = await api<{ read: string; answer: string }>(
+        auth,
+        "/v1/student/scan",
+        undefined,
+        { image, kind, subject },
+      );
+      setTurns((t) => [
+        ...t,
+        { from: "k9", text: `I read: ${out.read}` },
+        { from: "k9", text: out.answer, subject },
+      ]);
+    } catch (e) {
+      setTurns((t) => [
+        ...t,
+        {
+          from: "k9",
+          text:
+            e instanceof Error
+              ? e.message
+              : "K9 could not read that. Try again with more light, or type it out.",
+        },
+      ]);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (capture === "scan")
+    return <ScanQuestion onCapture={(image, kind) => void scan(image, kind)} onCancel={() => setCapture(null)} />;
+  if (capture === "draw")
+    return <DrawWorking onCapture={(image, kind) => void scan(image, kind)} onCancel={() => setCapture(null)} />;
 
   async function ask(text: string, kind = "question") {
     const trimmed = text.trim();
@@ -378,6 +421,15 @@ function AskK9({ auth, subject }: { auth: Auth; subject: string | null }) {
           {note}
         </p>
       )}
+
+      <div className="ways">
+        <button onClick={() => setCapture("scan")} disabled={busy}>
+          📷 Scan a question
+        </button>
+        <button onClick={() => setCapture("draw")} disabled={busy}>
+          ✏️ Show your working
+        </button>
+      </div>
 
       <form
         className="composer"

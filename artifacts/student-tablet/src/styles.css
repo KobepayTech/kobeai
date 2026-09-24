@@ -156,3 +156,25 @@ nav button.centre[aria-selected="true"] { background: #0a6f84; }
   :root:not([data-theme="light"]) nav { background: #0b1a21f2; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+.ways { display: flex; gap: 8px; flex-wrap: wrap; margin: 6px 0 12px; }
+.ways button {
+  flex: 1; min-width: 150px;
+  background: var(--paper); color: var(--ink);
+  border: 1px solid var(--line); font-size: 14px;
+}
+.capture { display: grid; gap: 12px; padding-top: 12px; }
+.capture video, .capture .pad {
+  width: 100%; aspect-ratio: 4 / 3; border-radius: 16px;
+  background: #0c1a21; object-fit: cover; border: 1px solid var(--line);
+}
+.capture .pad { background: #ffffff; touch-action: none; cursor: crosshair; }
+.capture-choice { display: flex; gap: 8px; }
+.capture-choice button {
+  flex: 1; background: var(--paper); color: var(--ink);
+  border: 1px solid var(--line); font-size: 13px;
+}
+.capture-choice button[aria-pressed="true"] { border-color: var(--brand); background: var(--brand-soft); color: var(--brand); }
+.capture-actions { display: flex; gap: 10px; }
+.capture-actions button { flex: 1; }
+.capture-actions .ghost { background: var(--paper); color: var(--muted); border: 1px solid var(--line); }

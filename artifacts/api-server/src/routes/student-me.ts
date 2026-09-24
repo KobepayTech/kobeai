@@ -4,6 +4,8 @@ import { requireAuth } from "../lib/auth";
 import { logger } from "../lib/logger";
 import { nextFocus, studentView, type StudentSkillView } from "../lib/mastery-bands";
 import { assess, type EvidenceKind, EVIDENCE_KINDS } from "../lib/evidence";
+import { k9RuntimePost } from "../lib/k9-runtime";
+import { askAI } from "../lib/ai-provider";
 
 // ===========================================================================
 // The student's own view of their learning.
@@ -141,6 +143,75 @@ router.post("/v1/student/interaction", student, async (req, res) => {
   } catch (error) {
     logger.error({ error }, "student interaction failed");
     res.status(500).json({ error: "could not record that" });
+  }
+});
+
+/**
+ * POST /v1/student/scan
+ *
+ * A photographed question, or a photograph of the child's own working. The
+ * image is read by the local runtime — it never leaves the school — and the
+ * text becomes an ordinary question.
+ *
+ * `kind` distinguishes the two, and it matters for evidence: a photographed
+ * textbook question is a question, while a photograph of working the child did
+ * is an attempt. Neither moves mastery on its own, because K9 cannot tell from
+ * a photograph whether they were helped.
+ */
+router.post("/v1/student/scan", student, async (req, res) => {
+  const image = typeof req.body?.image === "string" ? req.body.image : null;
+  const kind = req.body?.kind === "working" ? "working" : "question";
+  if (!image || image.length > 12_000_000) {
+    res.status(400).json({ error: "a base64 image is required (max ~9MB)" });
+    return;
+  }
+  const subject = typeof req.body?.subject === "string" ? req.body.subject.slice(0, 200) : null;
+  try {
+    const read = await k9RuntimePost<{ text?: string }>(
+      "/v1/vision/describe",
+      {
+        image,
+        prompt:
+          kind === "working"
+            ? "Transcribe this student's handwritten working exactly, line by line. Do not correct it."
+            : "Transcribe the question in this image exactly. Return only the question.",
+      },
+      45_000,
+    );
+    const text = (read.text ?? "").trim();
+    if (!text) {
+      res.status(422).json({
+        error: "K9 could not read that. Try again with more light, or type it out.",
+      });
+      return;
+    }
+    const answer = await askAI(
+      kind === "working"
+        ? `A student photographed their own working and asked why their answer is wrong. ` +
+            `Find the step where it goes wrong, say which step and why, then give ONE similar ` +
+            `problem to try. Do not give the final answer.\n\n${text}`
+        : text,
+      subject
+        ? `You are K9, a patient tutor for Tanzanian secondary students. The lesson is ${subject}.`
+        : undefined,
+    );
+    // Recorded as evidence, and deliberately not as a measurement: a
+    // photograph cannot tell K9 whether the child was helped.
+    await pool.query(
+      `INSERT INTO student_interactions
+         (student_id, kind, subject, assisted, moves_mastery, detail)
+       VALUES ($1, $2, $3, true, false, $4)`,
+      [
+        req.auth!.user_id,
+        kind === "working" ? "guided_attempt" : "question",
+        subject,
+        text.slice(0, 800),
+      ],
+    );
+    res.json({ read: text, answer: answer.answer, moves_mastery: false });
+  } catch (error) {
+    logger.error({ error }, "student scan failed");
+    res.status(503).json({ error: "K9 could not read that just now." });
   }
 });
 

@@ -98,5 +98,31 @@ identity gate exists to prevent, and the queue is the component that would
 commit it. This is also why the router and the queue do not wait on the
 measurement: if voice identification turns out weak, they keep working.
 
+## The gateway
+
+`services/k9-classroom-gateway/` is the loop that joins the two halves. It
+captures a window of room audio, asks the runtime for speech spans, turns,
+transcripts and vectors, asks the school who spoke, posts the utterance to the
+queue and the line to the record, then reads the queue back for the TV and the
+speaker.
+
+**Audio never leaves the classroom PC.** Segments live in memory for as long as
+it takes to make a transcript and a vector, then they are dropped. What crosses
+the LAN is text and numbers, and `test_gateway.py` asserts it rather than
+describing it: no bytes appear in anything the gateway sends.
+
+Most of the work is deciding what *not* to send on. Same-speaker turns closer
+than 0.7s are merged, because a diarizer splits a sentence wherever the speaker
+breathes — but never across another speaker, which would put someone else's
+words inside this one's audio. Turns are clipped to VAD speech, since
+diarization will happily label a fan hum. A turn more than a quarter covered by
+another speaker is transcribed and **never identified**; so is one under half a
+second, because a brief "ndiyo" matched against forty children is the classic
+false match; so is one over thirty seconds, which is a teacher talking.
+
+Nothing is silently discarded for being hard. An overlapped or unidentifiable
+turn is still transcribed and still recorded, because a room that looks quieter
+than it was is worse than one that says "we did not catch who said that".
+
 ## Before calling this an MVP
-`docs/K9_VOICE_IDENTITY.md` sets the order: enrol one class, run `measure_speaker_id.py` on real lesson audio, and read the coverage-against-misattribution number before building the router, the queue and the screen on top of an unmeasured identity layer. Still outstanding after that: real-model testing of Whisper/TitaNet/pyannote, simultaneous-speech testing on real hardware, microphone-array direction-of-arrival as a second identity signal, and the classroom gateway that joins the runtime to these endpoints.
+`docs/K9_VOICE_IDENTITY.md` sets the order: enrol one class, run `measure_speaker_id.py` on real lesson audio, and read the coverage-against-misattribution number before building the router, the queue and the screen on top of an unmeasured identity layer. Still outstanding after that: real-model testing of Whisper/TitaNet/pyannote, simultaneous-speech testing on real hardware, microphone-array direction-of-arrival as a second identity signal, and running the whole loop on real hardware in a real room.
