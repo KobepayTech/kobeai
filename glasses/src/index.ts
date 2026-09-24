@@ -10,3 +10,4 @@ export { SimulatorAdapter, SimulatorGlasses, type SimulatorOptions } from "./ada
 export { BrilliantAdapter, BrilliantGlasses, type BrilliantBleLike, type BrilliantOptions } from "./adapters/brilliant/BrilliantAdapter";
 export { MentraAdapter, MentraGlasses, type MentraClient, type MentraAdapterOptions } from "./adapters/mentra/MentraAdapter";
 export * from "./k9/index";
+export { NativeAdapter, NativeGlasses, NativeTransport, type NativeProvider, type NativeHost, type NativeReply } from "./adapters/native/NativeAdapter";
