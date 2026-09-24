@@ -5,8 +5,23 @@ import { pool } from "@workspace/db";
 import { requireAuth, verifyToken } from "../lib/auth";
 import { logger } from "../lib/logger";
 import { classSkillDemand, ingestClassroomQuestion } from "../lib/skill-engine";
+import {
+  IDENTITY_SOURCES,
+  decideAttribution,
+  type IdentitySource,
+} from "../lib/attribution";
 
 const router = Router();
+
+/**
+ * Whether this school has run measure_speaker_id.py on its own classrooms and
+ * chosen to let voice alone write to a child's permanent profile.
+ *
+ * Off unless explicitly set. Until then a confident voice match still answers
+ * the child as themselves; it just writes the evidence at class level.
+ */
+const VOICE_ATTRIBUTION_MEASURED =
+  process.env["VOICE_ATTRIBUTION_MEASURED"] === "true";
 
 // Ingestion is called by the classroom kiosk / voice gateway with a shared
 // secret. Teachers can also read/write via a staff JWT.
@@ -138,14 +153,21 @@ router.post("/v1/classroom/insights", requireKioskOrStaff, async (req, res) => {
       : envelopePeriodId;
     const rawStudentCode = text(item.student_code, 100);
     const attribution = confidenceOrNull(item.attribution_confidence);
-    // Only keep student attribution when the caller either explicitly said
-    // "I'm confident" (>= 0.8) or when the attribution field is absent AND
-    // the kiosk provided a student_code (they claim to know). If confidence
-    // is present but low, promote the insight to class-level.
-    const keepStudent =
-      rawStudentCode &&
-      (attribution == null ? true : attribution >= 80);
-    const studentCode = keepStudent ? rawStudentCode : null;
+    // Gate 2. This row is permanent learning evidence, so it takes the
+    // attribution decision, not the identity one: a caller may be confident
+    // enough to answer a child by name and still not confident enough to write
+    // to their record. See lib/attribution.ts. An unstated source is treated as
+    // a shared microphone, which is the conservative reading.
+    const rawSource = text(item.identity_source, 40) ?? text(body.identity_source, 40);
+    const source: IdentitySource =
+      rawSource && (IDENTITY_SOURCES as readonly string[]).includes(rawSource)
+        ? (rawSource as IdentitySource)
+        : "voice";
+    const decision = decideAttribution(
+      { student_code: rawStudentCode, source, confidence: attribution },
+      { voiceAttributionMeasured: VOICE_ATTRIBUTION_MEASURED },
+    );
+    const studentCode = decision.attribute_to;
 
     const result = await pool.query(
       `INSERT INTO classroom_discussion_insights (

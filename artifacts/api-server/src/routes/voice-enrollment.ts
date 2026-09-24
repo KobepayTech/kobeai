@@ -3,6 +3,7 @@ import { pool } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 import { logger } from "../lib/logger";
 import { requireKioskOrStaff } from "./classroom";
+import { claimFromVoice, decideAttribution } from "../lib/attribution";
 import {
   DEFAULT_MIN_MARGIN,
   DEFAULT_MIN_SCORE,
@@ -197,9 +198,22 @@ router.post("/v1/voice/identify", requireKioskOrStaff, async (req, res) => {
   try {
     const roster = await rosterFor(classId, model);
     const decision = identify(embedding, roster, minScore, minMargin);
+    // Gate 1 says who is probably speaking. Gate 2 says what may be done about
+    // it — and the caller needs both, because they are allowed to address a
+    // child K9 may not write about. See lib/attribution.ts.
+    const attribution = decideAttribution(
+      claimFromVoice(decision, body.corroborated === true),
+      { voiceAttributionMeasured: process.env["VOICE_ATTRIBUTION_MEASURED"] === "true" },
+    );
     res.json({
       student_code: decision.student_code,
       accepted: decision.accepted,
+      attribution: {
+        outcome: attribution.outcome,
+        address_as: attribution.address_as,
+        attribute_to: attribution.attribute_to,
+        reason: attribution.reason,
+      },
       score: decision.top ? Number(decision.top.score.toFixed(4)) : null,
       margin: Number(decision.margin.toFixed(4)),
       runner_up: decision.runner_up

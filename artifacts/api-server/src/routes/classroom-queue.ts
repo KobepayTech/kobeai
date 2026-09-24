@@ -13,6 +13,7 @@ import {
   type Conversation,
   type Mode,
 } from "../lib/classroom-agents";
+import { IDENTITY_SOURCES, decideAttribution, type IdentitySource } from "../lib/attribution";
 import {
   MAX_SPEECH_MS,
   cardsFor,
@@ -133,10 +134,24 @@ router.post("/v1/classroom/utterance", requireKioskOrStaff, async (req, res) => 
     return;
   }
   const fromTeacher = body.from_teacher === true;
-  const studentCode = text(body.student_code, 100);
+  const claimed = text(body.student_code, 100);
   const confidence = Number.isFinite(Number(body.attribution_confidence))
     ? Math.round(Number(body.attribution_confidence))
     : null;
+  const rawSource = text(body.identity_source, 40);
+  const source: IdentitySource =
+    rawSource && (IDENTITY_SOURCES as readonly string[]).includes(rawSource)
+      ? (rawSource as IdentitySource)
+      : "voice";
+  // The queue only ever *addresses* a child — the card and the spoken answer.
+  // Permanent evidence goes through /v1/classroom/insights, which runs the same
+  // gate for itself. So this uses `address_as`, which is the looser of the two
+  // and exactly right here: being answered by name is not a record.
+  const gate = decideAttribution(
+    { student_code: claimed, source, confidence },
+    { voiceAttributionMeasured: process.env["VOICE_ATTRIBUTION_MEASURED"] === "true" },
+  );
+  const studentCode = gate.address_as;
 
   try {
     const session = await liveSession(
