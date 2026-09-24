@@ -1,4 +1,15 @@
-import { pgTable, text, serial, timestamp, integer, uniqueIndex, primaryKey, boolean, jsonb, index } from "drizzle-orm/pg-core";
+import {
+  pgTable,
+  text,
+  serial,
+  timestamp,
+  integer,
+  uniqueIndex,
+  primaryKey,
+  boolean,
+  jsonb,
+  index,
+} from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
 /**
@@ -121,14 +132,24 @@ export const studentLearningProfileTable = pgTable("student_learning_profile", {
   // Static / low-cadence facts. Birthday drives K9 birthday automation.
   birthday: text("birthday"), // "MM-DD" — year-agnostic for classroom celebrations
   // Rolled-up learning signals (nightly cron). `topics_*` are string arrays.
-  computed_topics_strong: jsonb("computed_topics_strong").notNull().default(sql`'[]'::jsonb`),
-  computed_topics_weak: jsonb("computed_topics_weak").notNull().default(sql`'[]'::jsonb`),
-  computed_questions_asked_count: integer("computed_questions_asked_count").notNull().default(0),
-  computed_achievements: jsonb("computed_achievements").notNull().default(sql`'[]'::jsonb`),
+  computed_topics_strong: jsonb("computed_topics_strong")
+    .notNull()
+    .default(sql`'[]'::jsonb`),
+  computed_topics_weak: jsonb("computed_topics_weak")
+    .notNull()
+    .default(sql`'[]'::jsonb`),
+  computed_questions_asked_count: integer("computed_questions_asked_count")
+    .notNull()
+    .default(0),
+  computed_achievements: jsonb("computed_achievements")
+    .notNull()
+    .default(sql`'[]'::jsonb`),
   computed_attendance_rate: integer("computed_attendance_rate"), // 0-100
   // Concrete remediation suggestions mined from paper-marking (topic +
   // example misconception). Shape: [{ topic, urgency, evidence }].
-  computed_remediations: jsonb("computed_remediations").notNull().default(sql`'[]'::jsonb`),
+  computed_remediations: jsonb("computed_remediations")
+    .notNull()
+    .default(sql`'[]'::jsonb`),
   // Teacher overrides — the merged view prefers these when non-null.
   override_topics_strong: jsonb("override_topics_strong"),
   override_topics_weak: jsonb("override_topics_weak"),
@@ -138,7 +159,8 @@ export const studentLearningProfileTable = pgTable("student_learning_profile", {
   computed_at: timestamp("computed_at"),
   updated_at: timestamp("updated_at").defaultNow().notNull(),
 });
-export type StudentLearningProfile = typeof studentLearningProfileTable.$inferSelect;
+export type StudentLearningProfile =
+  typeof studentLearningProfileTable.$inferSelect;
 
 /**
  * One row per (student, calendar day) when a birthday is detected. Seeded
@@ -205,8 +227,14 @@ export const classroomDiscussionInsightsTable = pgTable(
     created_at: timestamp("created_at").notNull().defaultNow(),
   },
   (t) => ({
-    class_time_idx: index("classroom_insights_class_time_idx").on(t.class_id, t.captured_at),
-    student_time_idx: index("classroom_insights_student_time_idx").on(t.student_code, t.captured_at),
+    class_time_idx: index("classroom_insights_class_time_idx").on(
+      t.class_id,
+      t.captured_at,
+    ),
+    student_time_idx: index("classroom_insights_student_time_idx").on(
+      t.student_code,
+      t.captured_at,
+    ),
     subject_idx: index("classroom_insights_subject_idx").on(t.subject),
   }),
 );
@@ -223,18 +251,26 @@ export const teacherLensSessionsTable = pgTable(
   "teacher_lens_sessions",
   {
     id: serial("id").primaryKey(),
-    teacher_user_id: integer("teacher_user_id").references(() => usersTable.id, {
-      onDelete: "set null",
-    }),
+    teacher_user_id: integer("teacher_user_id").references(
+      () => usersTable.id,
+      {
+        onDelete: "set null",
+      },
+    ),
     // "marking" | "lookup" | "ambient"
     mode: text("mode").notNull().default("marking"),
     device: text("device"), // "android-phone" | "xreal-glasses" | "browser" | ...
     started_at: timestamp("started_at").notNull().defaultNow(),
     ended_at: timestamp("ended_at"),
-    metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
+    metadata: jsonb("metadata")
+      .notNull()
+      .default(sql`'{}'::jsonb`),
   },
   (t) => ({
-    teacher_idx: index("teacher_lens_sessions_teacher_idx").on(t.teacher_user_id, t.started_at),
+    teacher_idx: index("teacher_lens_sessions_teacher_idx").on(
+      t.teacher_user_id,
+      t.started_at,
+    ),
   }),
 );
 export type TeacherLensSession = typeof teacherLensSessionsTable.$inferSelect;
@@ -250,14 +286,22 @@ export const gradedPapersTable = pgTable(
   "graded_papers",
   {
     id: serial("id").primaryKey(),
-    session_id: integer("session_id").references(() => teacherLensSessionsTable.id, {
-      onDelete: "set null",
-    }),
-    teacher_user_id: integer("teacher_user_id").references(() => usersTable.id, {
-      onDelete: "set null",
-    }),
+    session_id: integer("session_id").references(
+      () => teacherLensSessionsTable.id,
+      {
+        onDelete: "set null",
+      },
+    ),
+    teacher_user_id: integer("teacher_user_id").references(
+      () => usersTable.id,
+      {
+        onDelete: "set null",
+      },
+    ),
     student_code: text("student_code").notNull(),
-    class_id: integer("class_id").references(() => classesTable.id, { onDelete: "set null" }),
+    class_id: integer("class_id").references(() => classesTable.id, {
+      onDelete: "set null",
+    }),
     subject: text("subject"),
     // The paper's own title / assignment name if the teacher wrote one at
     // the top and the OCR pass caught it.
@@ -271,10 +315,15 @@ export const gradedPapersTable = pgTable(
     // paper for review.
     paper_image_key: text("paper_image_key"),
     // Free-form OCR/AI extraction metadata (model version, confidence).
-    metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
+    metadata: jsonb("metadata")
+      .notNull()
+      .default(sql`'{}'::jsonb`),
   },
   (t) => ({
-    student_time_idx: index("graded_papers_student_time_idx").on(t.student_code, t.graded_at),
+    student_time_idx: index("graded_papers_student_time_idx").on(
+      t.student_code,
+      t.graded_at,
+    ),
     subject_idx: index("graded_papers_subject_idx").on(t.subject, t.graded_at),
   }),
 );
@@ -303,11 +352,16 @@ export const gradedPaperItemsTable = pgTable(
     is_correct: boolean("is_correct").notNull(),
     marks_awarded: integer("marks_awarded"),
     marks_possible: integer("marks_possible"),
-    metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
+    metadata: jsonb("metadata")
+      .notNull()
+      .default(sql`'{}'::jsonb`),
   },
   (t) => ({
     paper_idx: index("graded_paper_items_paper_idx").on(t.paper_id),
-    topic_correct_idx: index("graded_paper_items_topic_correct_idx").on(t.question_topic, t.is_correct),
+    topic_correct_idx: index("graded_paper_items_topic_correct_idx").on(
+      t.question_topic,
+      t.is_correct,
+    ),
   }),
 );
 export type GradedPaperItem = typeof gradedPaperItemsTable.$inferSelect;
@@ -322,12 +376,18 @@ export const teacherLensWhispersTable = pgTable(
   "teacher_lens_whispers",
   {
     id: serial("id").primaryKey(),
-    session_id: integer("session_id").references(() => teacherLensSessionsTable.id, {
-      onDelete: "cascade",
-    }),
-    teacher_user_id: integer("teacher_user_id").references(() => usersTable.id, {
-      onDelete: "set null",
-    }),
+    session_id: integer("session_id").references(
+      () => teacherLensSessionsTable.id,
+      {
+        onDelete: "cascade",
+      },
+    ),
+    teacher_user_id: integer("teacher_user_id").references(
+      () => usersTable.id,
+      {
+        onDelete: "set null",
+      },
+    ),
     text: text("text").notNull(),
     priority: integer("priority").notNull().default(5), // 1 = urgent, 10 = idle
     status: text("status").notNull().default("pending"), // pending | played | dismissed
@@ -357,9 +417,12 @@ export const studentCuratedNotesTable = pgTable(
   {
     id: serial("id").primaryKey(),
     student_code: text("student_code").notNull(),
-    source_paper_id: integer("source_paper_id").references(() => gradedPapersTable.id, {
-      onDelete: "cascade",
-    }),
+    source_paper_id: integer("source_paper_id").references(
+      () => gradedPapersTable.id,
+      {
+        onDelete: "cascade",
+      },
+    ),
     subject: text("subject"),
     topic: text("topic").notNull(),
     // The bit that was wrong — for context when the student reads it.
@@ -375,7 +438,10 @@ export const studentCuratedNotesTable = pgTable(
     created_at: timestamp("created_at").notNull().defaultNow(),
   },
   (t) => ({
-    student_time_idx: index("student_curated_notes_student_time_idx").on(t.student_code, t.created_at),
+    student_time_idx: index("student_curated_notes_student_time_idx").on(
+      t.student_code,
+      t.created_at,
+    ),
     topic_idx: index("student_curated_notes_topic_idx").on(t.topic),
   }),
 );
@@ -393,9 +459,12 @@ export const retestSessionsTable = pgTable(
   {
     id: serial("id").primaryKey(),
     student_code: text("student_code").notNull(),
-    source_paper_id: integer("source_paper_id").references(() => gradedPapersTable.id, {
-      onDelete: "set null",
-    }),
+    source_paper_id: integer("source_paper_id").references(
+      () => gradedPapersTable.id,
+      {
+        onDelete: "set null",
+      },
+    ),
     subject: text("subject"),
     // "wrong-only" (v1), "difficulty-band" (end-of-term), "mixed" (hybrid).
     strategy: text("strategy").notNull().default("wrong-only"),
@@ -411,7 +480,10 @@ export const retestSessionsTable = pgTable(
     score_percent: integer("score_percent"),
   },
   (t) => ({
-    student_idx: index("retest_sessions_student_idx").on(t.student_code, t.status),
+    student_idx: index("retest_sessions_student_idx").on(
+      t.student_code,
+      t.status,
+    ),
   }),
 );
 export type RetestSession = typeof retestSessionsTable.$inferSelect;
@@ -464,12 +536,17 @@ export const studentBehaviorObservationsTable = pgTable(
     period_id: integer("period_id"),
     subject: text("subject"),
     // Free-form generator metadata (model version, frame refs).
-    metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
+    metadata: jsonb("metadata")
+      .notNull()
+      .default(sql`'{}'::jsonb`),
     captured_at: timestamp("captured_at").notNull().defaultNow(),
     created_at: timestamp("created_at").notNull().defaultNow(),
   },
   (t) => ({
-    student_time_idx: index("student_behavior_student_time_idx").on(t.student_code, t.captured_at),
+    student_time_idx: index("student_behavior_student_time_idx").on(
+      t.student_code,
+      t.captured_at,
+    ),
     category_idx: index("student_behavior_category_idx").on(t.category),
   }),
 );
@@ -490,19 +567,21 @@ export const personalizedLessonPlansTable = pgTable(
     // Bullet list, markdown; sections are ["focus", "practice", "watch_out"].
     plan_markdown: text("plan_markdown").notNull(),
     // Data snapshot the plan was built from — reproducible + auditable.
-    snapshot: jsonb("snapshot").notNull().default(sql`'{}'::jsonb`),
+    snapshot: jsonb("snapshot")
+      .notNull()
+      .default(sql`'{}'::jsonb`),
     generator: text("generator").notNull().default("rule-based-v1"),
     generated_at: timestamp("generated_at").notNull().defaultNow(),
     generated_by: integer("generated_by"),
   },
   (t) => ({
-    week_student_uk: uniqueIndex("personalized_lesson_plans_week_student_uk").on(
-      t.week_start,
-      t.student_code,
-    ),
+    week_student_uk: uniqueIndex(
+      "personalized_lesson_plans_week_student_uk",
+    ).on(t.week_start, t.student_code),
   }),
 );
-export type PersonalizedLessonPlan = typeof personalizedLessonPlansTable.$inferSelect;
+export type PersonalizedLessonPlan =
+  typeof personalizedLessonPlansTable.$inferSelect;
 
 /**
  * Auto-authored question bank. Every time a wrong-answer topic appears
@@ -527,7 +606,10 @@ export const generatedQuestionsTable = pgTable(
     created_at: timestamp("created_at").notNull().defaultNow(),
   },
   (t) => ({
-    topic_diff_idx: index("generated_questions_topic_diff_idx").on(t.topic, t.difficulty_level),
+    topic_diff_idx: index("generated_questions_topic_diff_idx").on(
+      t.topic,
+      t.difficulty_level,
+    ),
   }),
 );
 export type GeneratedQuestion = typeof generatedQuestionsTable.$inferSelect;
@@ -547,7 +629,9 @@ export const magazineEditionsTable = pgTable(
     student_code: text("student_code"),
     week_start: text("week_start").notNull(), // "YYYY-MM-DD" (Monday)
     // Structured content — arrays of sections the UI can render.
-    content: jsonb("content").notNull().default(sql`'{}'::jsonb`),
+    content: jsonb("content")
+      .notNull()
+      .default(sql`'{}'::jsonb`),
     generated_at: timestamp("generated_at").notNull().defaultNow(),
     generated_by: integer("generated_by"),
   },
@@ -558,7 +642,10 @@ export const magazineEditionsTable = pgTable(
       t.student_code,
     ),
     week_idx: index("magazine_editions_week_idx").on(t.week_start),
-    student_idx: index("magazine_editions_student_idx").on(t.student_code, t.week_start),
+    student_idx: index("magazine_editions_student_idx").on(
+      t.student_code,
+      t.week_start,
+    ),
   }),
 );
 export type MagazineEdition = typeof magazineEditionsTable.$inferSelect;
@@ -568,8 +655,12 @@ export const printJobsTable = pgTable("print_jobs", {
   job_ref: text("job_ref").notNull().unique(),
   // Null for class handouts; set when staff print for one student.
   student_code: text("student_code"),
-  student_id: integer("student_id").references(() => usersTable.id, { onDelete: "set null" }),
-  requested_by: integer("requested_by").references(() => usersTable.id, { onDelete: "set null" }),
+  student_id: integer("student_id").references(() => usersTable.id, {
+    onDelete: "set null",
+  }),
+  requested_by: integer("requested_by").references(() => usersTable.id, {
+    onDelete: "set null",
+  }),
   document_id: integer("document_id"),
   document_name: text("document_name").notNull(),
   pages: integer("pages").notNull().default(1),
@@ -661,7 +752,10 @@ export const studentSubscriptionsTable = pgTable(
     updated_at: timestamp("updated_at").defaultNow().notNull(),
   },
   (t) => ({
-    tenant_student_idx: uniqueIndex("subs_tenant_student_idx").on(t.tenant_id, t.student_code),
+    tenant_student_idx: uniqueIndex("subs_tenant_student_idx").on(
+      t.tenant_id,
+      t.student_code,
+    ),
   }),
 );
 export type StudentSubscription = typeof studentSubscriptionsTable.$inferSelect;
@@ -670,19 +764,16 @@ export type StudentSubscription = typeof studentSubscriptionsTable.$inferSelect;
  * Local read-only cache populated from the central sync API. Lets the school
  * server keep enforcing subscriptions even when central is unreachable.
  */
-export const subscriptionCacheTable = pgTable(
-  "subscription_cache",
-  {
-    student_code: text("student_code").primaryKey(),
-    student_name: text("student_name"),
-    status: text("status").notNull(),
-    plan: text("plan").notNull(),
-    monthly_price_tsh: integer("monthly_price_tsh").notNull().default(0),
-    parent_phone: text("parent_phone"),
-    expires_at: timestamp("expires_at"),
-    synced_at: timestamp("synced_at").defaultNow().notNull(),
-  },
-);
+export const subscriptionCacheTable = pgTable("subscription_cache", {
+  student_code: text("student_code").primaryKey(),
+  student_name: text("student_name"),
+  status: text("status").notNull(),
+  plan: text("plan").notNull(),
+  monthly_price_tsh: integer("monthly_price_tsh").notNull().default(0),
+  parent_phone: text("parent_phone"),
+  expires_at: timestamp("expires_at"),
+  synced_at: timestamp("synced_at").defaultNow().notNull(),
+});
 export type CachedSubscription = typeof subscriptionCacheTable.$inferSelect;
 
 /**
@@ -866,7 +957,10 @@ export const timetablePeriodsTable = pgTable(
     created_at: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => ({
-    class_day_idx: index("timetable_class_day_idx").on(t.class_id, t.day_of_week),
+    class_day_idx: index("timetable_class_day_idx").on(
+      t.class_id,
+      t.day_of_week,
+    ),
   }),
 );
 export type TimetablePeriod = typeof timetablePeriodsTable.$inferSelect;
@@ -944,7 +1038,9 @@ export const marketQuestionsTable = pgTable(
     // 'open' (anyone can answer or lock) | 'locked' (only locker can answer)
     // | 'won' (someone correctly answered) | 'expired' (no winner before expires_at)
     status: text("status").notNull().default("open"),
-    won_by_user_id: integer("won_by_user_id").references(() => usersTable.id, { onDelete: "set null" }),
+    won_by_user_id: integer("won_by_user_id").references(() => usersTable.id, {
+      onDelete: "set null",
+    }),
     won_at: timestamp("won_at"),
     released_at: timestamp("released_at").defaultNow().notNull(),
     expires_at: timestamp("expires_at"), // null = no global deadline
@@ -1020,7 +1116,10 @@ export const kpLedgerTable = pgTable(
     delta: integer("delta").notNull(),
     // 'membership_grant' | 'question_won' | 'lock_purchase' | 'lock_refund' | 'admin_adjust'
     reason: text("reason").notNull(),
-    question_id: integer("question_id").references(() => marketQuestionsTable.id, { onDelete: "set null" }),
+    question_id: integer("question_id").references(
+      () => marketQuestionsTable.id,
+      { onDelete: "set null" },
+    ),
     balance_after: integer("balance_after").notNull(),
     created_at: timestamp("created_at").defaultNow().notNull(),
   },
@@ -1062,9 +1161,12 @@ export const kpPendingGrantsTable = pgTable(
     reason: text("reason").notNull(),
     created_at: timestamp("created_at").defaultNow().notNull(),
     claimed_at: timestamp("claimed_at"),
-    claimed_ledger_id: integer("claimed_ledger_id").references(() => kpLedgerTable.id, {
-      onDelete: "set null",
-    }),
+    claimed_ledger_id: integer("claimed_ledger_id").references(
+      () => kpLedgerTable.id,
+      {
+        onDelete: "set null",
+      },
+    ),
   },
   (t) => ({
     student_unclaimed_idx: index("kp_pending_student_idx")
@@ -1261,7 +1363,10 @@ export const stationeryOrdersTable = pgTable(
       t.drive_id,
       t.student_user_id,
     ),
-    tenant_idx: index("stationery_orders_tenant_idx").on(t.tenant_id, t.drive_id),
+    tenant_idx: index("stationery_orders_tenant_idx").on(
+      t.tenant_id,
+      t.drive_id,
+    ),
     status_idx: index("stationery_orders_status_idx").on(t.status, t.drive_id),
   }),
 );
@@ -1379,7 +1484,10 @@ export const miniAppsTable = pgTable(
     updated_at: timestamp("updated_at").defaultNow().notNull(),
   },
   (t) => ({
-    dev_slug_idx: uniqueIndex("mini_apps_dev_slug_idx").on(t.developer_id, t.slug),
+    dev_slug_idx: uniqueIndex("mini_apps_dev_slug_idx").on(
+      t.developer_id,
+      t.slug,
+    ),
     cat_status_idx: index("mini_apps_cat_status_idx").on(t.category, t.status),
   }),
 );
@@ -1402,7 +1510,10 @@ export const miniAppVersionsTable = pgTable(
     created_at: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => ({
-    app_version_idx: uniqueIndex("mini_app_versions_unique_idx").on(t.app_id, t.version),
+    app_version_idx: uniqueIndex("mini_app_versions_unique_idx").on(
+      t.app_id,
+      t.version,
+    ),
   }),
 );
 export type MiniAppVersion = typeof miniAppVersionsTable.$inferSelect;
@@ -1759,7 +1870,9 @@ export const marketAgentSettingsTable = pgTable("market_agent_settings", {
   // When true the agent parks new questions at review_status='pending' and a
   // human approves them before students ever see them.
   human_review: boolean("human_review").notNull().default(false),
-  subjects: jsonb("subjects").notNull().default(sql`'[]'::jsonb`), // string[]; empty = derive from the roster
+  subjects: jsonb("subjects")
+    .notNull()
+    .default(sql`'[]'::jsonb`), // string[]; empty = derive from the roster
   updated_at: timestamp("updated_at").defaultNow().notNull(),
 });
 export type MarketAgentSettings = typeof marketAgentSettingsTable.$inferSelect;
@@ -1781,13 +1894,17 @@ export const schoolSetupTable = pgTable("school_setup", {
   // Argon/bcrypt hash of the setup password chosen during install. It is the
   // break-glass credential for re-running setup steps, NOT a login.
   setup_password_hash: text("setup_password_hash").notNull(),
-  tenant_id: integer("tenant_id").references(() => tenantsTable.id, { onDelete: "set null" }),
+  tenant_id: integer("tenant_id").references(() => tenantsTable.id, {
+    onDelete: "set null",
+  }),
   region: text("region"),
   motto: text("motto"),
   // Set once the install wizard finished. While null the dashboard shows the
   // wizard instead of the app.
   completed_at: timestamp("completed_at"),
-  completed_by: integer("completed_by").references(() => usersTable.id, { onDelete: "set null" }),
+  completed_by: integer("completed_by").references(() => usersTable.id, {
+    onDelete: "set null",
+  }),
   created_at: timestamp("created_at").defaultNow().notNull(),
 });
 export type SchoolSetup = typeof schoolSetupTable.$inferSelect;
@@ -1804,7 +1921,9 @@ export const teacherInvitesTable = pgTable(
     token_hash: text("token_hash").notNull(),
     label: text("label"), // "Form 2 staff room", printed under the QR
     role: text("role").notNull().default("teacher"), // 'teacher' | 'admin'
-    issued_by: integer("issued_by").references(() => usersTable.id, { onDelete: "set null" }),
+    issued_by: integer("issued_by").references(() => usersTable.id, {
+      onDelete: "set null",
+    }),
     max_uses: integer("max_uses").notNull().default(1),
     uses: integer("uses").notNull().default(0),
     expires_at: timestamp("expires_at").notNull(),
@@ -1830,14 +1949,20 @@ export const staffProfilesTable = pgTable("staff_profiles", {
   language: text("language").notNull().default("sw"), // 'sw' | 'en'
   // How they teach — the agent uses it to pitch explanations and lesson plans.
   teaching_style: text("teaching_style"), // 'examples' | 'drill' | 'discussion' | 'visual'
-  subjects: jsonb("subjects").notNull().default(sql`'[]'::jsonb`), // string[]
-  classes: jsonb("classes").notNull().default(sql`'[]'::jsonb`), // string[] e.g. ["Form 2A"]
+  subjects: jsonb("subjects")
+    .notNull()
+    .default(sql`'[]'::jsonb`), // string[]
+  classes: jsonb("classes")
+    .notNull()
+    .default(sql`'[]'::jsonb`), // string[] e.g. ["Form 2A"]
   briefing_length: text("briefing_length").notNull().default("short"), // 'short' | 'normal' | 'detailed'
   voice: text("voice"), // preferred TTS voice id
   // Where they are in the onboarding walk: 'profile' → 'roster' → 'faces'
   // → 'subjects' → 'done'.
   onboarding_step: text("onboarding_step").notNull().default("profile"),
-  invite_id: integer("invite_id").references(() => teacherInvitesTable.id, { onDelete: "set null" }),
+  invite_id: integer("invite_id").references(() => teacherInvitesTable.id, {
+    onDelete: "set null",
+  }),
   created_at: timestamp("created_at").defaultNow().notNull(),
   updated_at: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -1857,7 +1982,9 @@ export const paperImportsTable = pgTable(
     kind: text("kind").notNull(), // 'roster' | 'subjects'
     // 'uploaded' → 'reading' → 'parsed' → 'committed', or 'failed'
     status: text("status").notNull().default("uploaded"),
-    uploaded_by: integer("uploaded_by").references(() => usersTable.id, { onDelete: "set null" }),
+    uploaded_by: integer("uploaded_by").references(() => usersTable.id, {
+      onDelete: "set null",
+    }),
     class_name: text("class_name"), // "Form 2A" — the class the sheet belongs to
     form_level: text("form_level"), // "Form 2"
     page_count: integer("page_count").notNull().default(1),
@@ -1865,7 +1992,9 @@ export const paperImportsTable = pgTable(
     // Structured proposal the teacher edits before committing.
     // roster:   [{ name, student_code?, sex?, stream?, confidence }]
     // subjects: [{ name, subjects: string[], confidence }]
-    parsed: jsonb("parsed").notNull().default(sql`'[]'::jsonb`),
+    parsed: jsonb("parsed")
+      .notNull()
+      .default(sql`'[]'::jsonb`),
     model: text("model"),
     error: text("error"),
     created_count: integer("created_count").notNull().default(0),
@@ -1892,9 +2021,12 @@ export const studentSubjectsTable = pgTable(
     subject: text("subject").notNull(),
     // 'manual' (typed by staff) | 'paper' (read off a photographed sheet)
     source: text("source").notNull().default("manual"),
-    paper_import_id: integer("paper_import_id").references(() => paperImportsTable.id, {
-      onDelete: "set null",
-    }),
+    paper_import_id: integer("paper_import_id").references(
+      () => paperImportsTable.id,
+      {
+        onDelete: "set null",
+      },
+    ),
     confidence: integer("confidence"), // 0-100, how sure the reader was
     created_at: timestamp("created_at").defaultNow().notNull(),
   },
@@ -1939,10 +2071,14 @@ export const feeStructuresTable = pgTable(
     term: text("term").notNull(), // "2026-T1"
     // [{ label: "Tuition", amount_tsh: 180000 }, …] — what the parent is shown
     // on the invoice, so "what am I paying for" always has an answer.
-    items: jsonb("items").notNull().default(sql`'[]'::jsonb`),
+    items: jsonb("items")
+      .notNull()
+      .default(sql`'[]'::jsonb`),
     total_tsh: integer("total_tsh").notNull(), // validated against items on write
     active: boolean("active").notNull().default(true),
-    created_by: integer("created_by").references(() => usersTable.id, { onDelete: "set null" }),
+    created_by: integer("created_by").references(() => usersTable.id, {
+      onDelete: "set null",
+    }),
     created_at: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => ({
@@ -1980,14 +2116,19 @@ export const feeTransactionsTable = pgTable(
     // the anti-double-post key: see the partial unique index below.
     reference: text("reference"),
     term: text("term"),
-    fee_structure_id: integer("fee_structure_id").references(() => feeStructuresTable.id, {
-      onDelete: "set null",
-    }),
+    fee_structure_id: integer("fee_structure_id").references(
+      () => feeStructuresTable.id,
+      {
+        onDelete: "set null",
+      },
+    ),
     note: text("note"),
     // When the money actually moved, which is not when we typed it in. A
     // fortnight-old M-Pesa confirmation read off a statement backdates here.
     received_at: timestamp("received_at").defaultNow().notNull(),
-    entered_by: integer("entered_by").references(() => usersTable.id, { onDelete: "set null" }),
+    entered_by: integer("entered_by").references(() => usersTable.id, {
+      onDelete: "set null",
+    }),
     reverses_id: integer("reverses_id"), // the fee_transactions.id this undoes
     created_at: timestamp("created_at").defaultNow().notNull(),
   },
@@ -2020,9 +2161,12 @@ export const paymentMatchesTable = pgTable(
     transaction_id: integer("transaction_id")
       .notNull()
       .references(() => feeTransactionsTable.id, { onDelete: "cascade" }),
-    paper_import_id: integer("paper_import_id").references(() => paperImportsTable.id, {
-      onDelete: "set null",
-    }),
+    paper_import_id: integer("paper_import_id").references(
+      () => paperImportsTable.id,
+      {
+        onDelete: "set null",
+      },
+    ),
     // The central `subscription_payments` row, when the money came through
     // M-Pesa via the control plane rather than off a statement.
     central_payment_id: integer("central_payment_id"),
@@ -2034,7 +2178,9 @@ export const paymentMatchesTable = pgTable(
     matched_by: text("matched_by").notNull(),
     confidence: integer("confidence"), // 0-100
     reason: text("reason"), // "parent phone +255 7xx xxx 123, exact balance"
-    confirmed_by: integer("confirmed_by").references(() => usersTable.id, { onDelete: "set null" }),
+    confirmed_by: integer("confirmed_by").references(() => usersTable.id, {
+      onDelete: "set null",
+    }),
     confirmed_at: timestamp("confirmed_at"),
     created_at: timestamp("created_at").defaultNow().notNull(),
   },
@@ -2086,7 +2232,9 @@ export const skillsTable = pgTable(
     syllabus_ref: text("syllabus_ref"), // NECTA topic reference where known
     // Words that identify this skill in a question. The deterministic mapper
     // scores against these; the model only ever sees what they miss.
-    keywords: jsonb("keywords").notNull().default(sql`'[]'::jsonb`),
+    keywords: jsonb("keywords")
+      .notNull()
+      .default(sql`'[]'::jsonb`),
     active: boolean("active").notNull().default(true),
     created_at: timestamp("created_at").defaultNow().notNull(),
   },
@@ -2108,7 +2256,9 @@ export const skillObservationsTable = pgTable(
     student_id: integer("student_id")
       .notNull()
       .references(() => usersTable.id, { onDelete: "cascade" }),
-    skill_id: integer("skill_id").references(() => skillsTable.id, { onDelete: "set null" }),
+    skill_id: integer("skill_id").references(() => skillsTable.id, {
+      onDelete: "set null",
+    }),
     // graded_paper_items.id. Not a foreign key: that table is created by raw
     // SQL at runtime (routes/teacher-lens.ts) as well as declared here, and a
     // constraint across the two definitions would be a boot-order hazard for
@@ -2133,11 +2283,17 @@ export const skillObservationsTable = pgTable(
     observed_at: timestamp("observed_at").defaultNow().notNull(),
   },
   (t) => ({
-    student_skill_idx: index("skill_obs_student_skill_idx").on(t.student_id, t.skill_id, t.observed_at),
+    student_skill_idx: index("skill_obs_student_skill_idx").on(
+      t.student_id,
+      t.skill_id,
+      t.observed_at,
+    ),
     skill_idx: index("skill_obs_skill_idx").on(t.skill_id, t.observed_at),
     // One observation per marked question. Re-indexing a paper must not
     // double-count the same tick.
-    item_idx: uniqueIndex("skill_obs_item_idx").on(t.paper_item_id).where(sql`paper_item_id IS NOT NULL`),
+    item_idx: uniqueIndex("skill_obs_item_idx")
+      .on(t.paper_item_id)
+      .where(sql`paper_item_id IS NOT NULL`),
   }),
 );
 export type SkillObservation = typeof skillObservationsTable.$inferSelect;
@@ -2196,8 +2352,12 @@ export const markingFeedbackTable = pgTable(
     id: serial("id").primaryKey(),
     paper_item_id: integer("paper_item_id"),
     paper_id: integer("paper_id"),
-    student_id: integer("student_id").references(() => usersTable.id, { onDelete: "cascade" }),
-    skill_id: integer("skill_id").references(() => skillsTable.id, { onDelete: "set null" }),
+    student_id: integer("student_id").references(() => usersTable.id, {
+      onDelete: "cascade",
+    }),
+    skill_id: integer("skill_id").references(() => skillsTable.id, {
+      onDelete: "set null",
+    }),
     subject: text("subject"),
     ai_is_correct: boolean("ai_is_correct"),
     ai_marks_awarded: integer("ai_marks_awarded"),
@@ -2210,7 +2370,143 @@ export const markingFeedbackTable = pgTable(
     created_at: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => ({
-    agreed_idx: index("marking_feedback_agreed_idx").on(t.subject, t.agreed, t.created_at),
+    agreed_idx: index("marking_feedback_agreed_idx").on(
+      t.subject,
+      t.agreed,
+      t.created_at,
+    ),
   }),
 );
 export type MarkingFeedback = typeof markingFeedbackTable.$inferSelect;
+
+/**
+ * Voice enrolment for classroom speaker identification.
+ *
+ * This is biometric data belonging to children, so the consent columns are
+ * NOT NULL rather than advisory: there is no way to write a profile row
+ * without recording who authorised it and when. A comment saying "get consent
+ * first" is not a control; a NOT NULL column is.
+ *
+ * What is stored is the embedding, never the recording. Enrolment audio is
+ * turned into a vector and discarded in the same request — see
+ * `docs/K9_VOICE_IDENTITY.md`. The per-sample rows exist so a profile can be
+ * rebuilt or a bad sample dropped without asking a child to record again, and
+ * they hold vectors too, not audio.
+ *
+ * `model` and `model_revision` are part of the identity of a profile: embeddings
+ * from different models are not comparable, so a model upgrade must invalidate
+ * every profile rather than silently compare across spaces.
+ */
+export const voiceProfilesTable = pgTable(
+  "voice_profiles",
+  {
+    id: serial("id").primaryKey(),
+    student_id: integer("student_id")
+      .references(() => usersTable.id, { onDelete: "cascade" })
+      .notNull(),
+    student_code: text("student_code").notNull(),
+    class_id: integer("class_id").references(() => classesTable.id, {
+      onDelete: "set null",
+    }),
+    /** Unit-length centroid of the sample embeddings. */
+    embedding: jsonb("embedding").notNull(),
+    dims: integer("dims").notNull(),
+    sample_count: integer("sample_count").notNull(),
+    model: text("model").notNull(),
+    model_revision: text("model_revision").notNull(),
+    /** Who authorised this child's voice being enrolled, and when. */
+    consent_reference: text("consent_reference").notNull(),
+    consent_recorded_at: timestamp("consent_recorded_at").notNull(),
+    consent_by: text("consent_by").notNull(),
+    enrolled_by: integer("enrolled_by").references(() => usersTable.id, {
+      onDelete: "set null",
+    }),
+    /**
+     * Retention is set at enrolment, not bolted on. A profile past this date is
+     * deleted by the retention sweep whatever else is happening.
+     */
+    expires_at: timestamp("expires_at").notNull(),
+    /** A school can switch recognition off for one child without deleting them. */
+    active: boolean("active").notNull().default(true),
+    created_at: timestamp("created_at").defaultNow().notNull(),
+    updated_at: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    // One live profile per student per model. Re-enrolment replaces rather than
+    // accumulating: two centroids for one child would make identification
+    // depend on which row was read first.
+    student_model_idx: uniqueIndex("voice_profiles_student_model_idx").on(
+      t.student_id,
+      t.model,
+    ),
+    // The hot query is "profiles for the class that is in this room now".
+    class_active_idx: index("voice_profiles_class_active_idx").on(
+      t.class_id,
+      t.active,
+    ),
+    expiry_idx: index("voice_profiles_expiry_idx").on(t.expires_at),
+  }),
+);
+export type VoiceProfile = typeof voiceProfilesTable.$inferSelect;
+
+/**
+ * The individual enrolment utterances behind a profile — as embeddings.
+ *
+ * Several samples are taken because a child's voice moves with distance,
+ * illness, emotion and microphone position, and a centroid built from one
+ * close-mic sentence matches nothing said from the back of the room.
+ */
+export const voiceEnrollmentSamplesTable = pgTable(
+  "voice_enrollment_samples",
+  {
+    id: serial("id").primaryKey(),
+    profile_id: integer("profile_id")
+      .references(() => voiceProfilesTable.id, { onDelete: "cascade" })
+      .notNull(),
+    embedding: jsonb("embedding").notNull(),
+    /** Seconds of speech this sample carried, for spotting too-short prompts. */
+    seconds: integer("seconds"),
+    /** Cosine of this sample against the final centroid; outliers are visible. */
+    agreement: integer("agreement"),
+    prompt: text("prompt"),
+    created_at: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    profile_idx: index("voice_enrollment_samples_profile_idx").on(t.profile_id),
+  }),
+);
+export type VoiceEnrollmentSample =
+  typeof voiceEnrollmentSamplesTable.$inferSelect;
+
+/**
+ * Every read, write and deletion of a voice profile.
+ *
+ * Biometric handling that cannot be audited cannot be shown to be lawful, and a
+ * parent asking "what did you do with my child's voice?" deserves an answer
+ * that is not "we think nothing". Rows survive the profile they describe —
+ * `student_code` is plain text, not a foreign key — because the most important
+ * audit entry is the deletion itself.
+ */
+export const voiceAuditTable = pgTable(
+  "voice_audit",
+  {
+    id: serial("id").primaryKey(),
+    student_code: text("student_code").notNull(),
+    // "enrolled" | "re_enrolled" | "deactivated" | "deleted" | "expired" | "exported"
+    action: text("action").notNull(),
+    actor_id: integer("actor_id").references(() => usersTable.id, {
+      onDelete: "set null",
+    }),
+    actor_role: text("actor_role"),
+    detail: text("detail"),
+    created_at: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    student_idx: index("voice_audit_student_idx").on(
+      t.student_code,
+      t.created_at,
+    ),
+    action_idx: index("voice_audit_action_idx").on(t.action, t.created_at),
+  }),
+);
+export type VoiceAudit = typeof voiceAuditTable.$inferSelect;
