@@ -50,5 +50,53 @@ What the warehouse adds to the registry, and what was worth keeping from it:
 
 An earlier in-memory `ClassroomVoiceRegistry` in the runtime was removed for three reasons worth not rediscovering: it scored max-over-samples rather than against a centroid (which rewards whoever enrolled with more samples), it had a single threshold and no margin test (so two children who sound alike both pass and the winner is a coin toss), and it kept no consent record, retention or audit. See `docs/K9_VOICE_IDENTITY.md`.
 
+## Subject agents and the answer queue
+
+`lib/classroom-agents.ts` and `lib/answer-queue.ts` hold the decisions; the
+routes are thin over them, so the rules are testable without a database.
+
+**Routing (§7, §8).** The timetable does the work: a student asking "why do we
+move the 5 over there?" during the maths period should not have to explain that
+they are doing simultaneous equations. Precedence is *named subject* → *open
+conversation* → *timetable* → default. Topic words never override the
+timetable — "energy" and "cell" belong to three subjects at once, so guessing
+from them would mis-route more often than it helped. Subject names in Kiswahili
+route as well as English ones.
+
+**Invocation (§5).** Forty children talk constantly, so nothing is answered
+without the wake word or an open thirty-second conversation. Continuation is
+keyed on the **speaker label**, not the student, so a follow-up works even when
+nobody has been identified. Open conversations are in memory on purpose: they
+live thirty seconds, and the correct behaviour on restart is to forget them.
+
+**The queue (§6).** Three students speak at once, the diarizer separates them,
+the screen holds three cards and the room has one loudspeaker. So the queue
+schedules *speech*, which is the scarce resource:
+
+- **Round-robin by speaker, not first-come-first-served.** FIFO lets one
+  talkative child hold the loudspeaker for a whole lesson while a quiet one is
+  never heard. The next answer belongs to whoever has been served least; ties
+  break by age, which keeps it fair and predictable.
+- **Stale questions stop interrupting.** After 150s the lesson has moved on and
+  the answer would land over whatever the teacher is now saying. The card stays
+  on screen — it stops speaking, it does not vanish.
+- **Repeats are collapsed.** A student who thinks they were not heard says it
+  again and the diarizer obliges with a near-identical turn.
+- **A position is returned**, because a student who can see "2 ahead of you"
+  waits, and one who can see nothing asks again.
+
+**Modes (§9, §19).** `listen`, `qa`, `teacher_assist`, `quiz`, `lesson`, plus
+mute. Admission and speech come apart deliberately: a muted room still records
+questions, because a teacher who mutes KobeAI wants quiet, not amnesia — the
+learning evidence costs the lesson nothing.
+
+**Identity stays an enrichment.** The queue keys on the diarizer's label and
+attaches a student code only when the voice gate was confident. An unidentified
+child still gets their answer and the card reads "Someone in Form 2A". Putting
+the wrong child's name on a screen in front of their class is the failure the
+identity gate exists to prevent, and the queue is the component that would
+commit it. This is also why the router and the queue do not wait on the
+measurement: if voice identification turns out weak, they keep working.
+
 ## Before calling this an MVP
-`docs/K9_VOICE_IDENTITY.md` sets the order: enrol one class, run `measure_speaker_id.py` on real lesson audio, and read the coverage-against-misattribution number before building the router, the queue and the screen on top of an unmeasured identity layer. Still outstanding after that: real-model testing of Whisper/TitaNet/pyannote, simultaneous-speech testing, microphone-array direction-of-arrival as a second identity signal, subject-agent routing and the answer queue.
+`docs/K9_VOICE_IDENTITY.md` sets the order: enrol one class, run `measure_speaker_id.py` on real lesson audio, and read the coverage-against-misattribution number before building the router, the queue and the screen on top of an unmeasured identity layer. Still outstanding after that: real-model testing of Whisper/TitaNet/pyannote, simultaneous-speech testing on real hardware, microphone-array direction-of-arrival as a second identity signal, and the classroom gateway that joins the runtime to these endpoints.

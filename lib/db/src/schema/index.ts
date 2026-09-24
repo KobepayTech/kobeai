@@ -2587,3 +2587,100 @@ export const classroomSkillQuestionsTable = pgTable(
 );
 export type ClassroomSkillQuestion =
   typeof classroomSkillQuestionsTable.$inferSelect;
+
+/**
+ * A live lesson in one room: the mode the teacher has KobeAI in, and whether
+ * it is currently muted.
+ *
+ * Separate from `timetable_periods` because the timetable says what *should* be
+ * happening and this says what *is*. A teacher who starts late, swaps rooms or
+ * mutes KobeAI for five minutes is changing this, not the timetable.
+ */
+export const classroomSessionsTable = pgTable(
+  "classroom_sessions",
+  {
+    id: serial("id").primaryKey(),
+    class_id: integer("class_id")
+      .notNull()
+      .references(() => classesTable.id, { onDelete: "cascade" }),
+    period_id: integer("period_id"),
+    subject: text("subject"),
+    // 'listen' | 'qa' | 'teacher_assist' | 'quiz' | 'lesson'
+    mode: text("mode").notNull().default("listen"),
+    /** Silence to the room, never amnesia in the record. */
+    muted_until: timestamp("muted_until"),
+    kiosk_id: text("kiosk_id"),
+    started_at: timestamp("started_at").defaultNow().notNull(),
+    ended_at: timestamp("ended_at"),
+  },
+  (t) => ({
+    // One live session per class. A second TV in the same room joining must not
+    // create a rival session with its own mode.
+    live_idx: uniqueIndex("classroom_sessions_live_idx")
+      .on(t.class_id)
+      .where(sql`ended_at IS NULL`),
+    started_idx: index("classroom_sessions_started_idx").on(t.started_at),
+  }),
+);
+export type ClassroomSession = typeof classroomSessionsTable.$inferSelect;
+
+/**
+ * Questions waiting for the room's one loudspeaker.
+ *
+ * Keyed on `speaker` — the diarizer's per-recording label — and not on a
+ * student. `student_code` is attached only when the voice gate was confident,
+ * and stays null otherwise, forever. An unidentified child still gets their
+ * answer; the card just says "Someone in Form 2A".
+ *
+ * This is operational state with a lifetime of minutes. The permanent learning
+ * record of the same question is `classroom_skill_questions`, written through
+ * `POST /v1/classroom/insights`, which survives long after the queue is empty.
+ */
+export const classroomAnswerQueueTable = pgTable(
+  "classroom_answer_queue",
+  {
+    id: serial("id").primaryKey(),
+    session_id: integer("session_id")
+      .notNull()
+      .references(() => classroomSessionsTable.id, { onDelete: "cascade" }),
+    class_id: integer("class_id"),
+    /** The diarizer's label, e.g. "SPEAKER_00". Always present. */
+    speaker: text("speaker").notNull(),
+    /** Null unless identification was accepted. Never a best guess. */
+    student_code: text("student_code"),
+    attribution_confidence: integer("attribution_confidence"),
+    subject: text("subject"),
+    /** 'timetable' | 'mentioned' | 'continuation' | 'default' */
+    routed_by: text("routed_by"),
+    voice: text("voice"),
+    transcript: text("transcript").notNull(),
+    answer: text("answer"),
+    // 'queued' | 'answering' | 'spoken' | 'shown' | 'expired'
+    status: text("status").notNull().default("queued"),
+    /** False when the mode or a mute means this is screen-only. */
+    answer_aloud: boolean("answer_aloud").notNull().default(true),
+    created_at: timestamp("created_at").defaultNow().notNull(),
+    spoken_at: timestamp("spoken_at"),
+  },
+  (t) => ({
+    session_status_idx: index("answer_queue_session_status_idx").on(
+      t.session_id,
+      t.status,
+      t.created_at,
+    ),
+    // Round-robin fairness counts how many of a speaker's questions have been
+    // spoken this session. That is derived, never stored: a per-row counter
+    // drifts the moment one row is updated and its siblings are not.
+    speaker_idx: index("answer_queue_speaker_idx").on(
+      t.session_id,
+      t.speaker,
+      t.status,
+    ),
+    // At most one thing coming out of the loudspeaker per room.
+    speaking_idx: uniqueIndex("answer_queue_speaking_idx")
+      .on(t.session_id)
+      .where(sql`status = 'answering'`),
+  }),
+);
+export type ClassroomAnswerQueueItem =
+  typeof classroomAnswerQueueTable.$inferSelect;
