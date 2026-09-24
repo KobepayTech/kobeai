@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "root_env": "KOBEAI_MODELS_ROOT",
+  "default_root": "C:\\KobeOS\\Models",
+  "offline": true,
+  "categories": ["chat","reasoning","coding","vision","image-generation","embeddings","reranker","speech-to-text","speaker-id","diarization","text-to-speech","face","ocr"],
+  "production_blocklist": ["qwen-image-2.1"],
+  "known": {
+    "qwen-image": {"category":"image-generation","path":"image-generation/qwen-image","engine":"diffusers","commercial":true},
+    "whisper-large-v3-turbo": {"category":"speech-to-text","path":"k9/audio/whisper-large-v3-turbo","engine":"transformers_asr","commercial":true},
+    "titanet-large": {"category":"speaker-id","path":"k9/audio/titanet-large","engine":"titanet","commercial":true},
+    "pyannote-speaker-diarization-3.1": {"category":"diarization","path":"k9/audio/pyannote-speaker-diarization-3.1","engine":"pyannote","commercial":true},
+    "kokoro-82m": {"category":"text-to-speech","path":"k9/tts/kokoro-82m","engine":"kokoro","commercial":true}
+  }
+}
