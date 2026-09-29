@@ -9,10 +9,11 @@
     "./adapters/simulator": "./src/adapters/simulator/SimulatorAdapter.ts",
     "./adapters/brilliant": "./src/adapters/brilliant/BrilliantAdapter.ts",
     "./adapters/mentra": "./src/adapters/mentra/MentraAdapter.ts",
-    "./k9": "./src/k9/index.ts"
+    "./k9": "./src/k9/index.ts",
+    "./adapters/native": "./src/adapters/native/NativeAdapter.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.tests.json",
-    "test": "node --import ../scripts/node_modules/tsx/dist/loader.mjs --test tests/core.test.ts tests/adapters.test.ts"
+    "test": "node --import ../scripts/node_modules/tsx/dist/loader.mjs --test tests/core.test.ts tests/adapters.test.ts tests/native.test.ts"
   }
 }
