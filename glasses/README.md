@@ -24,7 +24,7 @@ Lens, classroom PC + TV, admin PC, parent phone, cameras, optional AR glasses).
 | `src/adapters/simulator/` | Software glasses that record what was shown and spoken — what the tests and laptop development run against |
 | `src/adapters/brilliant/` | Brilliant Labs Frame / Halo over WebBluetooth, including the Lua the Frame runs |
 | `src/adapters/mentra/` | MentraOS devices (Mentra Live, Even Realities, Vuzix Z100, NIMO) |
-| `src/adapters/native/` | Android WebMessage adapter for Rokid, HeyCyan and RayNeo, used by Teacher Lens |
+| `src/adapters/native/` | Android WebMessage adapter for MoYoung and legacy RayNeo, used by Teacher Lens |
 | `android/` | Native SDK bindings and bundled Teacher Lens app; [build and pairing guide](android/README.md) |
 | `src/k9/` | `K9Api` (the school server's existing lens endpoints) and `K9GlassesController` (lookup, marking, assistant, translate, safety) |
 | `tests/` | `node --test` over the simulator and both adapters, no hardware needed |
@@ -72,14 +72,10 @@ These are the facts the adapters are written against, not assumptions:
   Lens is already a browser PWA, this path works from the teacher's phone with
   no native build. The packages are injected rather than depended on, so this
   workspace installs nothing until the lens actually uses them.
-- **xg.glass** — [`hkust-spark/xg-glass-sdk`](https://github.com/hkust-spark/xg-glass-sdk)
-  (Apache-2.0) covers Rokid, Meta, Frame, RayNeo, INMO Air3, Omi, Even G1 and a
-  simulator, but ships **Kotlin, Swift and a Python CLI — no JavaScript or
-  TypeScript binding**. It therefore cannot be a TypeScript adapter here. It
-  is now used on the native side of `android/`. `NativeAdapter` in TypeScript
-  calls the origin-restricted Android WebMessage bridge; it does not call Kotlin
-  methods directly. Rokid/HeyCyan use the phone build, while the RayNeo build
-  runs on the glasses. See the Android guide for licences and hardware gates.
+- **MoYoung / DA ECHO** — the Android companion uses the native core SDK from
+  publisher package 1.3.6. Pairing, battery and AI-photo capture connect to the
+  existing NativeAdapter. See [Android integration](android/MOYOUNG.md) for GPL
+  source obligations and physical-device validation. Rokid is retired.
 
 ## Local-first
 

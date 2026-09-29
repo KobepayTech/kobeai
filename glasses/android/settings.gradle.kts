@@ -1,7 +1,7 @@
 pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-    repositories { google(); mavenCentral(); maven("https://maven.rokid.com/repository/maven-public/") }
+    repositories { google(); mavenCentral() }
 }
 rootProject.name = "KobeAILens"
 include(":app")

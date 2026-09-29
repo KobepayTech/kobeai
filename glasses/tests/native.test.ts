@@ -84,9 +84,9 @@ test("capture rejects invalid media and vendor errors; failed pairing stays disc
         : { jpeg: value },
     );
     const device = await new NativeAdapter(transport).open({
-      id: "rokid",
+      id: "moyoung",
       vendor: "native",
-      model: "Rokid",
+      model: "MoYoung",
     });
     await device.connect();
     await assert.rejects(device.camera.capture());
@@ -96,9 +96,9 @@ test("capture rejects invalid media and vendor errors; failed pairing stays disc
     throw new Error("Pairing denied");
   });
   const device = await new NativeAdapter(transport).open({
-    id: "rokid",
+    id: "moyoung",
     vendor: "native",
-    model: "Rokid",
+    model: "MoYoung",
   });
   await assert.rejects(device.connect(), /Pairing denied/);
   assert.equal(device.state, "disconnected");
@@ -124,4 +124,33 @@ test("bridge correlates out-of-order responses, ignores stale replies, and rejec
 test("bridge times out when native host does not reply", async () => {
   const transport = new NativeTransport({ postMessage() {} }, 5);
   await assert.rejects(transport.request("capture"), /timed out/);
+});
+
+test("retired Rokid provider cannot be opened", async () => {
+  const transport = new NativeTransport({ postMessage() {} });
+  const adapter = new NativeAdapter(transport);
+  await assert.rejects(adapter.open({ id: "rokid", vendor: "native", model: "Rokid" }), /Unknown native/);
+  transport.dispose();
+});
+
+test("MoYoung exposes battery but not unimplemented streaming or glasses speech", async () => {
+  let transport: NativeTransport;
+  transport = new NativeTransport({ postMessage(raw) {
+    const request = JSON.parse(raw);
+    queueMicrotask(() => transport.receive({ id: request.id, result:
+      request.method === "connect" ? { capabilities: { camera: true, battery: true } } :
+      request.method === "battery" ? 73 : null }));
+  } });
+  const adapter = new NativeAdapter(transport);
+  const device = await adapter.open({ id: "moyoung", vendor: "native", model: "MoYoung" });
+  await device.connect();
+  assert.equal(await device.battery(), 73);
+  const caps = await device.getCapabilities();
+  for (const key of ["cameraStream", "microphone", "display", "speaker", "speechSynthesis"] as const)
+    assert.equal(caps[key], false);
+  await assert.rejects(device.microphone.start(), /microphone/);
+  await assert.rejects(device.speaker.speak("Hello"), /speechSynthesis/);
+  await device.disconnect();
+  await assert.rejects(device.camera.capture(), /disconnected/);
+  transport.dispose();
 });

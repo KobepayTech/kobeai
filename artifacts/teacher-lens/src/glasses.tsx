@@ -49,7 +49,7 @@ export function speakThroughGlasses(text: string): boolean {
   const bridge = native();
   if (!bridge) return false;
   // Native TTS follows the phone's selected Bluetooth audio output for HeyCyan;
-  // Rokid uses its SDK TTS. Errors are visible rather than silently discarded.
+  // MoYoung uses phone TTS; only providers advertising speech synthesis receive SDK TTS.
   const speech =
     active?.state === "connected"
       ? active.speaker.speak(text)
@@ -116,8 +116,8 @@ export function GlassesControl({
       glasses.on("disconnected", () => {
         if (!mounted.current || active !== glasses) return;
         setStatus(
-          provider === "rokid"
-            ? "Rokid reconnecting automatically…"
+          provider === "moyoung"
+            ? "MoYoung reconnecting automatically…"
             : "Glasses disconnected",
         );
         onSource(device.model, false);
@@ -125,7 +125,7 @@ export function GlassesControl({
       setSelected(provider);
       onSource(device.model, true);
       setStatus(
-        `${device.model} connected${provider === "rokid" ? " · reconnects automatically" : ""}`,
+        `${device.model} connected${provider === "moyoung" ? " · reconnects automatically" : ""}`,
       );
       backoff.current = 3000;
       nextAttempt.current = 0;
@@ -133,7 +133,7 @@ export function GlassesControl({
       if (!mounted.current) return;
       setStatus(
         automatic
-          ? "Waiting for Rokid · retrying automatically"
+          ? "Waiting for MoYoung · retrying automatically"
           : "Connection needs attention",
       );
       if (!automatic) setError(String(e));
@@ -160,7 +160,7 @@ export function GlassesControl({
       checking = true;
       try {
         const info = await bridge!.request<{
-          automaticRokid?: boolean;
+          automaticMoYoung?: boolean;
           connected?: boolean;
           provider?: string;
         }>("info");
@@ -169,16 +169,16 @@ export function GlassesControl({
           active.connectionLost("Connection interrupted");
         if (
           info.connected &&
-          info.provider === "rokid" &&
+          info.provider === "moyoung" &&
           active?.state !== "connected"
         ) {
-          await runConnect("rokid", true);
+          await runConnect("moyoung", true);
         } else if (
-          info.automaticRokid &&
+          info.automaticMoYoung &&
           !info.provider &&
           Date.now() >= nextAttempt.current
         ) {
-          await runConnect("rokid", true);
+          await runConnect("moyoung", true);
         }
       } catch {
         /* bounded request; next status check retries */
@@ -192,7 +192,7 @@ export function GlassesControl({
         if (!mounted.current) return;
         knownDevices.current = found;
         setDevices(found);
-        setSelected(found.find((d) => d.id === "rokid")?.id ?? "");
+        setSelected(found.find((d) => d.id === "moyoung")?.id ?? "");
         void sync();
       })
       .catch((e) => {
@@ -217,7 +217,7 @@ export function GlassesControl({
   if (!window.KobeNative)
     return (
       <div style={{ padding: "6px 16px", fontSize: 12 }}>
-        Rokid reconnects automatically in the Android app after its first setup.
+        MoYoung reconnects automatically in the Android app after its first setup.
         Phone camera works here.
       </div>
     );
@@ -230,7 +230,7 @@ export function GlassesControl({
       await native()?.request("forget");
       active = null;
       onSource(null);
-      setStatus("Pairing removed. Connect Rokid to set up again.");
+      setStatus("Pairing removed. Connect MoYoung to set up again.");
       setError("");
     } catch {
       setError("Could not remove pairing. Try again.");
@@ -263,8 +263,8 @@ export function GlassesControl({
         >
           {busy
             ? "Connecting…"
-            : selected === "rokid"
-              ? "Connect Rokid"
+            : selected === "moyoung"
+              ? "Connect MoYoung"
               : "Connect"}
         </button>
       </div>

@@ -93,7 +93,7 @@ const assert = require("node:assert/strict");
   );
   await page
     .getByRole("button", {
-      name: "Connections: school server and Rokid glasses",
+      name: "Connections: school server and MoYoung glasses",
     })
     .click();
   assert.equal(
@@ -132,7 +132,7 @@ const assert = require("node:assert/strict");
   await page.getByText(/No captures sent yet/).waitFor();
   await page
     .getByRole("button", {
-      name: "Connections: school server and Rokid glasses",
+      name: "Connections: school server and MoYoung glasses",
     })
     .click();
   await page.getByRole("button", { name: "Change server / sign in" }).click();
@@ -171,14 +171,14 @@ const assert = require("node:assert/strict");
         if (call.method === "info")
           result = {
             version: 1,
-            providers: ["rokid"],
-            automaticRokid: enabled,
+            providers: ["moyoung"],
+            automaticMoYoung: enabled,
             connected,
             provider,
           };
         if (call.method === "connect") {
           connected = true;
-          provider = "rokid";
+          provider = "moyoung";
           result = {
             capabilities: {
               camera: true,
@@ -218,7 +218,7 @@ const assert = require("node:assert/strict");
   });
   await nativePage.goto("http://127.0.0.1:5178");
   await nativePage
-    .getByText("Rokid Glasses connected", { exact: true })
+    .getByText("MoYoung Glasses connected", { exact: true })
     .waitFor();
   assert.equal(
     await nativePage.evaluate(
@@ -229,7 +229,7 @@ const assert = require("node:assert/strict");
   );
   await nativePage
     .getByRole("button", {
-      name: "Connections: school server and Rokid glasses",
+      name: "Connections: school server and MoYoung glasses",
     })
     .click();
   await nativePage.getByLabel("Camera source").selectOption("");

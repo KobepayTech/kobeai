@@ -264,14 +264,14 @@ export function TeacherWorkspace({
       <button
         className="teacher-device"
         onClick={onConnections}
-        aria-label="Connections: school server and Rokid glasses"
+        aria-label="Connections: school server and MoYoung glasses"
       >
         <span className="teacher-device-icon">
           <ToolIcon name="glasses" />
         </span>
         <div>
           <strong>
-            {connected ? `${source} connected` : "Your Rokid glasses"}
+            {connected ? `${source} connected` : "Your MoYoung glasses"}
           </strong>
           <small>
             {connected
@@ -382,7 +382,7 @@ export function TeacherWorkspace({
             <aside className="teacher-card teacher-tip">
               <h3>A thoughtful teaching partner</h3>
               <p>
-                Connect Rokid, check the school server, then open Lens. Review
+                Connect MoYoung, check the school server, then open Lens. Review
                 AI suggestions before recording marks.
               </p>
             </aside>

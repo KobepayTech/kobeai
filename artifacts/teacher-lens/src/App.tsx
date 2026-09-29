@@ -139,7 +139,7 @@ function Setup({ onReady, initialServer }: { onReady: (a: StoredAuth) => void; i
         <span style={{ color: "var(--brand-green)" }}>KobeAI</span> Lens
       </h1>
       <p style={{ color: "var(--brand-muted)", marginTop: -6, marginBottom: 20 }}>
-        Step 1: connect to your school server. Join the school Wi-Fi and enter the HTTPS address supplied by your administrator. Sign in with your school teacher account, then connect Rokid from Connections.
+        Step 1: connect to your school server. Join the school Wi-Fi and enter the HTTPS address supplied by your administrator. Sign in with your school teacher account, then connect MoYoung from Connections.
       </p>
       <label htmlFor="school-server">School server URL</label>
       <input id="school-server" value={apiBase} onChange={(e) => setApiBase(e.target.value)} placeholder="https://school.local" />

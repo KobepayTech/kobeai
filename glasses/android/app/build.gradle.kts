@@ -30,11 +30,14 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     implementation("io.github.hkust-spark:xgglass-core:0.3.0")
-    "companionImplementation"("io.github.hkust-spark:xgglass-device-rokid:0.3.0")
-    "companionImplementation"(files("libs/glasses_sdk_20250723_v01.aar"))
-    "companionImplementation"("androidx.localbroadcastmanager:localbroadcastmanager:1.1.0")
-    "companionImplementation"("com.google.code.gson:gson:2.14.0")
-    "companionImplementation"("org.greenrobot:eventbus:3.2.0")
+    "companionImplementation"(files("libs/moyoung_glasses_sdk_0.0.7_20260624.aar"))
+    "companionImplementation"(files("libs/jl_audio_decode_V2.1.0_20012-release.aar", "libs/jl_bt_ota_V1.10.0_10932-release.aar"))
+    "companionImplementation"("com.google.protobuf:protobuf-java:4.29.3")
+    "companionImplementation"("com.squareup.okhttp3:okhttp:4.12.0")
+    "companionImplementation"("com.google.code.gson:gson:2.9.0")
+    "companionImplementation"("io.reactivex.rxjava3:rxjava:3.1.8")
+    "companionImplementation"("io.reactivex.rxjava3:rxandroid:3.0.2")
+    "companionImplementation"("org.nanohttpd:nanohttpd:2.3.1")
     "rayneoImplementation"("io.github.hkust-spark:xgglass-device-rayneo-runtime:0.3.0")
 }
 
@@ -45,7 +48,9 @@ tasks.register("verifyLensAssets") {
 }
 tasks.matching { it.name == "preBuild" }.configureEach { dependsOn("verifyLensAssets") }
 tasks.matching { it.name == "preCompanionDebugBuild" || it.name == "preCompanionReleaseBuild" }.configureEach {
-    doFirst { check(file("libs/glasses_sdk_20250723_v01.aar").isFile) {
-        "Supply the licensed HeyCyan SDK: python3 ../scripts/fetch_heycyan.py"
-    } }
+    doFirst {
+        listOf("moyoung_glasses_sdk_0.0.7_20260624.aar", "jl_audio_decode_V2.1.0_20012-release.aar", "jl_bt_ota_V1.10.0_10932-release.aar").forEach { name ->
+            check(file("libs/$name").isFile) { "Fetch the pinned MoYoung SDK: python3 ../scripts/fetch_moyoung.py" }
+        }
+    }
 }

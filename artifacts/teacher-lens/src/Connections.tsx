@@ -112,30 +112,26 @@ export function Connections({
             </details>
           </article>
           <article className="teacher-card">
-            <h2>2 · Rokid glasses</h2>
+            <h2>2 · MoYoung glasses</h2>
             <p>Glasses → Bluetooth → this Android phone → school server.</p>
             <details>
-              <summary>Pairing steps and Rokid licence</summary>
+              <summary>Pair MoYoung / DA ECHO glasses</summary>
               <ol>
                 <li>Turn on the glasses and Bluetooth on this phone.</li>
-                <li>Choose Rokid below and tap Connect Rokid.</li>
+                <li>Choose MoYoung below and tap Connect MoYoung.</li>
                 <li>Allow Android’s nearby-device permissions.</li>
+                <li>Select your glasses from the Bluetooth scan list.</li>
                 <li>
-                  Enter your Rokid developer client secret and select the
-                  device’s <code>.lc</code> licence file in the native dialogs.
-                </li>
-                <li>
-                  The Rokid SDK starts its connection flow. Wait for the
+                  The MoYoung SDK starts its connection flow. Wait for the
                   connected status before taking a photo.
                 </li>
               </ol>
               <p>
-                Setup is encrypted on this phone after a successful connection.
-                Rokid reconnects automatically when you return or the connection
-                drops. Android shows a connection notification while the app is
-                minimised. Use Forget pairing to remove the saved setup. The
-                licence and secret come from Rokid’s developer console; your
-                school password cannot replace them.
+                The selected device is remembered after a successful connection.
+                MoYoung reconnects automatically when you return or the connection
+                drops. Use Pause or Forget pairing to stop automatic connection.
+                No developer secret or licence file is needed for this pairing flow.
+                W620 support is experimental; test capture on your device first.
               </p>
             </details>
           </article>
@@ -147,7 +143,7 @@ export function Connections({
       {open && (
         <p className="teacher-muted">
           The web preview cannot pair Bluetooth glasses. Use the installed
-          Android app for the native Rokid dialogs. Physical pairing has not yet
+          Android app for the native MoYoung dialogs. Physical pairing has not yet
           been verified on our hardware.
         </p>
       )}
