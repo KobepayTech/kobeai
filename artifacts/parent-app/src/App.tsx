@@ -12,6 +12,7 @@ import Profile from "@/pages/profile";
 import PrintPage from "@/pages/print";
 import PrintHistoryPage from "@/pages/print-history";
 import SubscriptionPage from "@/pages/subscription";
+import MiniK9Page from "@/pages/mini-k9";
 import NotificationsPage from "@/pages/notifications";
 import AddChildPage from "@/pages/add-child";
 import StationeryPage from "@/pages/stationery";
@@ -40,6 +41,7 @@ function Router() {
       <Route path="/print" component={PrintPage} />
       <Route path="/print/history" component={PrintHistoryPage} />
       <Route path="/subscription" component={SubscriptionPage} />
+      <Route path="/mini-k9" component={MiniK9Page} />
       <Route path="/profile" component={Profile} />
       <Route path="/profile/notifications" component={NotificationsPage} />
       <Route path="/add-child" component={AddChildPage} />
