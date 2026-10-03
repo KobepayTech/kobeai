@@ -123,14 +123,34 @@ export async function sendDigestForParent(parentPhone: string): Promise<{
     .where(eq(pushSubscriptionsTable.parent_phone, parentPhone));
   if (subs.length === 0) return { sent: 0, failed: 0, removed: 0 };
 
-  // For now the digest is a static-ish summary. When the parent dashboard
-  // grows real per-day stats, swap this for a query that joins quiz_attempts
-  // + ai_questions for the parent's children over the last 24h.
+  // Mini K9 also folds the school calendar into the parent's daily brief.
+  // Keep the calendar table self-initializing so notification delivery does
+  // not depend on a parent opening the Mini K9 page first.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS school_calendar_events (
+      id BIGSERIAL PRIMARY KEY, title TEXT NOT NULL, description TEXT,
+      event_type TEXT NOT NULL DEFAULT 'school', starts_at TIMESTAMPTZ NOT NULL,
+      ends_at TIMESTAMPTZ, location TEXT, audience TEXT NOT NULL DEFAULT 'all',
+      student_code TEXT, created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  const events = await pool.query(
+    `SELECT title, event_type, starts_at, location
+     FROM school_calendar_events
+     WHERE starts_at >= now() AND starts_at < now() + interval '7 days'
+     ORDER BY starts_at ASC LIMIT 3`
+  );
+  const eventText = events.rows.length
+    ? " Upcoming: " + events.rows.map((e: { title: string; starts_at: string; location: string | null }) =>
+        e.title + " — " + new Date(e.starts_at).toLocaleString() + (e.location ? " at " + e.location : "")
+      ).join("; ")
+    : "";
   const payload = JSON.stringify({
-    title: "KobeAI daily digest",
-    body: "Your child completed today's lessons. Tap to see their progress.",
-    url: "/profile",
-    tag: "kobeai-daily",
+    title: "KobeAI • Mini K9",
+    body: "Your child's school brief is ready." + eventText,
+    url: "/mini-k9",
+    tag: "kobeai-mini-k9-daily",
   });
 
   let sent = 0;
