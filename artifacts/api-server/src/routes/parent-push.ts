@@ -1,7 +1,7 @@
 import { Router } from "express";
 import webpush from "web-push";
 import { and, eq, gte, inArray, sql } from "drizzle-orm";
-import { db, pushSubscriptionsTable, parentChildrenTable, usersTable } from "@workspace/db";
+import { db, pool, pushSubscriptionsTable, parentChildrenTable, usersTable } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 import { logger } from "../lib/logger";
 
