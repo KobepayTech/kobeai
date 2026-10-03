@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { eq, inArray } from "drizzle-orm";
 import { db, parentChildrenTable, subscriptionCacheTable, usersTable } from "@workspace/db";
-import { pool } from "../lib/db";
+import { pool } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 import { askAI } from "../lib/ai-provider";
 
