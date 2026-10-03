@@ -30,7 +30,6 @@ async function ensureMiniK9Tables() {
   })();
   await tablesReady;
 }
-router.use("/v1/parent/k9", requireAuth(["parent"]));
 
 async function ownedStudentCodes(parentId: number) {
   const rows = await db.select({ code: usersTable.student_code })
@@ -47,7 +46,7 @@ async function childContext(parentId: number) {
   }).from(subscriptionCacheTable).where(inArray(subscriptionCacheTable.student_code, codes));
 }
 
-router.get("/v1/parent/k9/overview", async (req, res) => {
+router.get("/v1/parent/k9/overview", requireAuth(["parent"]), async (req, res) => {
   await ensureMiniK9Tables();
   const parentId = Number(req.auth?.user_id);
   if (!parentId) return res.status(401).json({ error: "no parent in token" });
@@ -61,7 +60,7 @@ router.get("/v1/parent/k9/overview", async (req, res) => {
     capabilities: ["school_calendar","smart_notifications","learning_summary","parent_questions","revision_recommendations","optional_ai_calls"] });
 });
 
-router.get("/v1/parent/k9/calendar", async (req, res) => {
+router.get("/v1/parent/k9/calendar", requireAuth(["parent"]), async (req, res) => {
   await ensureMiniK9Tables();
   const parentId = Number(req.auth?.user_id);
   if (!parentId) return res.status(401).json({ error: "no parent in token" });
@@ -74,7 +73,7 @@ router.get("/v1/parent/k9/calendar", async (req, res) => {
   res.json({ events: result.rows });
 });
 
-router.post("/v1/parent/k9/chat", async (req, res) => {
+router.post("/v1/parent/k9/chat", requireAuth(["parent"]), async (req, res) => {
   const parentId = Number(req.auth?.user_id);
   if (!parentId) return res.status(401).json({ error: "no parent in token" });
   const message = typeof req.body?.message === "string" ? req.body.message.trim() : "";
@@ -92,7 +91,7 @@ router.post("/v1/parent/k9/chat", async (req, res) => {
   res.json({ answer: result.answer, model: result.model, provider: result.provider });
 });
 
-router.post("/v1/parent/k9/call", async (req, res) => {
+router.post("/v1/parent/k9/call", requireAuth(["parent"]), async (req, res) => {
   await ensureMiniK9Tables();
   const parentId = Number(req.auth?.user_id);
   if (!parentId) return res.status(401).json({ error: "no parent in token" });
