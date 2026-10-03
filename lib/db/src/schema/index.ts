@@ -673,6 +673,47 @@ export const subscriptionCacheTable = pgTable(
 export type CachedSubscription = typeof subscriptionCacheTable.$inferSelect;
 
 /**
+ * Parent-facing school calendar. Staff publish school-wide, boarding,
+ * or student-specific events; Mini K9 filters them to linked children.
+ */
+export const schoolCalendarEventsTable = pgTable(
+  "school_calendar_events",
+  {
+    id: serial("id").primaryKey(),
+    title: text("title").notNull(),
+    description: text("description"),
+    event_type: text("event_type").notNull().default("school"),
+    starts_at: timestamp("starts_at", { withTimezone: true }).notNull(),
+    ends_at: timestamp("ends_at", { withTimezone: true }),
+    location: text("location"),
+    audience: text("audience").notNull().default("all"),
+    student_code: text("student_code"),
+    created_by: integer("created_by").references(() => usersTable.id, { onDelete: "set null" }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    start_idx: index("school_calendar_events_start_idx").on(t.starts_at),
+    student_idx: index("school_calendar_events_student_idx").on(t.student_code, t.starts_at),
+  }),
+);
+export type SchoolCalendarEvent = typeof schoolCalendarEventsTable.$inferSelect;
+
+export const parentAiCallRequestsTable = pgTable("parent_ai_call_requests", {
+  id: serial("id").primaryKey(),
+  parent_user_id: integer("parent_user_id").notNull().references(() => usersTable.id, { onDelete: "cascade" }),
+  student_code: text("student_code"),
+  phone: text("phone").notNull(),
+  reason: text("reason").notNull(),
+  payload: jsonb("payload").notNull().default(sql`'{}'::jsonb`),
+  status: text("status").notNull().default("queued"),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  scheduled_for: timestamp("scheduled_for", { withTimezone: true }),
+  completed_at: timestamp("completed_at", { withTimezone: true }),
+});
+export type ParentAiCallRequest = typeof parentAiCallRequestsTable.$inferSelect;
+
+/**
  * Subscription payments collected via M-Pesa STK push from the parent app.
  * Lives on the central server (the bursar of each school sees the rows for
  * their own tenant_id; central also drives subscription renewal upon success).
