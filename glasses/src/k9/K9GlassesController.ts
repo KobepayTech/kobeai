@@ -25,6 +25,7 @@ export class K9GlassesController {
   private sessionId: number | null = null;
   private stopHandlers: Array<() => void> = [];
   private whisperTimer: ReturnType<typeof setInterval> | null = null;
+  private markCaptureTimer: ReturnType<typeof setInterval> | null = null;
   mode: GlassesMode = "lookup";
   examId: number | null;
 
@@ -47,7 +48,8 @@ export class K9GlassesController {
       }),
     );
     this.startWhispers();
-    await this.show(mode === "mark" ? "Point at a paper" : "Point at a student");
+    if (mode === "mark") this.startContinuousMarkingCapture();
+    await this.show(mode === "mark" ? "K9 marking vision active" : "Point at a student");
   }
 
   async stop(): Promise<void> {
@@ -55,12 +57,45 @@ export class K9GlassesController {
     this.stopHandlers = [];
     if (this.whisperTimer) clearInterval(this.whisperTimer);
     this.whisperTimer = null;
+    if (this.markCaptureTimer) clearInterval(this.markCaptureTimer);
+    this.markCaptureTimer = null;
     if (this.sessionId) await this.api.endSession(this.sessionId);
     this.sessionId = null;
   }
 
   setMode(mode: GlassesMode): void {
     this.mode = mode;
+    if (mode === "mark" && !this.markCaptureTimer) this.startContinuousMarkingCapture();
+    if (mode !== "mark" && this.markCaptureTimer) {
+      clearInterval(this.markCaptureTimer);
+      this.markCaptureTimer = null;
+    }
+  }
+
+  /**
+   * Exam marking is camera-first. The teacher does not read the question,
+   * answer, or question number aloud. K9 samples the teacher's view and the
+   * vision worker determines the paper, student, question, answer and marks.
+   */
+  private startContinuousMarkingCapture(): void {
+    if (this.markCaptureTimer || !this.caps?.camera) return;
+    const intervalMs = 1800;
+    void this.captureMarkFrame();
+    this.markCaptureTimer = setInterval(() => void this.captureMarkFrame(), intervalMs);
+  }
+
+  private async captureMarkFrame(): Promise<void> {
+    if (this.mode !== "mark" || !this.caps?.camera) return;
+    try {
+      const bytes = await this.glasses.camera.capture();
+      await this.api.sendFrame(bytes, {
+        sessionId: this.sessionId,
+        mode: "mark",
+        examId: this.examId,
+      });
+    } catch {
+      // A dropped frame must never interrupt the teacher's normal marking.
+    }
   }
 
   /** Shows text when there is a display; otherwise says it. */
@@ -79,9 +114,8 @@ export class K9GlassesController {
   }
 
   /**
-   * The capture button: in lookup mode K9 recognises the student's face, in mark
-   * mode the brain reads the paper. Both answers come back as whispers, so the
-   * teacher hears them without looking away.
+   * Manual capture remains useful for lookup mode. In marking mode K9 is already
+   * sampling the camera continuously; the teacher never reads the question aloud.
    */
   async onShutter(): Promise<void> {
     if (!this.caps?.camera) {
@@ -94,7 +128,7 @@ export class K9GlassesController {
       mode: this.mode === "mark" ? "mark" : "lookup",
       examId: this.mode === "mark" ? this.examId : null,
     });
-    await this.show(this.mode === "mark" ? "Reading the paper…" : "Looking them up…");
+    await this.show(this.mode === "mark" ? "K9 is reading the marked paper…" : "Looking them up…");
     return queued.requestId === null ? undefined : this.waitForFrame(queued.requestId);
   }
 
