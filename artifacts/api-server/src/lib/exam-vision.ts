@@ -63,7 +63,7 @@ export async function recordCameraMarkedPaper(args: {
   const student = await findClassStudent(exam.class_id, studentCode);
   if (!student) return { status: "needs_confirmation", studentCode, reason: "Student is not in the selected exam class." };
 
-  const marked = items.filter(hasMark);
+  const paperComplete = response.paper_complete === true;\n  const marked = items.filter(hasMark);
   if (marked.length === 0) return { status: "ignored", reason: "No teacher mark detected." };
 
   const marksAwarded = marked.reduce((s, i) => s + (num(i.marks_awarded) ?? (i.is_correct ? (num(i.marks_possible) ?? 0) : 0)), 0);
