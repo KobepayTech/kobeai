@@ -833,12 +833,14 @@ router.post(
 
     // Also drop a whisper so the teacher hears "sent to Kobe" immediately —
     // the worker's actual answer will replace that once it's ready.
-    await enqueueWhisper({
-      sessionId: Number.isFinite(sessionId) ? sessionId : null,
-      teacherUserId: req.auth?.user_id ?? null,
-      text: kind === "mark_paper" ? "Paper sent to Kobe." : "Looking that student up.",
-      priority: 7,
-    }).catch(() => undefined);
+    if (kind !== "mark_paper") {
+      await enqueueWhisper({
+        sessionId: Number.isFinite(sessionId) ? sessionId : null,
+        teacherUserId: req.auth?.user_id ?? null,
+        text: "Looking that student up.",
+        priority: 7,
+      }).catch(() => undefined);
+    }
 
     res.status(202).json({ request, image_key: key });
   },
