@@ -892,7 +892,7 @@ export function App() {
   }>(null);
   const [rememberFace, setRememberFace] = useState(true);
   // The frame request the open picker is waiting on; cleared when it closes.
-  const pickerRequest = useRef<number | null>(null);
+  const pickerRequest = useRef<number | null>(null);\n  const markUploadInFlight = useRef(false);
   useEffect(() => {
     if (!studentPicker) pickerRequest.current = null;
   }, [studentPicker]);
@@ -991,6 +991,24 @@ export function App() {
     }
   }, [auth, captureBlob, mode, sessionId]);
 
+  // Camera-first exam marking: no shutter and no teacher narration are required.
+  // K9 samples the teacher's view while they mark normally.
+  useEffect(() => {
+    if (mode !== "mark" || !auth || sessionId == null) return;
+    const tick = async () => {
+      if (markUploadInFlight.current) return;
+      markUploadInFlight.current = true;
+      try {
+        await uploadFrame();
+      } finally {
+        markUploadInFlight.current = false;
+      }
+    };
+    tick();
+    const timer = window.setInterval(tick, 2500);
+    return () => window.clearInterval(timer);
+  }, [auth, mode, sessionId, uploadFrame]);
+
   const runLookup = useCallback(
     async (studentCode: string, quiet = false) => {
       if (!auth) return;
@@ -1068,8 +1086,10 @@ export function App() {
       setStudentPicker({ students: recent, imageKey: uploaded?.image_key ?? null, requestId, recognising: requestId !== null, hint: null });
       if (requestId !== null) watchLookup(requestId);
     } else {
-      const uploaded = await uploadFrame();
-      setMarkOpen({ requestId: uploaded?.request_id ?? null, imageKey: uploaded?.image_key ?? null });
+      // Manual capture is retained as a recovery/control action, but the normal
+      // marking workflow is continuous camera observation.
+      await uploadFrame();
+      setToast("K9 is reading the marked paper.");
     }
   }, [auth, mode, captureFrame, uploadFrame, fetchRecentStudents, watchLookup]);
 
@@ -1128,7 +1148,7 @@ export function App() {
         <div className="lens-overlay">
           <div className="headline">{mode === "lookup" ? "Point at a student" : "Point at a marked paper"}</div>
           <div className="sub">
-            Tap the shutter — Kobe whispers back through your earbud.
+            K9 continuously reads the marked paper through the camera. The teacher does not read questions or answers aloud.
           </div>
         </div>
       </div>
@@ -1153,7 +1173,7 @@ export function App() {
         >
           {wakeWordOn ? "🎙️ Kobe on" : "🎙️ Kobe off"}
         </button>
-        <button className="lens-shutter" onClick={onShutter} aria-label="Shutter" />
+        <button className="lens-shutter" onClick={onShutter} aria-label="Capture / check frame" />
         <button
           className="lens-secondary"
           onClick={() => {
