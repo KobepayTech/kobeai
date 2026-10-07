@@ -2,6 +2,7 @@ import { pool } from "@workspace/db";
 import { ensureResultsTables, findClassStudent, getExam, recordExamResult, type ExamRow } from "./results";
 import { generateCuratedNotesForPaper, generateRetestForPaper } from "./student-development";
 import { logger } from "./logger";
+import { generateExamSummary } from "./exam-summary";
 
 export type VisionMarkItem = {
   question_number?: number | string | null;
@@ -160,5 +161,6 @@ export async function recordCameraMarkedPaper(args: {
   try { await generateCuratedNotesForPaper(paperId); } catch (e) { logger.warn({ err: e, paperId }, "camera curated notes failed"); }
   try { await generateRetestForPaper(paperId); } catch (e) { logger.warn({ err: e, paperId }, "camera retest generation failed"); }
 
+  await generateExamSummary(studentCode, exam.subject, exam.id).catch((e) => logger.warn({ err: e, studentCode }, "exam summary generation failed"));
   return { status: "recorded", paperId, studentCode };
 }
