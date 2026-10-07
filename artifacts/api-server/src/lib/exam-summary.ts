@@ -14,6 +14,10 @@ export async function generateExamSummary(studentCode: string, subject: string, 
     "SELECT COALESCE(i.question_topic,'General') AS topic, COUNT(*)::int AS wrong_count, COUNT(*) FILTER (WHERE i.is_correct)::int AS correct_count FROM graded_paper_items i JOIN graded_papers p ON p.id=i.paper_id WHERE p.student_code=$1 AND p.subject=$2 AND i.is_correct=FALSE GROUP BY i.question_topic ORDER BY wrong_count DESC LIMIT 5",
     [studentCode, subject],
   );
+  const practice = await pool.query(
+    "SELECT topic, question_text, expected_answer FROM generated_questions WHERE topic = ANY($1::text[]) ORDER BY used_count ASC LIMIT 12",
+    [weak.rows.map((r: any) => String(r.topic))],
+  );
   const pages = [
     { page: 1, left: "Your exam performance", right: "Strengths and priority learning gaps." },
     { page: 2, left: "Understand: " + (weak.rows[0]?.topic ?? "core review"), right: "Explanation + worked example." },
@@ -29,7 +33,7 @@ export async function generateExamSummary(studentCode: string, subject: string, 
   await pool.query(
     "INSERT INTO k9_exam_summaries (student_code,subject,source_exam_id,page_count,split_layout,content) VALUES ($1,$2,$3,6,TRUE,$4::jsonb) ON CONFLICT (student_code,subject,source_exam_id) DO UPDATE SET content=EXCLUDED.content,page_count=6,split_layout=TRUE,generated_at=NOW()",
     [studentCode, subject, examId, JSON.stringify({
-      format: "A4-portrait-three-sheets", pages, weak_topics: weak.rows, mistakes,
+      format: "A4-portrait-three-sheets", pages, weak_topics: weak.rows, mistakes, practice_questions: practice.rows,
       max_pages: 6, physical_sheets: 3, split_middle: true, generated_from: "camera_marked_exam",
     })],
   );
