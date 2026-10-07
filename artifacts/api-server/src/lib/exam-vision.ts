@@ -54,6 +54,7 @@ export async function recordCameraMarkedPaper(args: {
     return { status: "needs_confirmation", studentCode: studentCode ?? undefined, reason: "K9 is not confident enough to permanently attach this paper to a student profile." };
   }
   const examId = num(context.exam_id);
+  const fingerprint = clean(response.paper_fingerprint ?? response.paperFingerprint, 200);
   if (!examId || items.length === 0) return { status: "ignored", reason: "No exam or marked question items detected." };
 
   const exam = await getExam(examId);
@@ -72,8 +73,18 @@ export async function recordCameraMarkedPaper(args: {
   const sessionId = num(context.lens_session_id);
   const imageKey = clean(context.image_key, 300);
 
+  const existing = fingerprint
+    ? await pool.query(
+        `SELECT id FROM graded_papers
+         WHERE student_code = $1
+           AND metadata->>'exam_id' = $2
+           AND metadata->>'paper_fingerprint' = $3
+         ORDER BY graded_at DESC LIMIT 1`,
+        [studentCode, String(exam.id), fingerprint],
+      )
+    : { rows: [] };
   const client = await pool.connect();
-  let paperId = 0;
+  let paperId = Number(existing.rows[0]?.id ?? 0);
   try {
     await client.query("BEGIN");
     const paper = await client.query(
@@ -87,6 +98,21 @@ export async function recordCameraMarkedPaper(args: {
          profile_attachment_confidence: attachmentConfidence, exam_id: exam.id })],
     );
     paperId = Number(paper.rows[0].id);
+
+    if (existing.rows[0]) {
+      // Continuous glasses frames may see the same paper repeatedly. Replace
+      // the current snapshot totals and only append question numbers not yet seen.
+      await client.query(
+        `UPDATE graded_papers
+         SET total_questions = GREATEST(total_questions, $2),
+             correct_count = $3, incorrect_count = $4, score_percent = $5,
+             paper_image_key = COALESCE($6, paper_image_key),
+             metadata = metadata || $7::jsonb
+         WHERE id = $1`,
+        [paperId, marked.length, correct, incorrect, score, imageKey,
+         JSON.stringify({ last_page: response.page_number ?? null, paper_complete: response.paper_complete ?? false })],
+      );
+    }
 
     for (const item of marked) {
       const awarded = num(item.marks_awarded);
