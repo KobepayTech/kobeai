@@ -16,6 +16,7 @@ import {
   generateRetestForPaper,
 } from "../lib/student-development";
 import { logger } from "../lib/logger";
+import { recordCameraMarkedPaper } from "../lib/exam-vision";
 import {
   announceResult,
   ensureResultsTables,
@@ -573,13 +574,25 @@ export async function onLensRequestCompleted(request: VisionAnalysisRequest): Pr
   }
 
   if (request.reason === "lens:mark_paper") {
-    const items = Array.isArray(response["items"]) ? response["items"].length : 0;
-    await say(
-      request.status === "completed" && items > 0
-        ? `Kobe read ${items} answer${items === 1 ? "" : "s"}. Check them on the mark sheet.`
-        : "Kobe couldn't read that paper. Enter the marks by hand.",
-      4,
-    );
+    if (request.status !== "completed") {
+      await say("K9 could not read this frame. Keep marking normally.", 5);
+      return;
+    }
+    try {
+      const result = await recordCameraMarkedPaper({
+        response,
+        context,
+        teacherUserId: request.requested_by,
+      });
+      if (result.status === "recorded") {
+        await say(`Recorded ${result.studentCode ?? "student"} exam marking.`, 6);
+      } else if (result.status === "needs_confirmation") {
+        await say("K9 found the paper but needs student confirmation before saving it permanently.", 3);
+      }
+    } catch (err) {
+      logger.warn({ err, requestId: request.id }, "camera exam marking ingestion failed");
+      await say("K9 read the paper but could not save the marking. The teacher's mark is unchanged.", 4);
+    }
   }
 }
 
@@ -794,7 +807,7 @@ router.post(
     // the auto-enqueued wrong_location questions from presence).
     const question =
       kind === "mark_paper"
-        ? "OCR this student paper and extract per-question (question_number, question_text, question_topic, student_answer, expected_answer, is_correct) items. Return JSON."
+        ? `You are K9 Exam Vision. The teacher NEVER reads the question or answer aloud. Use ONLY the camera image. Identify the exam paper and student, read the printed question number/text, read the student's written answer, identify the teacher's visible marks/ticks/corrections and marks awarded/possible. Return JSON with student_code, student_confidence, profile_attachment_confidence (separate threshold; do not permanently attach below 0.90), paper_fingerprint, page_number, paper_complete, and items[]. Each item: question_number, question_text, question_topic, student_answer, expected_answer if visible/known, is_correct only when visually justified, marks_awarded, marks_possible, marking_confidence. NEVER invent a teacher mark. If a mark is not visible, leave marks_awarded null. The teacher's mark is authoritative; K9 analysis must not overwrite it.`
         : "Face-recognise the closest / largest face in this frame and return the matched student_code + confidence. Return JSON.";
     let request;
     try {
