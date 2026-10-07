@@ -16,6 +16,8 @@ import {
   generateRetestForPaper,
 } from "../lib/student-development";
 import { logger } from "../lib/logger";
+import { recordCameraMarkedPaper } from "../lib/exam-vision";
+import { getClassExamGaps, ensureExamSummaryTable } from "../lib/exam-summary";
 import {
   announceResult,
   ensureResultsTables,
@@ -573,13 +575,25 @@ export async function onLensRequestCompleted(request: VisionAnalysisRequest): Pr
   }
 
   if (request.reason === "lens:mark_paper") {
-    const items = Array.isArray(response["items"]) ? response["items"].length : 0;
-    await say(
-      request.status === "completed" && items > 0
-        ? `Kobe read ${items} answer${items === 1 ? "" : "s"}. Check them on the mark sheet.`
-        : "Kobe couldn't read that paper. Enter the marks by hand.",
-      4,
-    );
+    if (request.status !== "completed") {
+      await say("K9 could not read this frame. Keep marking normally.", 5);
+      return;
+    }
+    try {
+      const result = await recordCameraMarkedPaper({
+        response,
+        context,
+        teacherUserId: request.requested_by,
+      });
+      if (result.status === "recorded") {
+        await say(`Recorded ${result.studentCode ?? "student"} exam marking.`, 6);
+      } else if (result.status === "needs_confirmation") {
+        await say("K9 found the paper but needs student confirmation before saving it permanently.", 3);
+      }
+    } catch (err) {
+      logger.warn({ err, requestId: request.id }, "camera exam marking ingestion failed");
+      await say("K9 read the paper but could not save the marking. The teacher's mark is unchanged.", 4);
+    }
   }
 }
 
@@ -734,6 +748,43 @@ router.get(
 );
 
 /**
+ * GET /v1/teacher/exams/:examId/knowledge-gaps
+ * Class-wide analysis generated from actual marked answers.
+ */
+router.get("/v1/teacher/exams/:examId/knowledge-gaps", requireTeacher, async (req, res) => {
+  const examId = positiveInt(req.params.examId);
+  if (!examId) {
+    res.status(400).json({ error: "invalid exam id" });
+    return;
+  }
+  res.json({ exam_id: examId, gaps: await getClassExamGaps(examId) });
+});
+
+/**
+ * GET /v1/teacher-lens/student/:studentCode/exam-summary
+ * Returns the latest constrained six-page revision pack for a subject/exam.
+ */
+router.get("/v1/teacher-lens/student/:studentCode/exam-summary", requireTeacher, async (req, res) => {
+  const studentCode = text(req.params.studentCode, 100);
+  const examId = positiveInt(req.query.exam_id);
+  const subject = text(req.query.subject, 200);
+  if (!studentCode || !examId || !subject) {
+    res.status(400).json({ error: "student_code, exam_id and subject required" });
+    return;
+  }
+  await ensureExamSummaryTable();
+  const result = await pool.query(
+    "SELECT id, student_code, subject, source_exam_id, page_count, split_layout, content, generated_at FROM k9_exam_summaries WHERE student_code=$1 AND subject=$2 AND source_exam_id=$3",
+    [studentCode, subject, examId],
+  );
+  if (!result.rows[0]) {
+    res.status(404).json({ error: "exam_summary_not_ready" });
+    return;
+  }
+  res.json({ summary: result.rows[0] });
+});
+
+/**
  * POST /v1/teacher-lens/frame
  * Accepts a raw JPEG frame from the lens client. Saves it to
  * KOBEAI_LENS_FRAMES_DIR (default /var/lib/kobeai/lens-frames), enqueues
@@ -794,7 +845,7 @@ router.post(
     // the auto-enqueued wrong_location questions from presence).
     const question =
       kind === "mark_paper"
-        ? "OCR this student paper and extract per-question (question_number, question_text, question_topic, student_answer, expected_answer, is_correct) items. Return JSON."
+        ? `You are K9 Exam Vision. The teacher NEVER reads the question or answer aloud. Use ONLY the camera image. Identify the exam paper and student, read the printed question number/text, read the student's written answer, identify the teacher's visible marks/ticks/corrections and marks awarded/possible. Return JSON with student_code, student_confidence, profile_attachment_confidence (separate threshold; do not permanently attach below 0.90), paper_fingerprint, page_number, paper_complete, and items[]. Each item: question_number, question_text, question_topic, student_answer, expected_answer if visible/known, is_correct only when visually justified, marks_awarded, marks_possible, marking_confidence. NEVER invent a teacher mark. If a mark is not visible, leave marks_awarded null. The teacher's mark is authoritative; K9 analysis must not overwrite it.`
         : "Face-recognise the closest / largest face in this frame and return the matched student_code + confidence. Return JSON.";
     let request;
     try {
@@ -820,12 +871,14 @@ router.post(
 
     // Also drop a whisper so the teacher hears "sent to Kobe" immediately —
     // the worker's actual answer will replace that once it's ready.
-    await enqueueWhisper({
-      sessionId: Number.isFinite(sessionId) ? sessionId : null,
-      teacherUserId: req.auth?.user_id ?? null,
-      text: kind === "mark_paper" ? "Paper sent to Kobe." : "Looking that student up.",
-      priority: 7,
-    }).catch(() => undefined);
+    if (kind !== "mark_paper") {
+      await enqueueWhisper({
+        sessionId: Number.isFinite(sessionId) ? sessionId : null,
+        teacherUserId: req.auth?.user_id ?? null,
+        text: "Looking that student up.",
+        priority: 7,
+      }).catch(() => undefined);
+    }
 
     res.status(202).json({ request, image_key: key });
   },
