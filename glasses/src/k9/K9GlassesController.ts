@@ -26,6 +26,7 @@ export class K9GlassesController {
   private stopHandlers: Array<() => void> = [];
   private whisperTimer: ReturnType<typeof setInterval> | null = null;
   private markCaptureTimer: ReturnType<typeof setInterval> | null = null;
+  private markCaptureInFlight = false;
   mode: GlassesMode = "lookup";
   examId: number | null;
 
@@ -85,7 +86,8 @@ export class K9GlassesController {
   }
 
   private async captureMarkFrame(): Promise<void> {
-    if (this.mode !== "mark" || !this.caps?.camera) return;
+    if (this.mode !== "mark" || !this.caps?.camera || this.markCaptureInFlight) return;
+    this.markCaptureInFlight = true;
     try {
       const bytes = await this.glasses.camera.capture();
       await this.api.sendFrame(bytes, {
@@ -95,6 +97,8 @@ export class K9GlassesController {
       });
     } catch {
       // A dropped frame must never interrupt the teacher's normal marking.
+    } finally {
+      this.markCaptureInFlight = false;
     }
   }
 
