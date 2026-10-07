@@ -87,46 +87,60 @@ export async function recordCameraMarkedPaper(args: {
   let paperId = Number(existing.rows[0]?.id ?? 0);
   try {
     await client.query("BEGIN");
-    const paper = await client.query(
-      `INSERT INTO graded_papers
-       (session_id, teacher_user_id, student_code, class_id, subject, assessment_title,
-        total_questions, correct_count, incorrect_count, score_percent, paper_image_key, metadata)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb) RETURNING id`,
-      [sessionId, args.teacherUserId, studentCode, exam.class_id, exam.subject, exam.title,
-       marked.length, correct, incorrect, score, imageKey,
-       JSON.stringify({ source: "glasses_camera", student_confidence: studentConfidence,
-         profile_attachment_confidence: attachmentConfidence, exam_id: exam.id })],
-    );
-    paperId = Number(paper.rows[0].id);
-
-    if (existing.rows[0]) {
-      // Continuous glasses frames may see the same paper repeatedly. Replace
-      // the current snapshot totals and only append question numbers not yet seen.
+    if (!paperId) {
+      const paper = await client.query(
+        `INSERT INTO graded_papers
+         (session_id, teacher_user_id, student_code, class_id, subject, assessment_title,
+          total_questions, correct_count, incorrect_count, score_percent, paper_image_key, metadata)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb) RETURNING id`,
+        [sessionId, args.teacherUserId, studentCode, exam.class_id, exam.subject, exam.title,
+         marked.length, correct, incorrect, score, imageKey,
+         JSON.stringify({ source: "glasses_camera", student_confidence: studentConfidence,
+           profile_attachment_confidence: attachmentConfidence, exam_id: exam.id,
+           paper_fingerprint: fingerprint, last_page: response.page_number ?? null,
+           paper_complete: response.paper_complete ?? false })],
+      );
+      paperId = Number(paper.rows[0].id);
+    } else {
       await client.query(
         `UPDATE graded_papers
-         SET total_questions = GREATEST(total_questions, $2),
-             correct_count = $3, incorrect_count = $4, score_percent = $5,
-             paper_image_key = COALESCE($6, paper_image_key),
-             metadata = metadata || $7::jsonb
+         SET paper_image_key = COALESCE($2, paper_image_key),
+             metadata = metadata || $3::jsonb
          WHERE id = $1`,
-        [paperId, marked.length, correct, incorrect, score, imageKey,
-         JSON.stringify({ last_page: response.page_number ?? null, paper_complete: response.paper_complete ?? false })],
+        [paperId, imageKey, JSON.stringify({ last_page: response.page_number ?? null, paper_complete: response.paper_complete ?? false })],
       );
     }
 
     for (const item of marked) {
+      const qn = num(item.question_number);
+      const existingItem = qn
+        ? await client.query(`SELECT id FROM graded_paper_items WHERE paper_id = $1 AND question_number = $2 LIMIT 1`, [paperId, qn])
+        : { rows: [] };
       const awarded = num(item.marks_awarded);
       const possible = num(item.marks_possible);
-      const isCorrect = typeof item.is_correct === "boolean" ? item.is_correct : (awarded !== null && possible !== null ? awarded >= possible : false);
-      await client.query(
-        `INSERT INTO graded_paper_items
-         (paper_id, question_number, question_text, question_topic, student_answer,
-          expected_answer, is_correct, marks_awarded, marks_possible, metadata)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)`,
-        [paperId, num(item.question_number), clean(item.question_text,800), clean(item.question_topic,200),
-         clean(item.student_answer,1500), clean(item.expected_answer,1500), isCorrect, awarded, possible,
-         JSON.stringify({ source: "glasses_camera", marking_confidence: item.marking_confidence ?? null })],
-      );
+      const isCorrect = typeof item.is_correct === "boolean"
+        ? item.is_correct
+        : (awarded !== null && possible !== null ? awarded >= possible : false);
+      const values = [paperId, qn, clean(item.question_text,800), clean(item.question_topic,200),
+        clean(item.student_answer,1500), clean(item.expected_answer,1500), isCorrect, awarded, possible,
+        JSON.stringify({ source: "glasses_camera", marking_confidence: item.marking_confidence ?? null })];
+      if (existingItem.rows[0]) {
+        await client.query(
+          `UPDATE graded_paper_items
+           SET question_text=$3, question_topic=$4, student_answer=$5, expected_answer=$6,
+               is_correct=$7, marks_awarded=$8, marks_possible=$9, metadata=$10::jsonb
+           WHERE id=$1 AND paper_id=$2`,
+          [existingItem.rows[0].id, ...values.slice(1)],
+        );
+      } else {
+        await client.query(
+          `INSERT INTO graded_paper_items
+           (paper_id, question_number, question_text, question_topic, student_answer,
+            expected_answer, is_correct, marks_awarded, marks_possible, metadata)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)`,
+          values,
+        );
+      }
     }
 
     await ensureResultsTables();
