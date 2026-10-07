@@ -17,6 +17,7 @@ import {
 } from "../lib/student-development";
 import { logger } from "../lib/logger";
 import { recordCameraMarkedPaper } from "../lib/exam-vision";
+import { getClassExamGaps, ensureExamSummaryTable } from "../lib/exam-summary";
 import {
   announceResult,
   ensureResultsTables,
@@ -745,6 +746,43 @@ router.get(
     });
   },
 );
+
+/**
+ * GET /v1/teacher/exams/:examId/knowledge-gaps
+ * Class-wide analysis generated from actual marked answers.
+ */
+router.get("/v1/teacher/exams/:examId/knowledge-gaps", requireTeacher, async (req, res) => {
+  const examId = positiveInt(req.params.examId);
+  if (!examId) {
+    res.status(400).json({ error: "invalid exam id" });
+    return;
+  }
+  res.json({ exam_id: examId, gaps: await getClassExamGaps(examId) });
+});
+
+/**
+ * GET /v1/teacher-lens/student/:studentCode/exam-summary
+ * Returns the latest constrained six-page revision pack for a subject/exam.
+ */
+router.get("/v1/teacher-lens/student/:studentCode/exam-summary", requireTeacher, async (req, res) => {
+  const studentCode = text(req.params.studentCode, 100);
+  const examId = positiveInt(req.query.exam_id);
+  const subject = text(req.query.subject, 200);
+  if (!studentCode || !examId || !subject) {
+    res.status(400).json({ error: "student_code, exam_id and subject required" });
+    return;
+  }
+  await ensureExamSummaryTable();
+  const result = await pool.query(
+    "SELECT id, student_code, subject, source_exam_id, page_count, split_layout, content, generated_at FROM k9_exam_summaries WHERE student_code=$1 AND subject=$2 AND source_exam_id=$3",
+    [studentCode, subject, examId],
+  );
+  if (!result.rows[0]) {
+    res.status(404).json({ error: "exam_summary_not_ready" });
+    return;
+  }
+  res.json({ summary: result.rows[0] });
+});
 
 /**
  * POST /v1/teacher-lens/frame
