@@ -1,5 +1,5 @@
 import { pool } from "@workspace/db";
-import { ensureResultsTables, findClassStudent, getExam, recordExamResult, type ExamRow } from "./results";
+import { ensureResultsTables, findClassStudent, getExam, recordExamResult } from "./results";
 import { generateCuratedNotesForPaper, generateRetestForPaper } from "./student-development";
 import { logger } from "./logger";
 import { generateExamSummary } from "./exam-summary";
@@ -145,7 +145,28 @@ export async function recordCameraMarkedPaper(args: {
     }
 
     await ensureResultsTables();
-    const marks = marksPossible > 0 ? Math.min(exam.total_marks, (marksAwarded / marksPossible) * exam.total_marks) : (score / 100) * exam.total_marks;
+    const aggregate = await client.query(
+      `SELECT COUNT(*)::int AS total,
+              COUNT(*) FILTER (WHERE is_correct)::int AS correct,
+              COUNT(*) FILTER (WHERE NOT is_correct)::int AS incorrect,
+              COALESCE(SUM(marks_awarded),0)::numeric AS awarded,
+              COALESCE(SUM(marks_possible),0)::numeric AS possible
+       FROM graded_paper_items WHERE paper_id = $1`,
+      [paperId],
+    );
+    const a = aggregate.rows[0];
+    const aggregateScore = Number(a.possible) > 0
+      ? Math.round(Number(a.awarded) / Number(a.possible) * 100)
+      : Number(a.total) > 0 ? Math.round(Number(a.correct) / Number(a.total) * 100) : 0;
+    await client.query(
+      `UPDATE graded_papers
+       SET total_questions=$2, correct_count=$3, incorrect_count=$4, score_percent=$5
+       WHERE id=$1`,
+      [paperId, Number(a.total), Number(a.correct), Number(a.incorrect), aggregateScore],
+    );
+    const marks = Number(a.possible) > 0
+      ? Math.min(exam.total_marks, Number(a.awarded) / Number(a.possible) * exam.total_marks)
+      : (aggregateScore / 100) * exam.total_marks;
     await recordExamResult(client, {
       examId: exam.id, studentId: student.id, marks: Math.round(marks * 10) / 10,
       source: "lens", gradedPaperId: paperId, recordedBy: args.teacherUserId,
@@ -161,6 +182,6 @@ export async function recordCameraMarkedPaper(args: {
   try { await generateCuratedNotesForPaper(paperId); } catch (e) { logger.warn({ err: e, paperId }, "camera curated notes failed"); }
   try { await generateRetestForPaper(paperId); } catch (e) { logger.warn({ err: e, paperId }, "camera retest generation failed"); }
 
-  await generateExamSummary(studentCode, exam.subject, exam.id).catch((e) => logger.warn({ err: e, studentCode }, "exam summary generation failed"));
+  await generateExamSummary(studentCode, exam.subject ?? "General", exam.id).catch((e) => logger.warn({ err: e, studentCode }, "exam summary generation failed"));
   return { status: "recorded", paperId, studentCode };
 }
