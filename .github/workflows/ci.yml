@@ -47,3 +47,17 @@ jobs:
 
       - name: Build
         run: pnpm run build
+
+  container-config:
+    name: K9 container configuration
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Docker Compose configuration
+        env:
+          K9_POSTGRES_PASSWORD: ci-placeholder
+          K9_RUNTIME_SHARED_SECRET: ci-placeholder
+        run: docker compose -f docker-compose.k9.yml config --quiet
+      - name: Build K9 API container
+        run: docker build -f Dockerfile.k9-api --target runtime -t kobeai-k9-api:ci .

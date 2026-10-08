@@ -5,11 +5,10 @@ import { verifyToken } from "../lib/auth";
 const router = Router();
 
 // This proxies the containerised FastAPI runtime (services/k9-runtime/app.py,
-// port 8091, `x-k9-secret`) used by the docker-compose school server. It has its
-// own variable on purpose: K9_RUNTIME_URL means the runtime the K9 desktop app
-// starts itself (services/k9-runtime/server.py on 8766, `x-k9-runtime-secret`),
-// and pointing these routes at that one would proxy to endpoints it doesn't have.
-const runtimeBase = (process.env["K9_FASTAPI_RUNTIME_URL"] ?? "http://127.0.0.1:8091").replace(/\/$/, "");
+// port 8766, `x-k9-secret`) used by the containerised school server. The
+// dedicated variable keeps this proxy address independent from desktop/runtime
+// discovery settings.
+const runtimeBase = (process.env["K9_FASTAPI_RUNTIME_URL"] ?? process.env["K9_RUNTIME_URL"] ?? "http://127.0.0.1:8766").replace(/\/$/, "");
 const runtimeSecret = process.env["K9_RUNTIME_SHARED_SECRET"] ?? process.env["K9_SHARED_SECRET"] ?? "";
 
 function bearer(req: Request): string | null {
