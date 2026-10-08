@@ -285,6 +285,8 @@ spec:
                 configMapKeyRef:
                   name: k9-config
                   key: K9_RUNTIME_URL
+            - name: K9_FASTAPI_RUNTIME_URL
+              value: http://k9-runtime:8766
             - name: K9_DESKTOP
               value: "1"
             - name: K9_RUNTIME_SHARED_SECRET
