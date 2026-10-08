@@ -27,6 +27,19 @@ services:
       timeout: 3s
       retries: 12
 
+  db-init:
+    build:
+      context: .
+      dockerfile: Dockerfile.k9-api
+      target: build
+    environment:
+      DATABASE_URL: postgresql://${K9_POSTGRES_USER:-k9}:${K9_POSTGRES_PASSWORD:?Set K9_POSTGRES_PASSWORD}@postgres:5432/${K9_POSTGRES_DB:-k9}
+    command: ["pnpm", "--filter", "@workspace/db", "push"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+        restart: true
+
   runtime:
     build:
       context: .
@@ -77,6 +90,8 @@ services:
       redis:
         condition: service_healthy
         restart: true
+      db-init:
+        condition: service_completed_successfully
       runtime:
         condition: service_healthy
     healthcheck:
