@@ -14,6 +14,7 @@ import devicesRouter from "./devices";
 import k9RuntimeRouter from "./k9-runtime";
 import parentRouter from "./parent";
 import parentPushRouter from "./parent-push";
+import parentK9Router from "./parent-k9";
 import adminRouter from "./admin";
 import printRouter from "./print";
 import centralRouter from "./central";
@@ -70,6 +71,7 @@ router.use(k9RuntimeRouter);
 
 router.use(parentRouter);
 router.use(parentPushRouter);
+router.use(parentK9Router);
 router.use(adminRouter);
 router.use(printRouter);
 router.use(centralRouter);

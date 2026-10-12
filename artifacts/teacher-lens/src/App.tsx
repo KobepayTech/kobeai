@@ -853,6 +853,8 @@ export function App() {
   const [rememberFace, setRememberFace] = useState(true);
   // The frame request the open picker is waiting on; cleared when it closes.
   const pickerRequest = useRef<number | null>(null);
+  // Guards the continuous marking tick: one upload in flight at a time.
+  const markUploadInFlight = useRef(false);
   useEffect(() => {
     if (!studentPicker) pickerRequest.current = null;
   }, [studentPicker]);
@@ -965,6 +967,24 @@ export function App() {
     }
   }, [auth, captureBlob, mode, sessionId]);
 
+  // Camera-first exam marking: no shutter and no teacher narration are required.
+  // K9 samples the teacher's view while they mark normally.
+  useEffect(() => {
+    if (mode !== "mark" || !auth || sessionId == null) return;
+    const tick = async () => {
+      if (markUploadInFlight.current) return;
+      markUploadInFlight.current = true;
+      try {
+        await uploadFrame();
+      } finally {
+        markUploadInFlight.current = false;
+      }
+    };
+    tick();
+    const timer = window.setInterval(tick, 2500);
+    return () => window.clearInterval(timer);
+  }, [auth, mode, sessionId, uploadFrame]);
+
   const runLookup = useCallback(
     async (studentCode: string, quiet = false) => {
       if (!auth) return;
@@ -1043,9 +1063,14 @@ export function App() {
         setStudentPicker({ students: recent, imageKey: uploaded?.image_key ?? null, requestId, recognising: requestId !== null, hint: null });
         if (requestId !== null) watchLookup(requestId);
       } else {
-        const uploaded = await uploadFrame();
+        // Manual capture is kept as a recovery action, not the marking
+        // workflow: marking is continuous camera observation now, and the
+        // paper's result is finalised by the server once it has seen a
+        // complete paper. So this uploads one frame and says so, rather than
+        // opening a sheet that would claim one shutter press is a whole paper.
+        await uploadFrame();
         if (authRef.current !== auth) return;
-        setMarkOpen({ requestId: uploaded?.request_id ?? null, imageKey: uploaded?.image_key ?? null });
+        setToast("K9 is reading the marked paper.");
       }
     } catch (error) { setToast(errorDetail(error)); }
     finally { shutterBusy.current = false; }
@@ -1127,7 +1152,7 @@ export function App() {
         <div className="lens-overlay">
           <div className="headline">{mode === "lookup" ? "Point at a student" : "Point at a marked paper"}</div>
           <div className="sub">
-            Tap the shutter — Kobe whispers back through your earbud.
+            K9 continuously reads the marked paper through the camera. The teacher does not read questions or answers aloud.
           </div>
         </div>
       </div>
@@ -1152,7 +1177,7 @@ export function App() {
         >
           {wakeWordOn ? "🎙️ Kobe on" : "🎙️ Kobe off"}
         </button>
-        <button className="lens-shutter" onClick={onShutter} aria-label="Shutter" />
+        <button className="lens-shutter" onClick={onShutter} aria-label="Capture / check frame" />
         <button
           className="lens-secondary"
           onClick={() => {
