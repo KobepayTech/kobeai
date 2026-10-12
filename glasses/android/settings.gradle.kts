@@ -3,5 +3,6 @@ dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories { google(); mavenCentral(); maven("https://maven.rokid.com/repository/maven-public/") }
 }
-rootProject.name = "KobeAILens"
+rootProject.name = "KobeAI"
 include(":app")
+include(":student")

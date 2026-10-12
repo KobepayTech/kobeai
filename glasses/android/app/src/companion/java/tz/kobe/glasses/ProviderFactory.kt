@@ -2,8 +2,6 @@ package tz.kobe.glasses
 
 import android.Manifest
 import android.bluetooth.BluetoothManager
-import android.bluetooth.le.ScanCallback
-import android.bluetooth.le.ScanResult
 import android.os.Build
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
@@ -12,7 +10,6 @@ import android.widget.EditText
 import androidx.appcompat.app.AlertDialog
 import com.xgglass.device.rokid.RokidGlassesClient
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -23,12 +20,16 @@ object ProviderFactory {
      *
      * Its SDK is a proprietary AAR obtained outside any licence we hold, so it
      * exists here to be *evaluated* on hardware we own — measured with
-     * CaptureScheduler — and not to be shipped. app/build.gradle.kts refuses a
-     * companion release build while it is present, so the licence question
-     * cannot be answered by accident later.
+     * CaptureScheduler — and not to be shipped. Two guards in
+     * app/build.gradle.kts keep that true: a companion *release* build refuses
+     * to run while the AAR is present, and the provider is compiled at all only
+     * when it is. A checkout without the SDK builds and ships Rokid normally,
+     * which is why a missing optional SDK costs a feature rather than the
+     * build.
      */
     val providers: List<String> =
-        if (BuildConfig.DEBUG) listOf("rokid", "heycyan") else listOf("rokid")
+        if (BuildConfig.DEBUG && BuildConfig.HAS_HEYCYAN) listOf("rokid", "heycyan")
+        else listOf("rokid")
 
     /**
      * The budget handed to RokidOptions.connectTimeoutMs, which the SDK wraps
@@ -47,16 +48,28 @@ object ProviderFactory {
      * only our credentials left the SDK still bound to the previous glasses, so a
      * teacher who forgot the pairing to move the phone to a different pair would
      * silently be reconnected to the old one whenever it was in range — which, in a
-     * staffroom holding several pairs, is most of the time. The SDK's own
-     * clearReconnectInfo() is private, but it publishes these key names for exactly
-     * this purpose.
+     * staffroom holding several pairs, is most of the time.
+     *
+     * The names below are copied rather than referenced, and that is the honest
+     * description of what they are. RokidGlassesClient declares them as const val
+     * in a companion object that is *private*, so although each one is a public
+     * static field in the bytecode, Kotlin will not let us name it — an earlier
+     * version of this code read them from the SDK and did not compile. There is no
+     * public clearReconnectInfo() either. So this depends on the SDK's on-disk
+     * format, not on its API: an upgrade that renames a key will not break the
+     * build, it will quietly stop forgetting. That is what the pairing test on real
+     * hardware is for — forget, then walk the old glasses into range.
      */
+    private const val ROKID_PREFS_BT = "xgglass_rokid_bt_reconnect"
+    private const val ROKID_PREF_SOCKET_UUID = "socket_uuid"
+    private const val ROKID_PREF_MAC_ADDRESS = "mac_address"
+
     fun forgetProvisioning(activity: MainActivity) {
         RokidCredentials.forget(activity)
-        activity.getSharedPreferences(RokidGlassesClient.PREFS_BT, android.content.Context.MODE_PRIVATE)
+        activity.getSharedPreferences(ROKID_PREFS_BT, android.content.Context.MODE_PRIVATE)
             .edit()
-            .remove(RokidGlassesClient.PREF_KEY_SOCKET_UUID)
-            .remove(RokidGlassesClient.PREF_KEY_MAC_ADDRESS)
+            .remove(ROKID_PREF_SOCKET_UUID)
+            .remove(ROKID_PREF_MAC_ADDRESS)
             .commit()
     }
 
@@ -89,7 +102,7 @@ object ProviderFactory {
         } else activity.ensurePermissions(permissions.toTypedArray(), optional)
         val bluetooth = activity.getSystemService(BluetoothManager::class.java).adapter
         check(bluetooth != null && bluetooth.isEnabled) { "Enable Bluetooth first" }
-        if (provider == "heycyan") return heyCyan(activity, bluetooth, onLost)
+        if (provider == "heycyan") return heyCyanHardware(activity, bluetooth, onLost)
         val saved = RokidCredentials.load(activity)
         check(!automatic || saved != null)
         val secret = saved?.second ?: promptSecret(activity)
@@ -109,45 +122,6 @@ object ProviderFactory {
             }
         }
     }
-
-    /**
-     * Pick a HeyCyan device from a BLE scan.
-     *
-     * Unlike Rokid there is no vendor pairing flow to defer to, so the scan and
-     * the picker are ours. Kept separate from `create` so the Rokid path — the
-     * one that ships — stays readable.
-     */
-    private suspend fun heyCyan(
-        activity: MainActivity,
-        bluetooth: android.bluetooth.BluetoothAdapter,
-        onLost: () -> Unit,
-    ): Hardware {
-        val found = linkedMapOf<String, String>()
-        val scanner = checkNotNull(bluetooth.bluetoothLeScanner)
-        var failure: Int? = null
-        val callback = object : ScanCallback() {
-            override fun onScanResult(type: Int, result: ScanResult) {
-                val device = result.device
-                val name = result.scanRecord?.deviceName ?: device.name ?: "Unnamed device"
-                found[device.address] = "$name (${device.address})"
-            }
-            override fun onScanFailed(code: Int) { failure = code }
-        }
-        try { scanner.startScan(callback); delay(7000) } finally { scanner.stopScan(callback) }
-        check(failure == null && found.isNotEmpty()) { "No Bluetooth glasses found" }
-        val addresses = found.keys.toList()
-        return HeyCyanHardware(activity, addresses[chooseDevice(activity, found.values.toTypedArray())], onLost)
-    }
-
-    private suspend fun chooseDevice(activity: MainActivity, names: Array<String>): Int =
-        suspendCancellableCoroutine { continuation ->
-            val dialog = AlertDialog.Builder(activity).setTitle("Choose your HeyCyan glasses")
-                .setItems(names) { _, index -> if (continuation.isActive) continuation.resume(index) }
-                .setNegativeButton("Cancel") { _, _ -> continuation.cancel() }
-                .setOnCancelListener { continuation.cancel() }.create()
-            continuation.invokeOnCancellation { activity.runOnUiThread { dialog.dismiss() } }
-            dialog.show()
-        }
 
     private suspend fun promptSecret(activity: MainActivity): String = suspendCancellableCoroutine { continuation ->
         val input = EditText(activity).apply { inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD }
