@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { benchmarkGlasses } from "./glasses";
 import type { TeacherAuth } from "./TeacherWorkspace";
 
 /** Keep the one glasses control mounted when opening/closing settings. */
@@ -17,6 +18,7 @@ export function Connections({
 }) {
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
+  const [bench, setBench] = useState("");
   const request = useRef<AbortController | null>(null);
   useEffect(() => () => request.current?.abort(), []);
   async function checkServer() {
@@ -138,6 +140,37 @@ export function Connections({
                 school password cannot replace them.
               </p>
             </details>
+            <h3>Check capture speed</h3>
+            <p>
+              Takes ten photographs through the glasses and reports what actually
+              arrived. A vendor command that says “photo taken” does not mean the
+              image reached the phone — capture and transfer are separate, so the
+              only honest cadence is a measured one.
+            </p>
+            <button
+              onClick={async () => {
+                setBench("Taking ten photographs…");
+                const report = await benchmarkGlasses(10);
+                if (!report) {
+                  setBench("Connect the glasses first.");
+                  return;
+                }
+                setBench(
+                  `${report.delivered}/${report.attempted} arrived in ${report.seconds}s · ` +
+                    `typical ${(report.medianLatencyMs / 1000).toFixed(1)}s, ` +
+                    `slowest ${(report.p95LatencyMs / 1000).toFixed(1)}s · ` +
+                    `sustainable interval ${(report.sustainableIntervalMs / 1000).toFixed(1)}s ` +
+                    `(${report.perMinute}/min) · ${report.stoppedBecause}`,
+                );
+              }}
+            >
+              Test capture speed
+            </button>
+            {bench && (
+              <p role="status" className="teacher-prewrap">
+                {bench}
+              </p>
+            )}
           </article>
         </>
       )}

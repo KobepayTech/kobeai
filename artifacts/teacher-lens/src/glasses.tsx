@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { benchmarkCapture, type SessionReport } from "../../../glasses/src/k9/CaptureScheduler";
 import {
   NativeAdapter,
   NativeTransport,
@@ -45,6 +46,22 @@ export async function captureGlasses(): Promise<Blob | null> {
   const bytes = await active.camera.capture();
   return new Blob([new Uint8Array(bytes)], { type: "image/jpeg" });
 }
+/**
+ * Exam Mode's proof of concept, run on the glasses actually in the room.
+ *
+ * A vendor command that returns "photo taken" says nothing about the image
+ * being on the phone — capture and transfer are separate operations, and the
+ * second one is slow and variable. So before anyone is promised a cadence,
+ * this takes N photographs through the real path and reports what arrived:
+ * how many, how fast, and the shortest interval the hardware actually held.
+ *
+ * Returns null when no glasses are connected, rather than inventing a number.
+ */
+export async function benchmarkGlasses(shots = 10): Promise<SessionReport | null> {
+  if (!active || active.state !== "connected") return null;
+  return benchmarkCapture(active, shots);
+}
+
 export function speakThroughGlasses(text: string): boolean {
   const bridge = native();
   if (!bridge) return false;

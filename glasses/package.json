@@ -14,6 +14,6 @@
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.tests.json",
-    "test": "node --import ../scripts/node_modules/tsx/dist/loader.mjs --test tests/core.test.ts tests/adapters.test.ts tests/native.test.ts"
+    "test": "node --import ../scripts/node_modules/tsx/dist/loader.mjs --test tests/core.test.ts tests/adapters.test.ts tests/native.test.ts tests/scheduler.test.ts"
   }
 }

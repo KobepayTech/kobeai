@@ -24,6 +24,32 @@ feature is separate and is not guaranteed inside Android WebView. Use the Lens
 shutter. No direct full-resolution Wi-Fi album download or vendor assistant
 replacement is claimed.
 
+### Exam Mode and measured cadence
+
+`glasses/src/k9/CaptureScheduler.ts` photographs papers hands-free at whatever
+rate the glasses can actually sustain. It is device-agnostic by construction: it
+drives `KobeGlasses.camera.capture` and knows nothing about Rokid, Wi-Fi P2P
+modes or BLE, so any adapter that returns JPEG bytes can be measured by it.
+
+The reason it measures rather than schedules is that **capture and transfer are
+separate operations on every pair of glasses worth using**, and the second is
+slow and variable. A vendor command that returns "photo taken" has told you
+nothing about whether the image is on the phone. So the scheduler aims at an
+interval, measures what it gets, slows down on its own when the device cannot
+keep up, and reports the interval the hardware held — at the 95th percentile,
+not the best case, because a cadence that works nine times in ten drops a paper
+every tenth script.
+
+Captures never overlap: on a device that switches between capture and transfer
+modes, issuing a second command on top of a slow first one is how a session
+wedges.
+
+`benchmarkGlasses(10)` is the proof of concept, wired to **Test capture speed**
+on the Connections screen. Run it on any new pair before promising anyone a
+cadence; it answers what a spec sheet does not — do ten consecutive commands
+succeed, does every image arrive, and what is the shortest interval this
+hardware can hold.
+
 ### Why HeyCyan was removed
 
 The companion build previously also bound a HeyCyan-compatible BLE device
@@ -46,6 +72,20 @@ one in all three directions:
 Rokid, by contrast, is an Apache-2.0 wrapper over a vendor SDK with a per-device
 `.lc` licence obtained from Rokid's own developer console — a relationship that
 can actually be entered.
+
+A later review of the HeyCyan SDK found its Wi-Fi transfer path, a media
+downloader, and documented wear detection — which would answer the resolution
+objection above, since BLE thumbnails are not the only route off the device.
+Two things did not change. The documented camera and transfer API
+(`QCSDKCmdCreator`, `QCOperatorDeviceModePhoto`, `openWifiWithMode`) is
+**Objective-C for iOS**; KobeAI's teacher app is Android, where the SDK is the
+`com.oudmon.ble.*` surface our binding actually used and where only
+`getPictureThumbnails` was ever found. And the licence position is untouched:
+the AAR still comes from a third-party republication whose own README says to
+contact the vendor. Rokid already does the full-resolution Wi-Fi transfer that
+HeyCyan is hoped to manage — `RokidGlassesClient.ensureWifiP2pConnected` and
+`syncSingleFileSuspend`, read out of the shipped bytecode — so the uncertainty
+worth testing is already resolved on hardware we can license.
 
 ## Build
 
