@@ -162,3 +162,25 @@ test("an interactive pairing outlasts the default budget, an automatic reconnect
   silent.dispose();
   await interactive;
 });
+
+test("heycyan is selectable again, as a development provider", async () => {
+  // Restored for hardware evaluation on devices we own. The Android release
+  // build refuses to package its SDK; see app/build.gradle.kts.
+  const transport = fixture((method) =>
+    method === "info" ? { version: 1, providers: ["rokid", "heycyan"] } : null,
+  );
+  const adapter = new NativeAdapter(transport);
+  const devices = await adapter.discover();
+  const heycyan = devices.find((d) => d.id === "heycyan");
+  assert.ok(heycyan, "heycyan should be discoverable");
+  assert.match(heycyan!.model, /development/i, "its name should say what it is");
+  await assert.doesNotReject(adapter.open(heycyan!));
+});
+
+test("an unknown provider is still refused", async () => {
+  const transport = fixture(() => null);
+  await assert.rejects(
+    new NativeAdapter(transport).open({ id: "mystery", vendor: "native", model: "?" }),
+    /Unknown native glasses provider/,
+  );
+});

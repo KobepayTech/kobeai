@@ -31,7 +31,32 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     implementation("io.github.hkust-spark:xgglass-core:0.3.0")
     "companionImplementation"("io.github.hkust-spark:xgglass-device-rokid:0.3.0")
+    // HeyCyan, development only. Supply the AAR yourself at
+    // app/libs/heycyan-sdk.aar; nothing in this repository fetches it, and the
+    // release guard below refuses to build a distributable APK with it present.
+    "companionImplementation"(fileTree("libs") { include("heycyan-sdk.aar") })
+    "companionImplementation"("androidx.localbroadcastmanager:localbroadcastmanager:1.1.0")
+    "companionImplementation"("com.google.code.gson:gson:2.14.0")
+    "companionImplementation"("org.greenrobot:eventbus:3.2.0")
     "rayneoImplementation"("io.github.hkust-spark:xgglass-device-rayneo-runtime:0.3.0")
+}
+
+// A release APK must not carry the unlicensed HeyCyan SDK.
+//
+// "We'll deal with the licence once it works" is a reasonable way to develop,
+// and it only stays reasonable if shipping it is hard rather than easy. A debug
+// build evaluates the hardware; a release build fails while the AAR is there,
+// and says what to do about it. This is a control, not a comment — the last
+// time this binary was in the tree, the only guard was a comment in CI and it
+// was compiled into every Rokid build.
+tasks.matching { it.name == "preCompanionReleaseBuild" }.configureEach {
+    doFirst {
+        check(!file("libs/heycyan-sdk.aar").isFile) {
+            "app/libs/heycyan-sdk.aar is present: HeyCyan is a development-only " +
+                "provider and must not be distributed. Remove the AAR to build a " +
+                "release, or obtain a distribution licence from HeyCyan first."
+        }
+    }
 }
 
 tasks.register("verifyLensAssets") {

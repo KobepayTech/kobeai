@@ -2,6 +2,8 @@ package tz.kobe.glasses
 
 import android.Manifest
 import android.bluetooth.BluetoothManager
+import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanResult
 import android.os.Build
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
@@ -10,12 +12,23 @@ import android.widget.EditText
 import androidx.appcompat.app.AlertDialog
 import com.xgglass.device.rokid.RokidGlassesClient
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 object ProviderFactory {
-    val providers = listOf("rokid")
+    /**
+     * HeyCyan is a development-only provider.
+     *
+     * Its SDK is a proprietary AAR obtained outside any licence we hold, so it
+     * exists here to be *evaluated* on hardware we own — measured with
+     * CaptureScheduler — and not to be shipped. app/build.gradle.kts refuses a
+     * companion release build while it is present, so the licence question
+     * cannot be answered by accident later.
+     */
+    val providers: List<String> =
+        if (BuildConfig.DEBUG) listOf("rokid", "heycyan") else listOf("rokid")
 
     /**
      * The budget handed to RokidOptions.connectTimeoutMs, which the SDK wraps
@@ -76,6 +89,7 @@ object ProviderFactory {
         } else activity.ensurePermissions(permissions.toTypedArray(), optional)
         val bluetooth = activity.getSystemService(BluetoothManager::class.java).adapter
         check(bluetooth != null && bluetooth.isEnabled) { "Enable Bluetooth first" }
+        if (provider == "heycyan") return heyCyan(activity, bluetooth, onLost)
         val saved = RokidCredentials.load(activity)
         check(!automatic || saved != null)
         val secret = saved?.second ?: promptSecret(activity)
@@ -95,6 +109,45 @@ object ProviderFactory {
             }
         }
     }
+
+    /**
+     * Pick a HeyCyan device from a BLE scan.
+     *
+     * Unlike Rokid there is no vendor pairing flow to defer to, so the scan and
+     * the picker are ours. Kept separate from `create` so the Rokid path — the
+     * one that ships — stays readable.
+     */
+    private suspend fun heyCyan(
+        activity: MainActivity,
+        bluetooth: android.bluetooth.BluetoothAdapter,
+        onLost: () -> Unit,
+    ): Hardware {
+        val found = linkedMapOf<String, String>()
+        val scanner = checkNotNull(bluetooth.bluetoothLeScanner)
+        var failure: Int? = null
+        val callback = object : ScanCallback() {
+            override fun onScanResult(type: Int, result: ScanResult) {
+                val device = result.device
+                val name = result.scanRecord?.deviceName ?: device.name ?: "Unnamed device"
+                found[device.address] = "$name (${device.address})"
+            }
+            override fun onScanFailed(code: Int) { failure = code }
+        }
+        try { scanner.startScan(callback); delay(7000) } finally { scanner.stopScan(callback) }
+        check(failure == null && found.isNotEmpty()) { "No Bluetooth glasses found" }
+        val addresses = found.keys.toList()
+        return HeyCyanHardware(activity, addresses[chooseDevice(activity, found.values.toTypedArray())], onLost)
+    }
+
+    private suspend fun chooseDevice(activity: MainActivity, names: Array<String>): Int =
+        suspendCancellableCoroutine { continuation ->
+            val dialog = AlertDialog.Builder(activity).setTitle("Choose your HeyCyan glasses")
+                .setItems(names) { _, index -> if (continuation.isActive) continuation.resume(index) }
+                .setNegativeButton("Cancel") { _, _ -> continuation.cancel() }
+                .setOnCancelListener { continuation.cancel() }.create()
+            continuation.invokeOnCancellation { activity.runOnUiThread { dialog.dismiss() } }
+            dialog.show()
+        }
 
     private suspend fun promptSecret(activity: MainActivity): String = suspendCancellableCoroutine { continuation ->
         val input = EditText(activity).apply { inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD }

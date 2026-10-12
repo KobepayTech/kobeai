@@ -50,7 +50,37 @@ cadence; it answers what a spec sheet does not — do ten consecutive commands
 succeed, does every image arrive, and what is the shortest interval this
 hardware can hold.
 
-### Why HeyCyan was removed
+### HeyCyan: development only
+
+HeyCyan is back as a provider for **hardware evaluation**, at the project
+owner's decision to develop first and settle licensing once it works. That is a
+reasonable way to develop, and it only stays reasonable if shipping it is hard
+rather than easy:
+
+- It appears in `providers` only when `BuildConfig.DEBUG`, so a release build
+  does not offer it.
+- `preCompanionReleaseBuild` **fails** while `app/libs/heycyan-sdk.aar` is
+  present, and says what to do about it.
+- Nothing in this repository fetches that AAR. Supply it yourself at
+  `app/libs/heycyan-sdk.aar`; the previous `fetch_heycyan.py`, which cloned a
+  third party's republication of a proprietary binary on every CI run, is not
+  coming back.
+
+The last time this SDK was in the tree the only guard was a comment in CI, and
+it was compiled into every Rokid build. These are controls instead.
+
+**What to measure first.** `CaptureScheduler` and the **Test capture speed**
+button exist precisely for this. Capture and transfer are separate operations
+on this device — a vendor command returning "photo taken" says nothing about
+the image being on the phone — so run the ten-shot benchmark before promising
+any cadence. Note that the SDK's documented Wi-Fi transfer API
+(`QCSDKCmdCreator`, `openWifiWithMode`) is Objective-C for iOS; the Android
+surface this binding uses is `com.oudmon.ble.*`, where the only capture path
+found so far is `getPictureThumbnails`. Whether Android can reach
+full-resolution transfer is the open question, and the benchmark will show it
+in the delivered byte counts.
+
+### Why HeyCyan was previously removed
 
 The companion build previously also bound a HeyCyan-compatible BLE device
 through a proprietary vendor AAR. It was dropped, because the trade was a bad
