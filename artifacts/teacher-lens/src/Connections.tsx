@@ -102,9 +102,10 @@ export function Connections({
           <article className="teacher-card">
             <h2>Smart glasses</h2>
             <p>Choose your glasses below. K9 will show whether the device is actually connected before capturing.</p>
-            <p className="teacher-muted">HeyCyan is available only in supported development builds. Other providers may appear if enabled on this phone.</p>
+            <p className="teacher-muted">If your glasses are not listed, ask your school administrator to enable them.</p>
             <details className="teacher-advanced">
               <summary>Advanced diagnostics</summary>
+              <p>HeyCyan pairing is supported only by development builds containing the appropriate vendor SDK. Device availability depends on this installation.</p>
             <h3>Check capture speed</h3>
             <p>
               Takes ten photographs through the glasses and reports what actually
