@@ -145,6 +145,7 @@ function ToolIcon({ name }: { name: string }) {
 }
 
 export function TeacherWorkspace({
+  initialTab = "Home",
   auth,
   connected,
   source,
@@ -161,6 +162,7 @@ export function TeacherWorkspace({
   onSignOut,
   serverStatus,
 }: {
+  initialTab?: "Home" | "Papers";
   serverStatus: string;
   auth: TeacherAuth;
   connected: boolean;
@@ -180,7 +182,7 @@ export function TeacherWorkspace({
   onConnections: () => void;
   onSignOut: () => void;
 }) {
-  const [tab, setTab] = useState("Home");
+  const [tab, setTab] = useState(initialTab);
   const workspaceRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
     workspaceRef.current?.scrollTo({ top: 0 });
