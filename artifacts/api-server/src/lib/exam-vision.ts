@@ -32,6 +32,13 @@ function hasMark(item: VisionMarkItem): boolean {
   return awarded !== null || typeof item.is_correct === "boolean";
 }
 
+/** The frame's capture time from its vision context, if it is a believable one. */
+function capturedAt(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const at = Date.parse(value);
+  return Number.isFinite(at) && at <= Date.now() + 60_000 ? new Date(at).toISOString() : null;
+}
+
 /**
  * Camera-first exam marking. The teacher never reads questions or answers.
  * Vision supplies the paper structure and the teacher's visible marks.
@@ -72,7 +79,11 @@ export async function recordCameraMarkedPaper(args: {
   const correct = marked.filter(i => i.is_correct === true).length;
   const incorrect = marked.filter(i => i.is_correct === false).length;
   const score = marksPossible > 0 ? Math.round((marksAwarded / marksPossible) * 100) : Math.round((correct / marked.length) * 100);
-  const sessionId = num(context.lens_session_id);
+  // A frame uploaded before the lens had a session carries none. That has to
+  // stay NULL: 0 is not a session, and filing the paper under it fails the
+  // foreign key and loses the marking.
+  const session = num(context.lens_session_id);
+  const sessionId = session !== null && Number.isInteger(session) && session > 0 ? session : null;
   const imageKey = clean(context.image_key, 300);
 
   const existing = fingerprint
@@ -93,14 +104,17 @@ export async function recordCameraMarkedPaper(args: {
       const paper = await client.query(
         `INSERT INTO graded_papers
          (session_id, teacher_user_id, student_code, class_id, subject, assessment_title,
-          total_questions, correct_count, incorrect_count, score_percent, paper_image_key, metadata)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb) RETURNING id`,
+          total_questions, correct_count, incorrect_count, score_percent, paper_image_key, metadata, graded_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb, COALESCE($13::timestamptz, NOW())) RETURNING id`,
         [sessionId, args.teacherUserId, studentCode, exam.class_id, exam.subject, exam.title,
          marked.length, correct, incorrect, score, imageKey,
          JSON.stringify({ source: "glasses_camera", student_confidence: studentConfidence,
            profile_attachment_confidence: attachmentConfidence, exam_id: exam.id,
            paper_fingerprint: fingerprint, last_page: response.page_number ?? null,
-           paper_complete: response.paper_complete ?? false })],
+           paper_complete: response.paper_complete ?? false }),
+         // When the teacher marked it, not when a frame held on the phone
+         // through an outage finally reached the server.
+         capturedAt(context.captured_at)],
       );
       paperId = Number(paper.rows[0].id);
     } else {

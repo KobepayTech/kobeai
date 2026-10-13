@@ -15,6 +15,16 @@ declare global {
     };
   }
 }
+const PHONE_CAMERA_KEY = "k9-lens.camera-source";
+function phoneCameraChosen(): boolean {
+  try { return localStorage.getItem(PHONE_CAMERA_KEY) === "phone"; } catch { return false; }
+}
+function rememberPhoneCamera(chosen: boolean): void {
+  try {
+    if (chosen) localStorage.setItem(PHONE_CAMERA_KEY, "phone");
+    else localStorage.removeItem(PHONE_CAMERA_KEY);
+  } catch { /* this session only */ }
+}
 let transport: NativeTransport | null = null;
 let active: NativeGlasses | null = null;
 function native(): NativeTransport | null {
@@ -40,10 +50,31 @@ function native(): NativeTransport | null {
   return transport;
 }
 
-/** Returns null only when the wearer explicitly chose the phone camera. */
-export async function captureGlasses(): Promise<Blob | null> {
-  if (!active) return null;
-  const bytes = await active.camera.capture();
+/**
+ * Photograph through the selected glasses, or fail saying why.
+ *
+ * This used to return null whenever no glasses session was open, and the
+ * caller took null to mean "use the phone camera". That was right when the
+ * teacher had chosen the phone, and wrong every other time: glasses selected
+ * but not yet connected, or dropped mid-lesson, quietly became photographs of
+ * whatever the phone in the teacher's pocket was pointing at, filed as exam
+ * evidence. The caller now decides the source from what the teacher selected,
+ * and this never substitutes one camera for another.
+ */
+export async function captureGlasses(model: string): Promise<Blob> {
+  if (!active || active.state !== "connected")
+    throw new Error(
+      `${model} are selected but not connected, so no photo was taken. Open Connections to reconnect them, or choose Phone camera there.`,
+    );
+  let bytes: Uint8Array;
+  try {
+    bytes = await active.camera.capture();
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `${model} did not return a photo, and the phone camera was not used in their place. ${detail}`,
+    );
+  }
   return new Blob([new Uint8Array(bytes)], { type: "image/jpeg" });
 }
 /**
@@ -116,12 +147,14 @@ export function GlassesControl({
       if (!provider) {
         await bridge.request("pause");
         active = null;
+        rememberPhoneCamera(true);
         onSource(null);
         setStatus("Phone camera · automatic glasses connection paused");
         return;
       }
       const device = knownDevices.current.find((d) => d.id === provider);
       if (!device) throw new Error("Choose a glasses model");
+      if (!automatic) rememberPhoneCamera(false);
       if (!automatic) await bridge.request("disconnect");
       const glasses = await new NativeAdapter(bridge).open(device);
       active = glasses;
@@ -209,7 +242,18 @@ export function GlassesControl({
         if (!mounted.current) return;
         knownDevices.current = found;
         setDevices(found);
-        setSelected(found.find((d) => d.id === "rokid")?.id ?? "");
+        // A teacher who chose the phone camera keeps that choice when the app
+        // is reopened; it is cleared by connecting glasses or forgetting them.
+        const preferred = phoneCameraChosen() ? undefined : found.find((d) => d.id === "rokid");
+        setSelected(preferred?.id ?? "");
+        // Otherwise Rokid is preselected in this app, so it is the capture
+        // source from the start. Until it connects, captures fail with a
+        // message; they do not fall back to the phone camera, which only an
+        // explicit choice of "Phone camera" below turns on.
+        if (preferred) {
+          onSource(preferred.model, false);
+          setStatus(`${preferred.model} selected · not connected`);
+        }
         void sync();
       })
       .catch((e) => {
@@ -246,6 +290,7 @@ export function GlassesControl({
     try {
       await native()?.request("forget");
       active = null;
+      rememberPhoneCamera(false);
       onSource(null);
       setStatus("Pairing removed. Connect Rokid to set up again.");
       setError("");

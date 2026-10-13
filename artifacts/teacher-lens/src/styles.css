@@ -211,6 +211,19 @@ select.mark-input option { background: #16161f; color: var(--brand-fg); }
   border-radius: 10px; padding: 10px 12px; font-size: 13px; margin-bottom: 8px;
 }
 
+.lens-capture-problem { margin: 8px 16px 0; }
+.lens-auto-capture { display: block; margin: 8px 16px 0; padding: 8px 12px; font-size: 12px; }
+.mark-paper-photo { display: block; width: 100%; max-height: 46vh; object-fit: contain; background: #000; border-radius: 10px; margin-bottom: 10px; }
+.mark-reading {
+  background: rgba(255,196,0,0.12); border: 1px solid rgba(255,196,0,0.45); color: #ffd866;
+  border-radius: 10px; padding: 10px 12px; font-size: 13px; margin-bottom: 8px;
+}
+.lens-upload-summary {
+  display: block; width: calc(100% - 32px); margin: 8px 16px 0; text-align: left;
+  background: rgba(255,196,0,0.12); border: 1px solid rgba(255,196,0,0.45); color: #ffd866;
+  border-radius: 10px; padding: 10px 12px; font-size: 13px; font-family: inherit;
+}
+
 .lens-toast {
   position: fixed; top: calc(16px + env(safe-area-inset-top)); left: 50%;
   transform: translateX(-50%);
