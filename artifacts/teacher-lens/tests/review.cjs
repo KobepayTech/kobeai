@@ -123,7 +123,7 @@ function school() {
     await page.route("**/api/**", server.route);
     try {
       await page.goto(BASE);
-      await page.getByRole("tab", { name: "Activity", exact: true }).click();
+      await page.getByRole("tab", { name: "Papers", exact: true }).click();
       await run(page, server);
       assert.deepEqual(errors, [], "no uncaught page errors");
       passed.push(name);
@@ -183,8 +183,8 @@ function school() {
     assert.equal(sent.items[1].metadata.ai_is_correct, false);
     assert.equal(await page.evaluate(() => localStorage.getItem("k9-lens.exam")), "5", "the exam for new captures is untouched");
 
-    await page.getByRole("tab", { name: "Activity", exact: true }).click();
-    await page.getByText(/No captures sent yet/).waitFor();
+    await page.getByRole("tab", { name: "Papers", exact: true }).click();
+    await page.getByText(/No papers yet/).waitFor();
     assert.equal(await page.getByText(/to review/).count(), 0, "the paper has left the review list");
   });
 
