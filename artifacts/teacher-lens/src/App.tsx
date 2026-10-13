@@ -979,6 +979,29 @@ export function App() {
   const [glassesSource, setGlassesSource] = useState<string | null>(null);
   const shutterBusy = useRef(false);
   const [mode, setMode] = useState<Mode>("lookup");
+  const [activeExamId, setActiveExamId] = useState<number | null>(storedExamId);
+  const [activeExams, setActiveExams] = useState<LensExam[]>([]);
+  const [examLoadError, setExamLoadError] = useState("");
+  useEffect(() => {
+    if (!auth) return;
+    let cancelled = false;
+    apiGet<{ exams: LensExam[] }>(auth, "/v1/results/exams?status=open")
+      .then((data) => {
+        if (cancelled) return;
+        setActiveExams(data?.exams ?? []);
+        setExamLoadError("");
+      })
+      .catch(() => { if (!cancelled) setExamLoadError("Could not load open exams. Practice capture remains available."); });
+    return () => { cancelled = true; };
+  }, [auth]);
+  const chooseExam = (value: string) => {
+    const id = value ? Number(value) : null;
+    setActiveExamId(id);
+    try {
+      if (id) localStorage.setItem(EXAM_STORAGE_KEY, String(id));
+      else localStorage.removeItem(EXAM_STORAGE_KEY);
+    } catch { /* storage unavailable */ }
+  };
   const [sessionId, setSessionId] = useState<number | null>(null);
   const [lookupBrief, setLookupBrief] = useState<StudentBrief | null>(null);
   const [markOpen, setMarkOpen] = useState<null | { requestId: number | null; imageKey: string | null; review?: PaperReview }>(null);
@@ -1144,18 +1167,18 @@ export function App() {
     const blob = glassesSource ? await captureGlasses(glassesSource) : await captureBlob(mode === "mark" ? 1600 : 1280);
     if (authRef.current !== auth) throw new Error("Session ended — sign in again");
     if (!blob) return null;
-    const frame = await enqueueFrame(owner, { blob, mode, examId: mode === "mark" ? storedExamId() : null });
+    const frame = await enqueueFrame(owner, { blob, mode, examId: mode === "mark" ? activeExamId : null });
     setCaptureProblem(null);
     const sent = waitMs > 0 ? await settled(frame.id, owner, waitMs) : null;
     return { request_id: sent?.requestId ?? null, image_key: sent?.imageKey ?? null, waiting: sent?.state !== "done" };
-  }, [auth, captureBlob, glassesSource, mode]);
+  }, [auth, activeExamId, captureBlob, glassesSource, mode]);
 
   // Camera-first exam marking: no shutter and no teacher narration are required.
   // K9 samples the teacher's view while they mark normally.
   useEffect(() => {
     // No session is needed to photograph: frames are stored on the phone and
     // wait there, so marking can start before the school server is reachable.
-    if (mode !== "mark" || !autoCapture || !auth) return;
+    if (mode !== "mark" || !autoCapture || !auth || workspaceOpen || connectionsOpen || markOpen) return;
     const tick = async () => {
       if (markUploadInFlight.current) return;
       markUploadInFlight.current = true;
@@ -1172,7 +1195,7 @@ export function App() {
     tick();
     const timer = window.setInterval(tick, 2500);
     return () => window.clearInterval(timer);
-  }, [auth, autoCapture, mode, uploadFrame]);
+  }, [auth, autoCapture, mode, uploadFrame, workspaceOpen, connectionsOpen, markOpen]);
 
   const runLookup = useCallback(
     async (studentCode: string, quiet = false) => {
@@ -1364,6 +1387,20 @@ export function App() {
           Mark paper
         </button>
       </div>
+      {mode === "mark" && (
+        <div className="lens-exam-picker">
+          <label htmlFor="lens-active-exam">Marking for</label>
+          <select id="lens-active-exam" value={activeExamId ?? ""} onChange={(event) => chooseExam(event.target.value)}>
+            <option value="">Practice — don't record an exam result</option>
+            {activeExams.map((exam) => <option key={exam.id} value={exam.id}>
+              {exam.class_name ? `${exam.class_name} · ` : ""}{exam.subject} · {exam.title} / {exam.total_marks}
+            </option>)}
+          </select>
+          {examLoadError && <p role="status">{examLoadError}</p>}
+          {activeExamId && !activeExams.some((exam) => exam.id === activeExamId) && !examLoadError &&
+            <p role="status">Saved exam not in the current open list. Select an open exam before recording results.</p>}
+        </div>
+      )}
       {mode === "mark" && <button className="lens-secondary lens-auto-capture" aria-pressed={autoCapture} onClick={toggleAutoCapture}>
         Auto-capture: {autoCapture ? "On ✓" : "Off"}
       </button>}
