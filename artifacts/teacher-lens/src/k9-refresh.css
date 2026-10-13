@@ -320,3 +320,6 @@ select.mark-input option { background: #fff; color: #213b34; }
   .teacher-workspace.teacher-workspace .teacher-nav button { font-size: 11px; }
   .teacher-workspace.teacher-workspace .teacher-heading h1 { font-size: 27px; }
 }
+
+/* Keep the native bridge mounted while hiding advanced device controls off Settings. */
+.k9-controls-mounted { display: none; }
