@@ -182,7 +182,7 @@ export function TeacherWorkspace({
   onConnections: () => void;
   onSignOut: () => void;
 }) {
-  const [tab, setTab] = useState(initialTab);
+  const [tab, setTab] = useState<"Home" | "Papers" | "Students" | "Settings" | "Ask K9">(initialTab);
   const serverOnline = serverStatus === "School server connected";
   const workspaceRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
