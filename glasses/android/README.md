@@ -1,0 +1,261 @@
+# KobeAI Lens native glasses connection
+
+This Android shell bundles the existing Teacher Lens app and connects its camera
+source to the native SDKs. Existing login, per-teacher sessions, face lookup,
+paper reading and human-reviewed marking stay on the school's KobeAI server.
+No alternate database or AI cloud is introduced.
+
+## Hardware paths
+
+| Build               | Install on                            | SDK binding                                                | Exposed today                                                            |
+| ------------------- | ------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `companion` / Rokid | Teacher's Android phone (Android 10+) | xg.glass `RokidGlassesClient` → Rokid CXR-M                | JPEG capture, text display, vendor TTS                                   |
+| `rayneo`            | RayNeo X2 itself                      | xg.glass `RayNeoRuntimeGlassesClient` (Camera2 on glasses) | JPEG capture, runtime text display; speech uses Android TTS if installed |
+
+These are implemented bindings, **not a hardware certification**. RayNeo X3 Pro
+is untested upstream. RayNeo Air display-only models cannot use this runtime.
+Never install the RayNeo variant on a phone and mistake the phone camera for
+connected RayNeo hardware. This uses the xg.glass Android runtime, not the Unity
+OpenXR ARDK: Lens does not need a Unity scene or stereoscopic 3D renderer.
+
+Live glasses microphone input, continuous video, image display and sensor streams
+are deliberately not exposed in this bridge. The existing browser wake-word
+feature is separate and is not guaranteed inside Android WebView. Use the Lens
+shutter. No direct full-resolution Wi-Fi album download or vendor assistant
+replacement is claimed.
+
+### Exam Mode and measured cadence
+
+`glasses/src/k9/CaptureScheduler.ts` photographs papers hands-free at whatever
+rate the glasses can actually sustain. It is device-agnostic by construction: it
+drives `KobeGlasses.camera.capture` and knows nothing about Rokid, Wi-Fi P2P
+modes or BLE, so any adapter that returns JPEG bytes can be measured by it.
+
+The reason it measures rather than schedules is that **capture and transfer are
+separate operations on every pair of glasses worth using**, and the second is
+slow and variable. A vendor command that returns "photo taken" has told you
+nothing about whether the image is on the phone. So the scheduler aims at an
+interval, measures what it gets, slows down on its own when the device cannot
+keep up, and reports the interval the hardware held — at the 95th percentile,
+not the best case, because a cadence that works nine times in ten drops a paper
+every tenth script.
+
+Captures never overlap: on a device that switches between capture and transfer
+modes, issuing a second command on top of a slow first one is how a session
+wedges.
+
+`benchmarkGlasses(10)` is the proof of concept, wired to **Test capture speed**
+on the Connections screen. Run it on any new pair before promising anyone a
+cadence; it answers what a spec sheet does not — do ten consecutive commands
+succeed, does every image arrive, and what is the shortest interval this
+hardware can hold.
+
+### HeyCyan: development only
+
+HeyCyan is back as a provider for **hardware evaluation**, at the project
+owner's decision to develop first and settle licensing once it works. That is a
+reasonable way to develop, and it only stays reasonable if shipping it is hard
+rather than easy:
+
+- It appears in `providers` only when `BuildConfig.DEBUG`, so a release build
+  does not offer it.
+- `preCompanionReleaseBuild` **fails** while `app/libs/heycyan-sdk.aar` is
+  present, and says what to do about it.
+- Nothing in this repository fetches that AAR. Supply it yourself at
+  `app/libs/heycyan-sdk.aar`; the previous `fetch_heycyan.py`, which cloned a
+  third party's republication of a proprietary binary on every CI run, is not
+  coming back.
+
+The last time this SDK was in the tree the only guard was a comment in CI, and
+it was compiled into every Rokid build. These are controls instead.
+
+**What to measure first.** `CaptureScheduler` and the **Test capture speed**
+button exist precisely for this. Capture and transfer are separate operations
+on this device — a vendor command returning "photo taken" says nothing about
+the image being on the phone — so run the ten-shot benchmark before promising
+any cadence. Note that the SDK's documented Wi-Fi transfer API
+(`QCSDKCmdCreator`, `openWifiWithMode`) is Objective-C for iOS; the Android
+surface this binding uses is `com.oudmon.ble.*`, where the only capture path
+found so far is `getPictureThumbnails`. Whether Android can reach
+full-resolution transfer is the open question, and the benchmark will show it
+in the delivered byte counts.
+
+### Why HeyCyan was previously removed
+
+The companion build previously also bound a HeyCyan-compatible BLE device
+through a proprietary vendor AAR. It was dropped, because the trade was a bad
+one in all three directions:
+
+- **It could not do the main job.** Its capture path was
+  `LargeDataHandler.getPictureThumbnails` — a thumbnail over BLE. This file used
+  to warn that those previews "may be insufficient for small exam handwriting".
+  Reading a marked script is the product; Rokid captures 2400×1800 at q90 over
+  Wi-Fi P2P.
+- **It was half a device.** `display()` and `speak()` both raised, so it
+  advertised `{"camera": true}` and nothing else. The teacher whisper — the name,
+  the weak skill, what to ask next, on the lens — needs a display.
+- **There was no licence to ship it under.** The AAR came from a third-party
+  republication whose own README says "This SDK is proprietary software. Contact
+  HeyCyan for licensing information." Because `companion` is one flavour, that
+  binary rode along in every Rokid build too, guarded only by a comment.
+
+Rokid, by contrast, is an Apache-2.0 wrapper over a vendor SDK with a per-device
+`.lc` licence obtained from Rokid's own developer console — a relationship that
+can actually be entered.
+
+A later review of the HeyCyan SDK found its Wi-Fi transfer path, a media
+downloader, and documented wear detection — which would answer the resolution
+objection above, since BLE thumbnails are not the only route off the device.
+Two things did not change. The documented camera and transfer API
+(`QCSDKCmdCreator`, `QCOperatorDeviceModePhoto`, `openWifiWithMode`) is
+**Objective-C for iOS**; KobeAI's teacher app is Android, where the SDK is the
+`com.oudmon.ble.*` surface our binding actually used and where only
+`getPictureThumbnails` was ever found. And the licence position is untouched:
+the AAR still comes from a third-party republication whose own README says to
+contact the vendor. Rokid already does the full-resolution Wi-Fi transfer that
+HeyCyan is hoped to manage — `RokidGlassesClient.ensureWifiP2pConnected` and
+`syncSingleFileSuspend`, read out of the shipped bytecode — so the uncertainty
+worth testing is already resolved on hardware we can license.
+
+## Build
+
+For Android Studio specifically, see [ANDROID_STUDIO.md](ANDROID_STUDIO.md):
+which directory to open, the exact toolchain versions, and the web-asset step
+that a Gradle sync passes without and the build then fails on.
+
+Requirements: JDK 17 or newer, Android SDK platform 36 with Build Tools 36.0.0,
+pnpm, and network access to Google/Maven Central/Rokid Maven/Gradle.
+
+From the repository root:
+
+```sh
+corepack pnpm@9.15.9 --filter @workspace/glasses --filter @workspace/teacher-lens --filter @workspace/scripts install --frozen-lockfile
+corepack pnpm@9.15.9 --filter @workspace/teacher-lens build
+cd glasses/android
+./gradlew :app:assembleCompanionDebug :app:assembleRayneoDebug
+```
+
+The student tablet is a second module. It needs its own web app built first:
+
+```sh
+corepack pnpm --filter @workspace/student-tablet install --frozen-lockfile
+corepack pnpm --filter @workspace/student-tablet build
+cd glasses/android && ./gradlew :student:assembleDebug
+```
+
+Set `ANDROID_HOME` or an untracked `local.properties` with `sdk.dir` first.
+No proprietary binary is fetched or vendored: every SDK artifact resolves from
+Maven Central at xg.glass 0.3.0. Distributing the companion APK still needs a
+Rokid device licence, which is per device and comes from Rokid, not from us.
+
+`Glasses Android` CI compiles both variants without publishing APKs. The checked-in
+Gradle wrapper is from xg.glass commit `c697e7faadde27762c9aa3954f6ed7e65961c28f`.
+
+## Connect to KobeAI
+
+1. Serve the school's API over **HTTPS** with a certificate trusted by Android.
+   It may be a school-LAN server; an internet AI service is not required.
+   The production app does not send teacher credentials over HTTP or bypass TLS.
+2. Append `https://appassets.androidplatform.net` to the API server's existing
+   `CORS_ALLOWED_ORIGINS` list and restart the server. Keep existing origins.
+3. Install the appropriate APK and enter the school server URL and teacher login
+   in Lens. The bearer token stays in the existing app's local storage, not in
+   the glasses firmware. Android backup is disabled for this app.
+4. Choose the glasses type and tap **Connect**. Grant the requested permissions.
+   From Android 12 these are nearby-device permissions only: `BLUETOOTH_SCAN` is
+   declared `neverForLocation`, so no location permission is requested and the
+   Precise/Approximate choice cannot block a pairing. Android 10–11, where a BLE
+   scan genuinely requires it, still asks for location.
+   - Rokid: enter the developer client secret and select the device-SN `.lc`
+     licence downloaded from the Rokid developer console. After successful pairing, both are encrypted on this phone using Android Keystore.
+   - RayNeo: run the RayNeo build on the glasses and allow Camera access.
+5. Choose **Lookup** or **Mark paper**, then tap the shutter. A real JPEG is
+   required before upload. Results use the existing session and whisper queue.
+   Review extracted marks before submission, as in the existing Lens workflow.
+6. Select **Phone camera → Connect** to return to the phone. A dropped glasses
+   connection refuses capture until reconnect; it does not silently take a
+   picture from the phone.
+
+## Validation record and remaining gates
+
+Local validation: SDK and Teacher Lens TypeScript checks pass, the Teacher Lens
+production web build passes, and the Android project now compiles and packages —
+`:app:assembleCompanionDebug`, `:app:assembleRayneoDebug` and
+`:student:assembleDebug` all succeed from clean, and `Glasses Android` CI
+compiles both `:app` variants. An earlier version of this section recorded that
+assembly had never run because Gradle could not be downloaded; that is no longer
+the case, and the first real compile found two faults in this Kotlin that
+reading the SDK's bytecode had not (see ANDROID_STUDIO.md).
+
+**No physical glasses have been used.** Compiling and packaging say nothing
+about pairing, reconnection or capture cadence. Every item below is still open.
+
+For each sample record model, firmware, Android version and SDK licence:
+
+- Pair, deny permissions, cancel setup, reconnect after Bluetooth loss.
+- Capture two different scenes and verify new JPEG bytes reach the correct K9
+  session, including the chosen exam ID for marking.
+- Confirm unreadable images remain reviewable and no grades are auto-submitted.
+- Verify whispers are audible through the intended device; confirm display text
+  on Rokid/RayNeo. RayNeo may need a separately installed Android TTS engine.
+- Cancel a pending capture; sign out; relaunch; check no old session gets frames.
+- Reject expired teacher tokens, untrusted TLS and disallowed CORS origins.
+- Verify an external URL/iframe cannot call the native hardware bridge.
+
+## Sources
+
+- https://github.com/hkust-spark/xg-glass-sdk — Android SDK, Apache-2.0; vendor
+  dependencies carry their own licences.
+- https://ar.rokid.com/sprite?lang=en — Rokid developer authorization.
+
+The bridge is only exposed to the bundled asset origin's main frame. It does not
+open a LAN port or attach native APIs to a remotely hosted page. Device actions
+are bounded, serialized, and return errors; images are resized to at most 1600px
+before crossing into JavaScript.
+
+## Automatic connections
+
+After first provisioning, Rokid reconnects at sign-in without prompting again.
+Only successful provisioning is saved, encrypted with an Android Keystore AES-GCM
+key. Forget pairing removes the stored credentials **and** the Rokid client's own
+reconnect cache (`xgglass_rokid_bt_reconnect`: `socket_uuid`, `mac_address`),
+which `ensureBluetoothConnected` dials before it will scan for anything else.
+Clearing only ours left the phone still bound to the previous glasses. Choosing Phone camera pauses
+automatic reconnection; explicitly connecting Rokid enables it again.
+
+A connected-device foreground service keeps the current SDK session eligible
+while the app is minimised. Android shows an ongoing connection notification with
+a Pause action — which on Android 13+ requires `POST_NOTIFICATIONS`, asked for
+alongside the Bluetooth permissions on a Rokid connect. It is asked as an
+optional permission: refusing it costs the teacher the Pause action, not the
+glasses, so a denial never fails the connection. Dropped Rokid connections retry at 3, 6, 12, 24, 48 then 60-second
+intervals. Each attempt is bounded by the hardware's own connect budget
+(`RokidOptions.connectTimeoutMs`, pinned at 30s) plus 20s of headroom: the SDK
+wraps its whole handshake — cached-MAC reconnect, scan, init, BT socket, Wi-Fi
+P2P — in that budget, so a watchdog sized at the same 30s fired first every time
+and cancelled the handshake mid-scan. Photos and microphone recording are
+not started in the background. Signing out cancels retries and disconnects.
+
+First-time provisioning is interactive — a dialog for the developer client
+secret, then Android's document picker for the `.lc` licence — so that one call
+is given ten minutes rather than the 75 seconds every other bridge call gets.
+The previous flat budget expired while the picker was still open and reported
+the connection as failed. Unattended reconnects keep the short budget: nobody is
+waiting on a dialog, and a wedged one should give up quickly.
+
+The upstream Rokid client requires an Activity. Activity destruction, task
+removal, force-stop or process death ends this session; reopening the app resumes
+from encrypted provisioning. This is not a boot-time/headless persistent service.
+Battery restrictions, range and revoked Bluetooth permissions still affect it.
+
+The school URL and teacher session are reused. Authenticated server checks run
+quietly while the interface is visible, with bounded retries and recovery on
+network return/resume. These HTTPS requests do not need a permanent socket.
+Expired/revoked teacher authorization requires sign-in; it is not retried forever.
+The native Bluetooth service does not keep WebView polling or server AI processing
+running after the UI has been destroyed.
+
+Validation: browser protocol fixtures exercise automatic connection without a
+button, pause (no further auto-connect), forgetting provisioning and sign-out.
+Hardware checks must cover minimising, Bluetooth loss/return, notification Pause,
+permission revocation, process death and reopening before production rollout.

@@ -4,8 +4,24 @@ import { Router } from "express";
 import { pool } from "@workspace/db";
 import { requireAuth, verifyToken } from "../lib/auth";
 import { logger } from "../lib/logger";
+import { classSkillDemand, ingestClassroomQuestion } from "../lib/skill-engine";
+import {
+  IDENTITY_SOURCES,
+  decideAttribution,
+  type IdentitySource,
+} from "../lib/attribution";
 
 const router = Router();
+
+/**
+ * Whether this school has run measure_speaker_id.py on its own classrooms and
+ * chosen to let voice alone write to a child's permanent profile.
+ *
+ * Off unless explicitly set. Until then a confident voice match still answers
+ * the child as themselves; it just writes the evidence at class level.
+ */
+const VOICE_ATTRIBUTION_MEASURED =
+  process.env["VOICE_ATTRIBUTION_MEASURED"] === "true";
 
 // Ingestion is called by the classroom kiosk / voice gateway with a shared
 // secret. Teachers can also read/write via a staff JWT.
@@ -15,6 +31,16 @@ function safeEqual(a: string, b: string): boolean {
   const left = Buffer.from(a);
   const right = Buffer.from(b);
   return left.length === right.length && timingSafeEqual(left, right);
+}
+
+/** student_code to users.id, or null — an unknown code is not an error here. */
+async function studentIdFor(studentCode: string | null): Promise<number | null> {
+  if (!studentCode) return null;
+  const { rows } = await pool.query(
+    `SELECT id FROM users WHERE student_code = $1 LIMIT 1`,
+    [studentCode],
+  );
+  return rows.length ? (rows[0].id as number) : null;
 }
 
 function bearer(req: Request): string | null {
@@ -97,6 +123,15 @@ router.post("/v1/classroom/insights", requireKioskOrStaff, async (req, res) => {
 
   const inserted: number[] = [];
   const skipped: { index: number; reason: string }[] = [];
+  const questions: {
+    insightId: number;
+    studentCode: string | null;
+    subject: string | null;
+    classId: number | null;
+    periodId: number | null;
+    attribution: number | null;
+    text: string;
+  }[] = [];
   for (let i = 0; i < rawInsights.length; i += 1) {
     const item = rawInsights[i] ?? {};
     const insightType = text(item.insight_type, 40);
@@ -118,14 +153,21 @@ router.post("/v1/classroom/insights", requireKioskOrStaff, async (req, res) => {
       : envelopePeriodId;
     const rawStudentCode = text(item.student_code, 100);
     const attribution = confidenceOrNull(item.attribution_confidence);
-    // Only keep student attribution when the caller either explicitly said
-    // "I'm confident" (>= 0.8) or when the attribution field is absent AND
-    // the kiosk provided a student_code (they claim to know). If confidence
-    // is present but low, promote the insight to class-level.
-    const keepStudent =
-      rawStudentCode &&
-      (attribution == null ? true : attribution >= 80);
-    const studentCode = keepStudent ? rawStudentCode : null;
+    // Gate 2. This row is permanent learning evidence, so it takes the
+    // attribution decision, not the identity one: a caller may be confident
+    // enough to answer a child by name and still not confident enough to write
+    // to their record. See lib/attribution.ts. An unstated source is treated as
+    // a shared microphone, which is the conservative reading.
+    const rawSource = text(item.identity_source, 40) ?? text(body.identity_source, 40);
+    const source: IdentitySource =
+      rawSource && (IDENTITY_SOURCES as readonly string[]).includes(rawSource)
+        ? (rawSource as IdentitySource)
+        : "voice";
+    const decision = decideAttribution(
+      { student_code: rawStudentCode, source, confidence: attribution },
+      { voiceAttributionMeasured: VOICE_ATTRIBUTION_MEASURED },
+    );
+    const studentCode = decision.attribute_to;
 
     const result = await pool.query(
       `INSERT INTO classroom_discussion_insights (
@@ -144,7 +186,39 @@ router.post("/v1/classroom/insights", requireKioskOrStaff, async (req, res) => {
         kiosk,
       ],
     );
-    inserted.push(Number(result.rows[0].id));
+    const insightId = Number(result.rows[0].id);
+    inserted.push(insightId);
+    // A question also goes onto the syllabus, so the teacher's summary can name
+    // the topic the class is stuck on rather than just count questions. This
+    // never reaches a mastery score — see lib/skill-engine.ts. It runs for
+    // unattributed questions too: "eleven children asked about negative
+    // multiplication" needs nobody to be named.
+    if (insightType === "question") {
+      questions.push({ insightId, studentCode, subject, classId, periodId, attribution, text: insightText });
+    }
+  }
+
+  // Mapping consults the brain when keywords fail, so it runs after the
+  // insights are safely stored rather than holding the kiosk's request open.
+  // A question that fails to map is still recorded as an insight.
+  if (questions.length > 0) {
+    void Promise.all(
+      questions.map(async (q) => {
+        try {
+          await ingestClassroomQuestion({
+            studentId: await studentIdFor(q.studentCode),
+            classId: q.classId,
+            subject: q.subject,
+            periodId: q.periodId,
+            questionText: q.text,
+            attributionConfidence: q.attribution,
+            insightId: q.insightId,
+          });
+        } catch (error) {
+          logger.warn({ error, insight_id: q.insightId }, "could not map classroom question to a skill");
+        }
+      }),
+    );
   }
 
   if (inserted.length > 0) {
@@ -221,6 +295,35 @@ router.get("/v1/staff/classroom-insights/summary", requireStaff, async (req, res
     [sinceHours],
   );
   res.json({ rows: rows.rows });
+});
+
+/**
+ * GET /v1/staff/classroom-insights/demand
+ * Query: class_id (required), since_days? (default 7), limit? (default 10)
+ *
+ * What the class asked about, placed on the syllabus. This is the end-of-lesson
+ * line a teacher can act on — "11 students asked about negative multiplication"
+ * — and it works whether or not any of them were identified, because the count
+ * that matters is how many different children, not who.
+ */
+router.get("/v1/staff/classroom-insights/demand", requireStaff, async (req, res) => {
+  const classId = Number(req.query["class_id"]);
+  if (!Number.isFinite(classId)) {
+    res.status(400).json({ error: "class_id required" });
+    return;
+  }
+  const sinceDays = Math.min(90, Math.max(1, Number(req.query["since_days"]) || 7));
+  const limit = Math.min(50, Math.max(1, Number(req.query["limit"]) || 10));
+  try {
+    res.json({
+      class_id: classId,
+      since_days: sinceDays,
+      demand: await classSkillDemand(classId, sinceDays, limit),
+    });
+  } catch (error) {
+    logger.error({ error, class_id: classId }, "classroom demand query failed");
+    res.status(500).json({ error: "could not read classroom demand" });
+  }
 });
 
 export default router;

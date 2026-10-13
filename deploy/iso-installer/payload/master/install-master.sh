@@ -28,22 +28,34 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# 2. Generate strong secrets + the super-admin password ONCE.
+# 2. Generate strong secrets ONCE, plus a suggested setup password.
+#
+# No account is created here. A KobeAI server ships with no logins: the school
+# opens the Teacher Dashboard, types its name and a setup password, and that
+# wizard creates the school's own administrator (role "admin"). The operator
+# console belongs to KobepayTech and is never part of a school install, so
+# nothing in this script hands anyone a super-admin.
+#
+# SETUP_PASSWORD below is only a suggestion — something strong the installer
+# can read off the screen and type into the wizard instead of inventing
+# "school123" on the spot.
 # -----------------------------------------------------------------------------
 mkdir -p "$KOBEAI_HOME"
 CRED_FILE=/root/kobeai-credentials.txt
 
 if [[ ! -f "$CRED_FILE" ]]; then
-  SUPER_ADMIN_PW="$(openssl rand -base64 12 | tr -d '/+=' | cut -c1-16)"
+  SETUP_PASSWORD="$(openssl rand -base64 12 | tr -d '/+=' | cut -c1-16)"
   SESSION_SECRET="$(openssl rand -hex 32)"
   POSTGRES_PASSWORD="$(openssl rand -base64 18 | tr -d '/+=')"
   cat > "$CRED_FILE" <<EOF
 # =============================================================================
-# KobeAI MASTER credentials — generated $(date -Is)
+# KobeAI MASTER secrets — generated $(date -Is)
 # KEEP THIS FILE SAFE.  Permissions: root only.
+#
+# SETUP_PASSWORD is a SUGGESTION for the first-run wizard, not a login. No
+# account exists on this server until someone completes that wizard.
 # =============================================================================
-SUPER_ADMIN_LOGIN=admin@kobeai.school
-SUPER_ADMIN_PASSWORD=$SUPER_ADMIN_PW
+SETUP_PASSWORD=$SETUP_PASSWORD
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
 SESSION_SECRET=$SESSION_SECRET
 EOF
@@ -120,10 +132,18 @@ cat <<EOF
     Teacher Dashboard  https://kobeai.school/teacher/
     API (LAN clients)  https://kobeai.school/api
 
-  Super-admin login:
-    email:     admin@kobeai.school
-    password:  $SUPER_ADMIN_PW
+  FIRST: set this school up
+    Open  https://kobeai.school/teacher/  on any machine on the LAN.
+    It will ask for the school's name, a setup password, and the details of
+    the school's administrator — and nothing else. There are no accounts on
+    this server until you do.
+
+    Suggested setup password:  $SETUP_PASSWORD
     (also saved to $CRED_FILE — root only)
+
+    Then, from the dashboard, open "Staff & Students" and print the teacher
+    QR codes. Each teacher scans one with their own phone and sets their own
+    account up, photographs the class list, and takes the student photos.
 
   AI worker expected at:  http://192.168.1.11:11434
 
@@ -140,9 +160,9 @@ cat <<EOF
     will write to it; otherwise it writes to /opt/kobeai/backups/local.
     Keeps the last 14 backups by default.
 
-  IMPORTANT — first sign-in:
-    Change the super-admin password immediately, and consider rotating
-    SESSION_SECRET in $KOBEAI_HOME/.env after onboarding.
+  IMPORTANT — after onboarding:
+    Consider rotating SESSION_SECRET in $KOBEAI_HOME/.env, and keep
+    $CRED_FILE off any shared drive.
 
 ================================================================
 EOF

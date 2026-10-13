@@ -112,58 +112,6 @@ export interface LeaderboardResponse {
   period: string;
 }
 
-export interface StudentBalance {
-  id: string;
-  student_id: string;
-  name: string;
-  grade: string;
-  balance: number;
-  total_deposited: number;
-  total_spent: number;
-  ai_questions_spend: number;
-  quiz_spend: number;
-  questions_count: number;
-  quizzes_count: number;
-  status: string;
-}
-
-export interface BalanceSummary {
-  total_accounts: number;
-  total_balance: number;
-  low_balance_count: number;
-}
-
-export interface StudentBalancesResponse {
-  students: StudentBalance[];
-  summary: BalanceSummary;
-}
-
-export interface DepositRequest {
-  student_id: string;
-  amount: number;
-  deposit_method?: string;
-  notes?: string;
-}
-
-export interface DepositResponse {
-  success: boolean;
-  deposit_id: string;
-  receipt_number: string;
-  new_balance: number;
-  message: string;
-}
-
-export interface BillingSummary {
-  period: string;
-  total_ai_questions: number;
-  total_quizzes: number;
-  ai_cost: number;
-  quiz_cost: number;
-  subscription_fee: number;
-  total_amount: number;
-  status: string;
-}
-
 export interface QuizSummary {
   id: string;
   title: string;

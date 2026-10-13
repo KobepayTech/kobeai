@@ -406,6 +406,162 @@ class VADEngine(Engine):
 
 
 # ---------------------------------------------------------------------------
+# Audio identity: who spoke, when, and what they said
+# ---------------------------------------------------------------------------
+
+
+def _find_suffix(folder: Path, suffix: str, model_id: str) -> Path:
+    """Locate a single weights file inside a downloaded model folder."""
+    if folder.is_file():
+        return folder
+    matches = sorted(folder.glob(f"*{suffix}"))
+    if not matches:
+        raise EngineUnavailable(
+            f"{model_id} folder {folder} has no {suffix} file; re-run the K9 model downloader"
+        )
+    return matches[0]
+
+
+class SpeakerIdEngine(Engine):
+    """TitaNet-Large speaker embeddings.
+
+    Returns a unit-length vector; everything downstream compares with cosine
+    similarity, so the caller never has to think about magnitude. See
+    `speaker_harness.py` for why the margin between the top two candidates
+    matters more than the top score on its own.
+    """
+
+    name = "speaker_id"
+    models = ("titanet_large",)
+    requires = ("nemo", "torch")
+    note = "TitaNet-Large embeddings for enrolled-voice matching"
+    RATE = 16000
+    #: Below this there is not enough voiced material for a stable embedding —
+    #: short interjections ("ndiyo", "sir") are the classic false-match source.
+    MIN_SECONDS = 0.5
+
+    def load(self) -> Any:
+        import torch
+        from nemo.collections.asr.models import EncDecSpeakerLabelModel
+
+        torch.set_num_threads(_cpu_threads())
+        checkpoint = _find_suffix(self.registry.weights_of("titanet_large"), ".nemo", "titanet_large")
+        model = EncDecSpeakerLabelModel.restore_from(restore_path=str(checkpoint), map_location="cpu")
+        model.eval()
+        return model, threading.Lock()
+
+    def embedding(self, wav_bytes: bytes) -> list[float]:
+        import torch
+
+        audio = read_wav_mono(wav_bytes, self.RATE)
+        seconds = len(audio) / self.RATE
+        if seconds < self.MIN_SECONDS:
+            raise ValueError(f"need at least {self.MIN_SECONDS}s of speech, got {seconds:.2f}s")
+        model, lock = self.model()
+        with lock, torch.inference_mode():
+            signal = torch.from_numpy(audio).unsqueeze(0)
+            lengths = torch.tensor([signal.shape[1]])
+            _, embeddings = model.forward(input_signal=signal, input_signal_length=lengths)
+        vector = embeddings.squeeze(0).cpu().numpy().astype(np.float64)
+        norm = float(np.linalg.norm(vector))
+        return (vector / norm).tolist() if norm else vector.tolist()
+
+
+class SpeechToTextEngine(Engine):
+    """Whisper large-v3-turbo.
+
+    `language` is passed through rather than guessed where the caller knows it:
+    a Tanzanian classroom code-switches inside a single sentence, and Whisper's
+    own language detection on a short noisy segment is a coin toss that silently
+    changes the transcript.
+    """
+
+    name = "speech_to_text"
+    models = ("whisper_large_v3_turbo",)
+    requires = ("transformers", "torch")
+    note = "Whisper large-v3-turbo transcription"
+    RATE = 16000
+
+    def load(self) -> Any:
+        import torch
+        from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
+
+        torch.set_num_threads(_cpu_threads())
+        folder = str(self.registry.weights_of("whisper_large_v3_turbo"))
+        processor = AutoProcessor.from_pretrained(folder)
+        model = AutoModelForSpeechSeq2Seq.from_pretrained(folder, low_cpu_mem_usage=True)
+        model.eval()
+        return processor, model, threading.Lock()
+
+    def transcribe(self, wav_bytes: bytes, language: str | None = None) -> dict[str, Any]:
+        import torch
+
+        audio = read_wav_mono(wav_bytes, self.RATE)
+        processor, model, lock = self.model()
+        with lock, torch.inference_mode():
+            features = processor(audio, sampling_rate=self.RATE, return_tensors="pt").input_features
+            tokens = model.generate(features, **({"language": language} if language else {}))
+        text = processor.batch_decode(tokens, skip_special_tokens=True)[0].strip()
+        return {"text": text, "language": language, "seconds": round(len(audio) / self.RATE, 3)}
+
+
+class DiarizationEngine(Engine):
+    """pyannote 3.1 — who spoke when, before anyone is named.
+
+    Diarization only separates voices; it does not identify them. Its labels are
+    per-recording ("SPEAKER_00"), so the pipeline is: diarize to get turns, embed
+    each turn with TitaNet, then match against the classroom roster.
+
+    Note the pyannote 3.1 pipeline's config.yaml refers to the segmentation model
+    by Hugging Face id, so a machine that has never fetched it will try to reach
+    the network on first load. Both models are in the registry; make sure the
+    downloader has run before a school goes offline.
+    """
+
+    name = "diarization"
+    models = ("pyannote_speaker_diarization_3_1", "pyannote_segmentation_3_0")
+    requires = ("pyannote", "torch")
+    note = "pyannote 3.1 speaker turns (gated models)"
+    RATE = 16000
+
+    def load(self) -> Any:
+        from pyannote.audio import Pipeline
+
+        folder = self.registry.weights_of("pyannote_speaker_diarization_3_1")
+        config = folder / "config.yaml" if folder.is_dir() else folder
+        if not config.exists():
+            raise EngineUnavailable(f"pyannote pipeline config not found at {config}")
+        pipeline = Pipeline.from_pretrained(str(config))
+        if pipeline is None:
+            raise EngineUnavailable(
+                "pyannote returned no pipeline; these weights are gated — accept the model "
+                "terms on Hugging Face and re-run the downloader"
+            )
+        return pipeline, threading.Lock()
+
+    def turns(self, wav_bytes: bytes, min_speakers: int | None = None,
+              max_speakers: int | None = None) -> list[dict[str, Any]]:
+        import torch
+
+        audio = read_wav_mono(wav_bytes, self.RATE)
+        pipeline, lock = self.model()
+        bounds: dict[str, int] = {}
+        if min_speakers is not None:
+            bounds["min_speakers"] = min_speakers
+        if max_speakers is not None:
+            bounds["max_speakers"] = max_speakers
+        with lock:
+            annotation = pipeline(
+                {"waveform": torch.from_numpy(audio).unsqueeze(0), "sample_rate": self.RATE},
+                **bounds,
+            )
+        return [
+            {"start": round(float(turn.start), 3), "end": round(float(turn.end), 3), "speaker": str(label)}
+            for turn, _, label in annotation.itertracks(yield_label=True)
+        ]
+
+
+# ---------------------------------------------------------------------------
 # Models the runtime lists but cannot run yet
 # ---------------------------------------------------------------------------
 
@@ -425,9 +581,6 @@ class PlannedEngine(Engine):
 PLANNED_ENGINES: tuple[tuple[str, tuple[str, ...], tuple[str, ...], str], ...] = (
     ("open_vocabulary", ("yoloe_26m_seg",), (), "YOLOE open-prompt segmentation needs a MobileCLIP text encoder that isn't in the registry"),
     ("ocr", ("pp_ocr_v6_medium_det", "pp_ocr_v6_medium_rec"), ("paddleocr",), "PP-OCRv6 paper and board text (Paddle inference models)"),
-    ("speech_to_text", ("whisper_large_v3_turbo",), ("transformers",), "Whisper large-v3-turbo transcription"),
-    ("speaker_id", ("titanet_large",), ("nemo",), "TitaNet enrolled speaker recognition (.nemo)"),
-    ("diarization", ("pyannote_segmentation_3_0", "pyannote_speaker_diarization_3_1"), ("pyannote",), "who spoke when (gated models)"),
     ("embeddings", ("bge_m3",), ("transformers",), "BGE-M3 school knowledge retrieval"),
     ("tts_english", ("kokoro_82m",), ("kokoro",), "Kokoro English voice"),
     ("tts_swahili", ("piper_swahili",), ("piper",), "Piper Swahili voice"),
@@ -449,6 +602,9 @@ def build_engines(registry: Registry) -> dict[str, Engine]:
         "faces": FaceEngine(registry),
         "reid": ReIDEngine(registry),
         "vad": VADEngine(registry),
+        "speaker_id": SpeakerIdEngine(registry),
+        "speech_to_text": SpeechToTextEngine(registry),
+        "diarization": DiarizationEngine(registry),
     }
     for name, models, requires, note in PLANNED_ENGINES:
         engines[name] = PlannedEngine(registry, name, models, requires, note)

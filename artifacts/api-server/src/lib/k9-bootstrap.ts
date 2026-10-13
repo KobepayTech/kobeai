@@ -1,4 +1,4 @@
-import { db, tenantsTable, usersTable } from "@workspace/db";
+import { db, schoolSetupTable, tenantsTable, usersTable } from "@workspace/db";
 import { inArray } from "drizzle-orm";
 import { generateLicenseKey } from "./license";
 import { logger } from "./logger";
@@ -13,6 +13,12 @@ import { hashPin } from "./seed";
  *   K9_SCHOOL_NAME     tenant display name (default "My School")
  *   K9_ADMIN_EMAIL     first administrator login
  *   K9_ADMIN_PASSWORD  its password — only used while no admin exists yet
+ *   K9_SETUP_PASSWORD  break-glass setup password (defaults to the admin one)
+ *
+ * The account it creates is role "admin" — the school's own administrator.
+ * Like the web install wizard (routes/setup.ts), this path has no way to
+ * create a `super_admin`: the operator console is unlocked out-of-band with
+ * K9_OPERATOR_SECRET and never ships with a school.
  */
 export async function bootstrapK9School(port: number): Promise<void> {
   let [tenant] = await db.select().from(tenantsTable).orderBy(tenantsTable.id).limit(1);
@@ -41,13 +47,31 @@ export async function bootstrapK9School(port: number): Promise<void> {
     .limit(1);
   if (existingAdmin) return;
 
-  await db.insert(usersTable).values({
-    role: "admin",
-    name: "School Administrator",
-    email,
-    password_hash: hashPin(password),
-  });
+  const [admin] = await db
+    .insert(usersTable)
+    .values({
+      role: "admin",
+      name: "School Administrator",
+      email,
+      password_hash: hashPin(password),
+    })
+    .returning({ id: usersTable.id });
   logger.info({ email }, "K9 administrator account created");
+
+  // Record the same school_setup row the web wizard writes, so the desktop
+  // build lands in the identical state: the dashboard shows the school's name,
+  // and /v1/setup/state stops offering a wizard that would only be refused.
+  await db
+    .insert(schoolSetupTable)
+    .values({
+      id: 1,
+      school_name: tenant!.name,
+      setup_password_hash: hashPin(process.env["K9_SETUP_PASSWORD"] || password),
+      tenant_id: tenant!.id,
+      completed_at: new Date(),
+      completed_by: admin?.id ?? null,
+    })
+    .onConflictDoNothing();
 }
 
 function slugify(name: string): string {

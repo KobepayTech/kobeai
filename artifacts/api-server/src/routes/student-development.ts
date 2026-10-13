@@ -14,6 +14,7 @@ import {
   recordRetestResult,
 } from "../lib/student-development";
 
+import { requirePremium } from "../lib/entitlements";
 const router = Router();
 const requireStaff = requireAuth(["teacher", "admin", "super_admin"]);
 
@@ -53,7 +54,7 @@ function text(value: unknown, max = 500): string | null {
 // ---------------------------------------------------------------------------
 // Curated notes
 // ---------------------------------------------------------------------------
-router.get("/v1/staff/curated-notes/:studentCode", requireStaff, async (req, res) => {
+router.get("/v1/staff/curated-notes/:studentCode", requireStaff, requirePremium("revision"), async (req, res) => {
   await ensureStudentDevelopmentTables();
   const studentCode = text(req.params.studentCode, 100);
   if (!studentCode) {
@@ -91,7 +92,7 @@ router.post("/v1/staff/curated-notes/:id/flag", requireStaff, async (req, res) =
 });
 
 // Optional manual regeneration for a paper (mostly for demo / debug).
-router.post("/v1/staff/curated-notes/regenerate", requireStaff, async (req, res) => {
+router.post("/v1/staff/curated-notes/regenerate", requireStaff, requirePremium("revision"), async (req, res) => {
   const paperId = Number(req.body?.paper_id);
   if (!Number.isInteger(paperId) || paperId <= 0) {
     res.status(400).json({ error: "paper_id required" });
@@ -104,7 +105,7 @@ router.post("/v1/staff/curated-notes/regenerate", requireStaff, async (req, res)
 // ---------------------------------------------------------------------------
 // Retests
 // ---------------------------------------------------------------------------
-router.get("/v1/staff/retests/:studentCode", requireStaff, async (req, res) => {
+router.get("/v1/staff/retests/:studentCode", requireStaff, requirePremium("revision"), async (req, res) => {
   await ensureStudentDevelopmentTables();
   const studentCode = text(req.params.studentCode, 100);
   if (!studentCode) {
@@ -151,7 +152,7 @@ router.post("/v1/staff/retests/:id/record", requireStaff, async (req, res) => {
   res.json({ ok: true });
 });
 
-router.post("/v1/staff/retests/regenerate", requireStaff, async (req, res) => {
+router.post("/v1/staff/retests/regenerate", requireStaff, requirePremium("revision"), async (req, res) => {
   const paperId = Number(req.body?.paper_id);
   if (!Number.isInteger(paperId) || paperId <= 0) {
     res.status(400).json({ error: "paper_id required" });
@@ -229,7 +230,7 @@ router.get("/v1/staff/behavior/:studentCode", requireStaff, async (req, res) => 
 // ---------------------------------------------------------------------------
 // Personalized lesson plans
 // ---------------------------------------------------------------------------
-router.post("/v1/staff/lesson-plans/generate", requireStaff, async (req, res) => {
+router.post("/v1/staff/lesson-plans/generate", requireStaff, requirePremium("learning_plan"), async (req, res) => {
   const studentCode = text(req.body?.student_code ?? req.query["student_code"], 100);
   if (studentCode) {
     const outcome = await generateLessonPlanForStudent(
@@ -251,7 +252,7 @@ router.post("/v1/staff/lesson-plans/generate", requireStaff, async (req, res) =>
   res.json(outcome);
 });
 
-router.get("/v1/staff/lesson-plans/:studentCode/latest", requireStaff, async (req, res) => {
+router.get("/v1/staff/lesson-plans/:studentCode/latest", requireStaff, requirePremium("learning_plan"), async (req, res) => {
   await ensureStudentDevelopmentTables();
   const studentCode = text(req.params.studentCode, 100);
   if (!studentCode) {

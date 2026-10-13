@@ -18,14 +18,16 @@ Lens, classroom PC + TV, admin PC, parent phone, cameras, optional AR glasses).
 
 ## What is here
 
-| Path | What it is |
-|---|---|
-| `src/core/` | `KobeGlasses` interface, capabilities, typed events, adapter contract, `GlassesManager` |
-| `src/adapters/simulator/` | Software glasses that record what was shown and spoken — what the tests and laptop development run against |
-| `src/adapters/brilliant/` | Brilliant Labs Frame / Halo over WebBluetooth, including the Lua the Frame runs |
-| `src/adapters/mentra/` | MentraOS devices (Mentra Live, Even Realities, Vuzix Z100, NIMO) |
-| `src/k9/` | `K9Api` (the school server's existing lens endpoints) and `K9GlassesController` (lookup, marking, assistant, translate, safety) |
-| `tests/` | `node --test` over the simulator and both adapters, no hardware needed |
+| Path                      | What it is                                                                                                                      |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `src/core/`               | `KobeGlasses` interface, capabilities, typed events, adapter contract, `GlassesManager`                                         |
+| `src/adapters/simulator/` | Software glasses that record what was shown and spoken — what the tests and laptop development run against                      |
+| `src/adapters/brilliant/` | Brilliant Labs Frame / Halo over WebBluetooth, including the Lua the Frame runs                                                 |
+| `src/adapters/mentra/`    | MentraOS devices (Mentra Live, Even Realities, Vuzix Z100, NIMO)                                                                |
+| `src/adapters/native/`    | Android WebMessage adapter for Rokid and RayNeo, used by Teacher Lens                                                           |
+| `android/`                | Native SDK bindings and bundled Teacher Lens app; [build and pairing guide](android/README.md)                                  |
+| `src/k9/`                 | `K9Api` (the school server's existing lens endpoints) and `K9GlassesController` (lookup, marking, assistant, translate, safety) |
+| `tests/`                  | `node --test` over the simulator and both adapters, no hardware needed                                                          |
 
 ```cmd
 pnpm --filter @workspace/glasses run test
@@ -52,16 +54,44 @@ teacher's phone or earbud — which is also how Teacher Lens whispers work today
 
 These are the facts the adapters are written against, not assumptions:
 
-- **Mentra** — [`@mentra/bluetooth-sdk`](https://www.npmjs.com/package/@mentra/bluetooth-sdk) (MIT) runs in
-  **React Native / Expo only** (Expo ≥ 49, React Native ≥ 0.72; native
-  `com.mentraglass:bluetooth-sdk`, `MentraBluetoothSDK`). Its published metadata
-  documents scan/connect/reconnect, display text + clear + dashboard, photo and
-  video, microphone in LC3 or PCM, typed lifecycle state, and button, touch,
-  swipe, battery, Wi-Fi and OTA events — but **not exact method signatures**. So
-  `MentraAdapter` takes an injected `MentraClient`: the mobile shell owns the
-  SDK binding, and K9 stays on one interface. Confirm the signatures against the
-  [starter kit](https://github.com/Mentra-Community/Mentra-Bluetooth-SDK-Starter-Kit)
-  when wiring the shell.
+- **Mentra** — now written against the published
+  [API reference](https://docs.mentraglass.com/bluetooth-sdk/api-reference),
+  not against guesses. Three of those facts contradict the obvious assumption:
+  - **The Bluetooth SDK has no display.** It covers scanning, pairing, device
+    status, microphone, camera, speaker, streaming, Wi-Fi and hardware events
+    for Mentra Live. Screen output belongs to the separate **Miniapp SDK**, so
+    `MentraGlasses` reports `display: false` and `display.text()` throws rather
+    than silently doing nothing.
+  - **`requestPhoto()` never returns bytes.** It takes a `webhookUrl` and a
+    bearer `authToken`, and the JPEG is POSTed there as multipart form-data
+    (`photo` + `requestId`). K9 points that webhook at the school's own server
+    (`POST /v1/teacher-lens/mentra/photo`), so a picture goes glasses → phone →
+    school LAN and never near a vendor cloud. `camera.capture()` therefore
+    throws and sends the caller to `requestPhotoToK9()`.
+  - **The capture light is automatic** on photo, video and stream. For a school
+    that matters: a teacher wearing camera glasses near children is visibly
+    recording, and K9 cannot switch that off.
+
+  Lifecycle is `disconnected | scanning | connecting | bonding | connected`
+  plus a `fullyBooted` flag; `toK9State()` maps `bonding` and a connected-but-
+  not-booted session onto "connecting", because neither can take a shutter
+  press yet. Events are the SDK's own names (`button_press`, `touch_event`,
+  `battery_status`, `photo_response`); `mic_pcm`, `stream_status` and the rest
+  belong to the shell and are deliberately not mapped.
+
+  The SDK runs in React Native / Expo (`@mentra/bluetooth-sdk`,
+  `useMentraBluetooth()`), Android (`com.mentraglass:bluetooth-sdk`) or iOS
+  (`MentraBluetoothSDK`) — never in the Node server or a browser — so the
+  adapter still takes an injected `MentraClient` and the shell owns the binding.
+
+- **Mentra Miniapp SDK** — the other half of Mentra's offering: `@mentra/miniapp`
+  plus the `mentra-miniapp` CLI, a background JS layer driving the glasses and a
+  React WebView UI layer, running on the phone inside the Mentra App with no
+  cloud. It _does_ have display layouts, TTS, STT and translation. K9 does not
+  use it, for one blunt reason the docs state outright: **there is currently no
+  way to distribute a miniapp built with the Miniapp SDK.** Until the Mentra
+  Miniapp Store exists, a school cannot install one. Worth revisiting when it
+  ships.
 - **Brilliant** — [`brilliant-ble`](https://www.npmjs.com/package/brilliant-ble) and
   [`brilliant-msg`](https://www.npmjs.com/package/brilliant-msg) (BSD-3-Clause) are
   **browser WebBluetooth**: `BrilliantBle.connect/sendLua/disconnect`,
@@ -74,13 +104,15 @@ These are the facts the adapters are written against, not assumptions:
   (Apache-2.0) covers Rokid, Meta, Frame, RayNeo, INMO Air3, Omi, Even G1 and a
   simulator, but ships **Kotlin, Swift and a Python CLI — no JavaScript or
   TypeScript binding**. It therefore cannot be a TypeScript adapter here. It
-  belongs on the native side of the mobile shell (or behind a small local
-  bridge) and would appear to K9 as one more `GlassesAdapter` implemented in
-  `mobile/`. Nothing in `src/` pretends otherwise.
+  is now used on the native side of `android/`. `NativeAdapter` in TypeScript
+  calls the origin-restricted Android WebMessage bridge; it does not call Kotlin
+  methods directly. Rokid uses the phone build, while the RayNeo build runs on
+  the glasses. See the Android guide for licences and hardware gates.
 
 ## Local-first
 
-Glasses never need a vendor cloud for K9 to work:
+K9 inference stays on the school server. Vendor setup requirements still apply
+(for example Rokid developer authorization):
 
 ```text
 glasses  --bluetooth-->  teacher phone / K9 hub  --wifi-->  school K9 server  -->  local models

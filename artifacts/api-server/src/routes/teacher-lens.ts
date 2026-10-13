@@ -1,4 +1,5 @@
 import express, { Router, type Request, type Response } from "express";
+import multer from "multer";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { pool } from "@workspace/db";
@@ -16,6 +17,7 @@ import {
   generateRetestForPaper,
 } from "../lib/student-development";
 import { logger } from "../lib/logger";
+import { ingestGradedPaper, studentSkillProfile } from "../lib/skill-engine";
 import { recordCameraMarkedPaper } from "../lib/exam-vision";
 import { getClassExamGaps, ensureExamSummaryTable } from "../lib/exam-summary";
 import {
@@ -30,6 +32,12 @@ import {
 } from "../lib/results";
 
 const router = Router();
+
+// Mentra uploads a photo as multipart form-data to a webhook, so this one
+// route needs a multipart parser. Memory storage with the same 6 MB ceiling
+// the raw-frame route uses: the bytes go straight to the frame directory and
+// are never held beyond the request.
+const lensPhotoUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 6 * 1024 * 1024 } });
 
 // Teacher-lens is a staff surface — the teacher wearing the phone/glasses
 // authenticates as themselves, not as a shared kiosk. That way every
@@ -225,7 +233,13 @@ router.post("/v1/teacher-lens/session/:id/end", requireTeacher, async (req, res)
  *         expected_answer?: string,
  *         is_correct: boolean,
  *         marks_awarded?: number,
- *         marks_possible?: number
+ *         marks_possible?: number,
+ *         // When a scan proposed a mark before the teacher confirmed it,
+ *         // send what it proposed here. The TEACHER'S is_correct and
+ *         // marks_awarded above are what get recorded — always — and any
+ *         // difference is written to marking_feedback so the gap between
+ *         // what K9 reads and what teachers accept stays measurable.
+ *         metadata?: { ai_is_correct?: boolean, ai_marks_awarded?: number }
  *       }, ...
  *     ],
  *     paper_image_key?: string,
@@ -380,6 +394,16 @@ router.post("/v1/teacher-lens/paper-graded", requireTeacher, async (req, res) =>
     }
     await client.query("COMMIT");
 
+    // Fold the teacher's marking into the student's skill profile. This is
+    // the whole point of the marking path: K9 did not mark anything, it read
+    // what the teacher already decided and turned it into a per-skill
+    // picture. Best effort — a school with no model, or a question the
+    // taxonomy cannot place, must never cost the teacher their paper.
+    const skills = await ingestGradedPaper(paperId).catch((err) => {
+      logger.warn({ err, paperId }, "skill ingest failed; the paper is still recorded");
+      return null;
+    });
+
     let standing: Awaited<ReturnType<typeof studentStanding>> = null;
     if (recorded && exam && student) {
       announceResult(recorded.exam, student, { marks: recorded.result.marks, percent: recorded.result.percent });
@@ -464,6 +488,10 @@ router.post("/v1/teacher-lens/paper-graded", requireTeacher, async (req, res) =>
       result: recorded ? { ...recorded.result, exam: recorded.exam, standing } : null,
       curated_notes_generated: notesGenerated,
       retest,
+      // What the teacher's marking told K9 about this student's skills.
+      // `disagreements` counts the questions where a vision pass had proposed
+      // a different mark — the teacher's stands, and the gap is recorded.
+      skills,
     });
   } catch (err) {
     await client.query("ROLLBACK").catch(() => undefined);
@@ -489,7 +517,13 @@ async function studentBrief(studentCode: string) {
     [studentCode],
   );
 
-  const weakBits = profile.topics_weak.slice(0, 3).join(", ");
+  // Prefer the skill engine's own names: "Balancing equations" is something a
+  // teacher can act on in the next thirty seconds, where a free-form OCR
+  // topic string often is not. Falls back to the rolled-up topics when the
+  // student has no marked papers yet.
+  const skillProfile = await studentSkillProfile(studentCode).catch(() => null);
+  const prioritySkills = (skillProfile?.priority ?? []).slice(0, 3).map((s) => s.name);
+  const weakBits = (prioritySkills.length > 0 ? prioritySkills : profile.topics_weak.slice(0, 3)).join(", ");
   const strongBits = profile.topics_strong.slice(0, 3).join(", ");
   const lastScore = recent.rows[0]?.score_percent ?? null;
   const lastSubject = recent.rows[0]?.subject ?? null;
@@ -785,6 +819,92 @@ router.get("/v1/teacher-lens/student/:studentCode/exam-summary", requireTeacher,
 });
 
 /**
+ * The shared frame-ingest path. Every way a photo can reach K9 — the Teacher
+ * Lens PWA posting raw JPEG, or Mentra glasses uploading to the webhook below
+ * — lands here, so there is exactly one place that writes a frame, enqueues
+ * the vision question and whispers back.
+ */
+async function ingestLensFrame(args: {
+  bytes: Buffer;
+  mode: string;
+  sessionId: number | null;
+  examId: number | null;
+  teacherUserId: number | null;
+}): Promise<{ request: Awaited<ReturnType<typeof enqueueVisionAnalysis>> | null; image_key: string | null; error?: string }> {
+  await ensureTables();
+  const kind = args.mode === "mark" ? "mark_paper" : "lookup";
+  // The exam picked on the mark sheet tells the brain the subject and total.
+  const exam = kind === "mark_paper" && args.examId ? await getExam(args.examId).catch(() => null) : null;
+
+  const framesDir = resolve(process.env["KOBEAI_LENS_FRAMES_DIR"] ?? "/var/lib/kobeai/lens-frames");
+  const today = new Date().toISOString().slice(0, 10);
+  const dayDir = join(framesDir, today);
+  try {
+    await mkdir(dayDir, { recursive: true });
+  } catch (err) {
+    // Directory creation can fail on read-only sandboxes — still enqueue
+    // the request with a null image path so the worker sees the event.
+    logger.warn(
+      { err: err instanceof Error ? err.message : String(err), dayDir },
+      "lens frame dir mkdir failed; enqueueing without image",
+    );
+  }
+  const stamp = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+  const filename = `${stamp}.${kind}.jpg`;
+  const fullPath = join(dayDir, filename);
+  let key: string | null = null;
+  try {
+    await writeFile(fullPath, args.bytes);
+    key = join(today, filename);
+  } catch (err) {
+    logger.warn({ err: err instanceof Error ? err.message : String(err) }, "lens frame write failed");
+  }
+
+  // Enqueue the appropriate vision question. Priority 3 (higher than
+  // the auto-enqueued wrong_location questions from presence).
+  const question =
+    kind === "mark_paper"
+      ? `You are K9 Exam Vision. The teacher NEVER reads the question or answer aloud. Use ONLY the camera image. Identify the exam paper and student, read the printed question number/text, read the student's written answer, identify the teacher's visible marks/ticks/corrections and marks awarded/possible. Return JSON with student_code, student_confidence, profile_attachment_confidence (separate threshold; do not permanently attach below 0.90), paper_fingerprint, page_number, paper_complete, and items[]. Each item: question_number, question_text, question_topic, student_answer, expected_answer if visible/known, is_correct only when visually justified, marks_awarded, marks_possible, marking_confidence. NEVER invent a teacher mark. If a mark is not visible, leave marks_awarded null. The teacher's mark is authoritative; K9 analysis must not overwrite it.`
+      : "Face-recognise the closest / largest face in this frame and return the matched student_code + confidence. Return JSON.";
+  let request;
+  try {
+    request = await enqueueVisionAnalysis({
+      question,
+      reason: `lens:${kind}`,
+      requestedBy: args.teacherUserId,
+      priority: 3,
+      context: {
+        image_key: key,
+        image_bytes: args.bytes.length,
+        lens_session_id: args.sessionId,
+        lens_mode: args.mode,
+        ...(exam ? { exam_id: exam.id, subject: exam.subject, total_marks: exam.total_marks } : {}),
+      },
+    });
+  } catch (err) {
+    return { request: null, image_key: key, error: err instanceof Error ? err.message : "enqueue_failed" };
+  }
+
+  // A lookup whispers immediately so the teacher knows the frame landed; the
+  // worker's real answer replaces it. Marking does not. Continuous camera
+  // marking posts a frame every 2.5 seconds, so a per-frame "Paper sent to
+  // Kobe" became a stream of noise in the teacher's ear over a paper they
+  // were still writing on. onLensRequestCompleted speaks the marking result
+  // once the brain has actually read the page, which is the only point at
+  // which there is anything worth saying.
+  if (kind !== "mark_paper") {
+    await enqueueWhisper({
+      sessionId: args.sessionId,
+      teacherUserId: args.teacherUserId,
+      text: "Looking that student up.",
+      priority: 7,
+    }).catch(() => undefined);
+  }
+
+  return { request, image_key: key };
+}
+
+/**
  * POST /v1/teacher-lens/frame
  * Accepts a raw JPEG frame from the lens client. Saves it to
  * KOBEAI_LENS_FRAMES_DIR (default /var/lib/kobeai/lens-frames), enqueues
@@ -802,85 +922,85 @@ router.post(
   express.raw({ type: ["image/jpeg", "image/png", "application/octet-stream"], limit: "6mb" }),
   requireTeacher,
   async (req, res) => {
-    await ensureTables();
     if (!Buffer.isBuffer(req.body) || req.body.length < 512) {
       res.status(400).json({ error: "empty or too-small image body" });
       return;
     }
     const sessionId = Number(req.header("x-lens-session-id"));
     const mode = text(req.header("x-lens-mode"), 40) ?? "lookup";
-    const kind = mode === "mark" ? "mark_paper" : "lookup";
-    // The exam picked on the mark sheet tells the brain the subject and total.
-    const examId = kind === "mark_paper" ? positiveInt(req.header("x-lens-exam-id")) : null;
-    const exam = examId ? await getExam(examId).catch(() => null) : null;
-
-    const framesDir = resolve(process.env["KOBEAI_LENS_FRAMES_DIR"] ?? "/var/lib/kobeai/lens-frames");
-    const today = new Date().toISOString().slice(0, 10);
-    const dayDir = join(framesDir, today);
-    try {
-      await mkdir(dayDir, { recursive: true });
-    } catch (err) {
-      // Directory creation can fail on read-only sandboxes — still enqueue
-      // the request with a null image path so the worker sees the event.
-      logger.warn(
-        { err: err instanceof Error ? err.message : String(err), dayDir },
-        "lens frame dir mkdir failed; enqueueing without image",
-      );
-    }
-    const stamp = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
-    const filename = `${stamp}.${kind}.jpg`;
-    const fullPath = join(dayDir, filename);
-    let key: string | null = null;
-    try {
-      await writeFile(fullPath, req.body);
-      key = join(today, filename);
-    } catch (err) {
-      logger.warn(
-        { err: err instanceof Error ? err.message : String(err) },
-        "lens frame write failed",
-      );
-    }
-
-    // Enqueue the appropriate vision question. Priority 3 (higher than
-    // the auto-enqueued wrong_location questions from presence).
-    const question =
-      kind === "mark_paper"
-        ? `You are K9 Exam Vision. The teacher NEVER reads the question or answer aloud. Use ONLY the camera image. Identify the exam paper and student, read the printed question number/text, read the student's written answer, identify the teacher's visible marks/ticks/corrections and marks awarded/possible. Return JSON with student_code, student_confidence, profile_attachment_confidence (separate threshold; do not permanently attach below 0.90), paper_fingerprint, page_number, paper_complete, and items[]. Each item: question_number, question_text, question_topic, student_answer, expected_answer if visible/known, is_correct only when visually justified, marks_awarded, marks_possible, marking_confidence. NEVER invent a teacher mark. If a mark is not visible, leave marks_awarded null. The teacher's mark is authoritative; K9 analysis must not overwrite it.`
-        : "Face-recognise the closest / largest face in this frame and return the matched student_code + confidence. Return JSON.";
-    let request;
-    try {
-      request = await enqueueVisionAnalysis({
-        question,
-        reason: `lens:${kind}`,
-        requestedBy: req.auth?.user_id ?? null,
-        priority: 3,
-        context: {
-          image_key: key,
-          image_bytes: req.body.length,
-          lens_session_id: Number.isFinite(sessionId) ? sessionId : null,
-          lens_mode: mode,
-          ...(exam ? { exam_id: exam.id, subject: exam.subject, total_marks: exam.total_marks } : {}),
-        },
-      });
-    } catch (err) {
-      res.status(500).json({
-        error: err instanceof Error ? err.message : "enqueue_failed",
-      });
+    const out = await ingestLensFrame({
+      bytes: req.body,
+      mode,
+      sessionId: Number.isFinite(sessionId) ? sessionId : null,
+      examId: mode === "mark" ? positiveInt(req.header("x-lens-exam-id")) : null,
+      teacherUserId: req.auth?.user_id ?? null,
+    });
+    if (out.error) {
+      res.status(500).json({ error: out.error });
       return;
     }
+    res.status(202).json({ request: out.request, image_key: out.image_key });
+  },
+);
 
-    // Also drop a whisper so the teacher hears "sent to Kobe" immediately —
-    // the worker's actual answer will replace that once it's ready.
-    if (kind !== "mark_paper") {
-      await enqueueWhisper({
-        sessionId: Number.isFinite(sessionId) ? sessionId : null,
-        teacherUserId: req.auth?.user_id ?? null,
-        text: "Looking that student up.",
-        priority: 7,
-      }).catch(() => undefined);
+/**
+ * POST /v1/teacher-lens/mentra/photo
+ * The webhook Mentra glasses upload a photo to.
+ *
+ * MentraOS's Bluetooth SDK does not hand the app photo bytes: `requestPhoto()`
+ * takes a `webhookUrl` and an optional bearer `authToken`, and the JPEG is
+ * POSTed there as multipart form-data with a `photo` file and a `requestId`.
+ * The call resolves only once that upload has succeeded.
+ *
+ * That turns out to suit K9 exactly. Point the webhook at THIS endpoint on the
+ * school's own server and the photo goes glasses → teacher's phone → school
+ * LAN, and never near a vendor cloud — the same promise the rest of K9 makes.
+ * The auth token is the teacher's ordinary JWT, so the frame is attributed to
+ * the person wearing the glasses like any other lens frame.
+ *
+ * Mentra keeps `requestId` as the correlation key, so it is echoed back
+ * alongside K9's own queue id.
+ */
+router.post(
+  "/v1/teacher-lens/mentra/photo",
+  requireTeacher,
+  lensPhotoUpload.single("photo"),
+  async (req, res) => {
+    const file = (req as Request & { file?: { buffer: Buffer } }).file;
+    if (!file?.buffer || file.buffer.length < 512) {
+      res.status(400).json({ error: "no photo in the upload" });
+      return;
     }
-
-    res.status(202).json({ request, image_key: key });
+    // Mentra sends its own requestId in the form body; the mode and session
+    // ride along as fields the shell sets when it calls requestPhoto().
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const mentraRequestId = text(body["requestId"], 120);
+    const mode = text(body["mode"], 40) ?? "lookup";
+    const sessionId = Number(body["sessionId"]);
+    const out = await ingestLensFrame({
+      bytes: file.buffer,
+      mode,
+      sessionId: Number.isFinite(sessionId) ? sessionId : null,
+      examId: mode === "mark" ? positiveInt(body["examId"]) : null,
+      teacherUserId: req.auth?.user_id ?? null,
+    });
+    if (out.error) {
+      res.status(500).json({ error: out.error });
+      return;
+    }
+    logger.info(
+      { mentraRequestId, mode, bytes: file.buffer.length },
+      "mentra glasses photo received",
+    );
+    // The SDK reads the webhook's JSON back as photo metadata, so give it the
+    // fields it understands plus K9's own ids.
+    res.status(202).json({
+      requestId: mentraRequestId,
+      contentType: "image/jpeg",
+      fileSizeBytes: file.buffer.length,
+      image_key: out.image_key,
+      request: out.request,
+    });
   },
 );
 
