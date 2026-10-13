@@ -136,22 +136,23 @@ function Setup({ onReady, initialServer }: { onReady: (a: StoredAuth) => void; i
 
   return (
     <div className="setup">
-      <h1>
-        <span style={{ color: "var(--brand-green)" }}>KobeAI</span> Lens
-      </h1>
-      <p style={{ color: "var(--brand-muted)", marginTop: -6, marginBottom: 20 }}>
-        Step 1: connect to your school server. Join the school Wi-Fi and enter the HTTPS address supplied by your administrator. Sign in with your school teacher account, then connect Rokid from Connections.
-      </p>
-      <label htmlFor="school-server">School server URL</label>
-      <input id="school-server" value={apiBase} onChange={(e) => setApiBase(e.target.value)} placeholder="https://school.local" />
-      <label htmlFor="teacher-email">Email</label>
-      <input id="teacher-email" value={email} onChange={(e) => setEmail(e.target.value)} />
-      <label htmlFor="teacher-password">Password</label>
-      <input id="teacher-password" value={password} onChange={(e) => setPassword(e.target.value)} type="password" />
-      <button className="setup-btn" onClick={login} disabled={busy}>
-        {busy ? "Signing in…" : "Sign in"}
-      </button>
-      {err && <p style={{ color: "var(--brand-danger)", marginTop: 14 }}>{err}</p>}
+      <div className="setup-brand"><span className="setup-logo">K9</span><span>K9 <small>FOR TEACHERS</small></span></div>
+      <div className="setup-welcome">
+        <span className="setup-eyebrow">WELCOME BACK</span>
+        <h1>Make every lesson count.</h1>
+        <p>Sign in to your school to capture papers, review results and support your students.</p>
+      </div>
+      <div className="setup-form">
+        <label htmlFor="school-server">School server</label>
+        <input id="school-server" value={apiBase} onChange={(e) => setApiBase(e.target.value)} placeholder="https://your-school.example" autoComplete="url" />
+        <label htmlFor="teacher-email">Email address</label>
+        <input id="teacher-email" value={email} onChange={(e) => setEmail(e.target.value)} type="email" autoComplete="username" placeholder="teacher@school.ac.tz" />
+        <label htmlFor="teacher-password">Password</label>
+        <input id="teacher-password" value={password} onChange={(e) => setPassword(e.target.value)} type="password" autoComplete="current-password" placeholder="Your password" />
+        {err && <p role="alert" className="setup-error">{err}</p>}
+        <button className="setup-btn" onClick={login} disabled={busy}>{busy ? "Signing in…" : "Continue to K9 →"}</button>
+      </div>
+      <p className="setup-footer">Your school information stays on your school server.</p>
     </div>
   );
 }
@@ -953,7 +954,7 @@ function UploadSummary({ queue, onOpen }: { queue: ReturnType<typeof useUploadQu
   return (
     <button className="lens-upload-summary" role="status" onClick={onOpen}>
       {parts.join(" · ")}
-      {queue.status.needsSignIn ? " · sign in again to send them" : ""} · Review in Activity
+      {queue.status.needsSignIn ? " · sign in again to send them" : ""} · Open saved photos
     </button>
   );
 }
@@ -969,6 +970,7 @@ export function App() {
   const [connectionsOpen, setConnectionsOpen] = useState(false);
   const [initialServer, setInitialServer] = useState("");
   const [workspaceOpen, setWorkspaceOpen] = useState(true);
+  const [workspaceInitialTab, setWorkspaceInitialTab] = useState<"Home" | "Papers">("Home");
   const queue = useUploadQueue(auth);
   // Why the last capture produced no photo. Stays up until a capture succeeds.
   const [captureProblem, setCaptureProblem] = useState<string | null>(null);
@@ -1308,23 +1310,23 @@ export function App() {
       <header className="lens-header">
         <div>
           <div className="lens-brand">
-            <span className="k">Kobe</span>AI Lens
+            <span className="k">K9</span><span className="lens-brand-sub"> CAMERA</span>
           </div>
           <div className="lens-mode">
             <span className={"lens-status-dot " + ((camReady || glassesConnected) ? "ok" : "bad")} />
-            {mode === "lookup" ? "Lookup" : "Mark paper"} · {uptimeLabel}
+            {mode === "lookup" ? "Student lookup" : "Paper marking"} · {uptimeLabel}
           </div>
         </div>
         <button
           className="lens-secondary"
-          style={{ padding: "8px 12px", fontSize: 12 }}
+          style={{ padding: "10px 14px" }}
           onClick={signOut}
         >
           Sign out
         </button>
       </header>
 
-      <button className="lens-secondary" onClick={() => setWorkspaceOpen(true)}>Teacher workspace</button>
+      <button className="lens-back" onClick={() => { setWorkspaceInitialTab("Home"); setWorkspaceOpen(true); }}>← Back to K9 home</button>
       <Connections auth={auth} open={connectionsOpen} onClose={() => setConnectionsOpen(false)} onChangeServer={() => { setInitialServer(auth.api_base); signOut(); }}>
         <GlassesControl onSource={selectGlassesSource} />
       </Connections>
@@ -1338,22 +1340,21 @@ export function App() {
         )}
         {!glassesSource && camErr && (
           <div className="frame-cover">
-            Camera unavailable: {camErr}. Lens still works — the shutter runs the
-            same server call, just without a captured frame.
+            Camera unavailable: {camErr}. Open Settings to choose another camera.
           </div>
         )}
         <div className="lens-overlay">
-          <div className="headline">{mode === "lookup" ? "Point at a student" : "Point at a marked paper"}</div>
+          <div className="headline">{mode === "lookup" ? "Identify a student" : "Capture an exam paper"}</div>
           <div className="sub">
             {mode === "mark" && !autoCapture
               ? "Automatic capture is off. Tap the shutter to photograph a paper."
-              : "K9 continuously reads the marked paper through the camera. The teacher does not read questions or answers aloud."}
+              : mode === "mark" ? "K9 captures marked papers automatically. Review the result before saving marks." : "Position the student in the camera and take a photo."}
           </div>
         </div>
       </div>
 
       {captureProblem && <div role="alert" className="mark-error lens-capture-problem">{captureProblem}</div>}
-      <UploadSummary queue={queue} onOpen={() => setWorkspaceOpen(true)} />
+      <UploadSummary queue={queue} onOpen={() => { setWorkspaceInitialTab("Papers"); setWorkspaceOpen(true); }} />
 
       <div className="lens-tabs">
         <button className={mode === "lookup" ? "active" : ""} onClick={() => setMode("lookup")}>
@@ -1363,9 +1364,9 @@ export function App() {
           Mark paper
         </button>
       </div>
-      <button className="lens-secondary lens-auto-capture" aria-pressed={autoCapture} onClick={toggleAutoCapture}>
-        Automatic capture while marking: {autoCapture ? "on" : "off"}
-      </button>
+      {mode === "mark" && <button className="lens-secondary lens-auto-capture" aria-pressed={autoCapture} onClick={toggleAutoCapture}>
+        Auto-capture: {autoCapture ? "On ✓" : "Off"}
+      </button>}
 
       <div className="lens-actions">
         <button
@@ -1392,19 +1393,19 @@ export function App() {
         </button>
       </div>
 
-      {workspaceOpen && <TeacherWorkspace serverStatus={serverStatus} auth={auth} connected={glassesConnected} source={glassesSource} queue={queue} reviews={reviews}
+      {workspaceOpen && <TeacherWorkspace initialTab={workspaceInitialTab} serverStatus={serverStatus} auth={auth} connected={glassesConnected} source={glassesSource} queue={queue} reviews={reviews}
         onReview={(review) => { setWorkspaceOpen(false); setMarkOpen({ requestId: review.request_id, imageKey: null, review }); }}
         onRetry={(id) => void retryFrames(ownerKey(auth), id)} onRetryNow={retryNow} onDiscard={(id) => void discardFrame(id)}
-        onConnections={() => setConnectionsOpen(true)} onClose={() => setWorkspaceOpen(false)} onCapture={next => { setMode(next); setWorkspaceOpen(false); }} onSpeak={speak} />}
+        onConnections={() => setConnectionsOpen(true)} onSignOut={signOut} onClose={() => setWorkspaceOpen(false)} onCapture={next => { setMode(next); setWorkspaceOpen(false); }} onSpeak={speak} />}
       {toast && <div className="lens-toast">{toast}</div>}
 
       {studentPicker && (
         <div className="lens-sheet" onClick={() => setStudentPicker(null)}>
           <div className="lens-sheet-body" onClick={(e) => e.stopPropagation()}>
-            <h2>Who are you looking at?</h2>
+            <h2>Confirm student</h2>
             <p>
               {studentPicker.recognising
-                ? "Kobe is recognising the face… or pick the student now."
+                ? "K9 is checking the photo. You can also choose the student."
                 : studentPicker.imageKey
                   ? (studentPicker.hint ?? "Pick the student.")
                   : studentPicker.waiting
@@ -1414,7 +1415,7 @@ export function App() {
             {studentPicker.imageKey && (
               <label className="mark-check">
                 <input type="checkbox" checked={rememberFace} onChange={(e) => setRememberFace(e.target.checked)} />
-                Remember this face so Kobe recognises them next time
+                Remember this face for future student recognition
               </label>
             )}
             <ul style={{ listStyle: "none", padding: 0, margin: 0, maxHeight: "50vh", overflowY: "auto" }}>
