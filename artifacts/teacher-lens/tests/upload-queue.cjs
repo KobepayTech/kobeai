@@ -20,7 +20,8 @@ const BARAKA = token(8);
 /** A school server. `frames` is what it accepted; `attempts` is everything it was sent. */
 function school() {
   const server = {
-    mode: "up", // up | down | lose-reply | refuse | expired
+    mode: "up", // up | down | lose-reply | refuse | expired | gone
+    detail: [], // per attempt: the headers that carry a frame's context
     attempts: [],
     processed: new Map(), // capture id -> request id
     nextRequestId: 500,
@@ -38,6 +39,13 @@ function school() {
       const headers = req.headers();
       const attempt = { captureId: headers["x-lens-capture-id"], auth: headers.authorization, mode: headers["x-lens-mode"] };
       server.attempts.push(attempt);
+      server.detail.push({
+        captureId: attempt.captureId,
+        examId: headers["x-lens-exam-id"] ?? null,
+        ageMs: Number(headers["x-lens-capture-age-ms"]),
+        sessionId: headers["x-lens-session-id"],
+      });
+      if (server.mode === "gone") return route.fulfill({ status: 410, json: { error: "lookup_expired" } });
       if (server.mode === "down") return route.abort("connectionfailed");
       if (server.mode === "expired") return route.fulfill({ status: 401, json: { error: "expired" } });
       if (server.mode === "refuse") return route.fulfill({ status: 400, json: { error: "empty or too-small image body" } });
@@ -210,6 +218,81 @@ async function captureWhileDown(page, server) {
     server.mode = "up";
     await page.getByRole("button", { name: "Retry", exact: true }).click();
     await page.getByText(/Student lookup · completed/).waitFor();
+  });
+
+  await scenario("replayed exam frames keep their exam and capture time", async (page, server) => {
+    await signedIn(page, ASHA);
+    await page.addInitScript(() => {
+      if (!sessionStorage.getItem("exam-seeded")) {
+        localStorage.setItem("k9-lens.exam", "41");
+        sessionStorage.setItem("exam-seeded", "1");
+      }
+    });
+    server.mode = "down";
+    await page.goto(BASE);
+    await page.getByRole("button", { name: /Mark a paper/ }).click();
+    // Continuous marking photographs the paper on its own while the server is away.
+    await page.waitForFunction(() => document.querySelector("video")?.videoWidth > 0);
+    await page.getByText(/[2-9] photos saved on this phone, waiting to upload/).waitFor({ timeout: 20_000 });
+    const queued = (await stored(page)).filter((f) => f.mode === "mark");
+    assert.ok(queued.length >= 2);
+    assert.ok(queued.every((f) => f.examId === 41), "each frame remembers the exam it was captured for");
+
+    // The teacher moves on to another exam and closes the app before the server returns.
+    await page.evaluate(() => localStorage.setItem("k9-lens.exam", "99"));
+    const captureTimes = new Map(queued.map((f) => [f.id, f.createdAt]));
+    await sleep(3000);
+    server.detail.length = 0;
+    server.mode = "up";
+    await page.reload();
+    await openActivity(page);
+    await page.getByText(/Paper reading · completed/).first().waitFor();
+    await page.waitForFunction(async () => {
+      const open = indexedDB.open("k9-lens-uploads");
+      const db = await new Promise((resolve) => (open.onsuccess = () => resolve(open.result)));
+      const all = db.transaction("frames").objectStore("frames").getAll();
+      const frames = await new Promise((resolve) => (all.onsuccess = () => resolve(all.result)));
+      return frames.every((f) => f.state === "done");
+    });
+    const replayed = server.detail.filter((d) => captureTimes.has(d.captureId));
+    assert.equal(replayed.length, queued.length, "every stored frame was replayed");
+    for (const attempt of replayed) {
+      assert.equal(attempt.examId, "41", "under the exam it was captured for, not the one selected now");
+      assert.ok(attempt.ageMs >= 3000, `with its real age (${attempt.ageMs}ms), so the server can date it`);
+      assert.equal(attempt.sessionId, "10", "and only once the new session exists");
+    }
+    assert.deepEqual(
+      replayed.map((d) => d.captureId),
+      [...captureTimes.entries()].sort((a, b) => a[1] - b[1]).map(([id]) => id),
+      "in the order the pages were photographed",
+    );
+    const after = await stored(page);
+    for (const frame of after.filter((f) => captureTimes.has(f.id)))
+      assert.equal(frame.createdAt, captureTimes.get(frame.id), "capture time is never rewritten");
+  });
+
+  await scenario("a stale lookup is held back, not replayed", async (page, server) => {
+    await signedIn(page, ASHA);
+    await page.goto(BASE);
+    await openLens(page);
+    // The server says the lookup is too old to act on (it would whisper late).
+    server.mode = "gone";
+    await shutter(page);
+    await page.getByText(/saved on this phone but has not reached the school server/).waitFor({ timeout: 15_000 });
+    await closeSheet(page);
+    await openActivity(page);
+    await page.getByText(/Student lookup · failed/).waitFor();
+    await page.getByText(/was not sent in time, so it was held back and will not be sent/).waitFor();
+    assert.equal(await page.getByRole("button", { name: "Retry", exact: true }).count(), 0, "an expired lookup offers no retry");
+    assert.equal(await page.getByRole("button", { name: "Remove", exact: true }).count(), 1);
+    server.mode = "up";
+    const attempts = server.attempts.length;
+    await page.reload();
+    await openActivity(page);
+    await page.getByText(/Student lookup · failed/).waitFor();
+    await sleep(3000);
+    assert.equal(server.attempts.length, attempts, "and it is never sent again, even after a restart with the server back");
+    assert.equal(server.processed.size, 0);
   });
 
   await scenario("account switching", async (page, server) => {

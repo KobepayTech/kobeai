@@ -25,9 +25,19 @@ version offers the phone camera and explains where to connect Rokid.
   completed captures stay listed, with an explicit server status refresh, and
   a completed capture is still not a submitted grade.
 - Each capture has an id, sent as `x-lens-capture-id` on every attempt. The
-  server answers a repeat with the first attempt's result
-  (`api-server/src/lib/lens-capture.ts`), so a retry cannot be read or counted
-  twice.
+  server ingests a capture exactly once: an advisory lock is held for as long
+  as an attempt is ingesting it (a concurrent retry gets 409 however long that
+  takes), and the vision request is committed together with the record of
+  which capture produced it. A retry after success gets the first result; a
+  server that dies mid-ingest leaves nothing behind
+  (`api-server/src/lib/lens-capture.ts`, tested against the real route and
+  PostgreSQL in `routes/teacher-lens.frame.test.ts`).
+- A replayed frame keeps its context: the exam it was captured for travels
+  with it, and `x-lens-capture-age-ms` lets the server record when the photo
+  was taken (`captured_at`, and `graded_at` on the paper) on its own clock.
+- A lookup more than two minutes old is refused by the server (410) and held
+  back by the phone; it is never whispered late. It can be removed, not
+  retried. Marking frames do not expire.
 - Queued photos belong to the school server and teacher that captured them and
   are only uploaded under that same sign-in. Another teacher on the same phone
   sees a count, not the photos.

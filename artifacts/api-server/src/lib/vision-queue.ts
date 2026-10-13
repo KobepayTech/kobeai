@@ -67,16 +67,29 @@ export type EnqueueOptions = {
   context?: Record<string, unknown> | null;
   requestedBy?: number | null;
   priority?: number;
+  /**
+   * Longest question accepted. The default caps what an API caller may ask;
+   * the server's own prompts (the exam-marking instruction is ~850 characters)
+   * raise it for themselves.
+   */
+  maxQuestionChars?: number;
 };
 
-export async function enqueueVisionAnalysis(opts: EnqueueOptions): Promise<VisionAnalysisRequest> {
+type Queryable = { query: (sql: string, params?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }> };
+
+/**
+ * `db` lets a caller enqueue inside its own transaction, so the request exists
+ * only if the rest of that transaction commits (see lib/lens-capture.ts).
+ */
+export async function enqueueVisionAnalysis(opts: EnqueueOptions, db: Queryable = pool): Promise<VisionAnalysisRequest> {
   await ensureVisionQueueTables();
   const question = String(opts.question ?? "").trim();
-  if (!question || question.length > 500) {
-    throw new Error("question_required_max_500_chars");
+  const maxChars = opts.maxQuestionChars ?? 500;
+  if (!question || question.length > maxChars) {
+    throw new Error(`question_required_max_${maxChars}_chars`);
   }
   const priority = Math.max(1, Math.min(10, Number(opts.priority ?? 5)));
-  const rows = await pool.query(
+  const rows = await db.query(
     `INSERT INTO vision_analysis_requests (
        camera_id, student_code, question, reason, context, requested_by, priority
      ) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)

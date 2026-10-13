@@ -864,7 +864,7 @@ export function TeacherWorkspace({
                     >
                       Try now
                     </button>
-                    {failedFrames.length > 1 && (
+                    {failedFrames.filter((f) => !f.expired).length > 1 && (
                       <button onClick={() => onRetry()}>Retry all failed</button>
                     )}
                   </div>
@@ -876,7 +876,9 @@ export function TeacherWorkspace({
                       <strong>{kind(f.mode)} · failed</strong>
                       <small>{f.lastError ?? "Upload failed."}</small>
                       <div className="connection-actions">
-                        <button onClick={() => onRetry(f.id)}>Retry</button>
+                        {!f.expired && (
+                          <button onClick={() => onRetry(f.id)}>Retry</button>
+                        )}
                         <button
                           onClick={() => {
                             if (

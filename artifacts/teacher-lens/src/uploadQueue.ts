@@ -36,6 +36,8 @@ export type QueuedFrame = {
   state: FrameState;
   attempts: number;
   lastError: string | null;
+  /** A lookup that was not sent in time. It can be removed, not retried. */
+  expired?: boolean;
   requestId: number | null;
   imageKey: string | null;
   uploadedAt: number | null;
@@ -55,6 +57,7 @@ export const MAX_WAITING_BYTES = 160 * 1024 * 1024;
 const KEEP_DONE = 40;
 /** A lookup answers "who is this, now"; sent minutes late it is only noise. */
 const LOOKUP_TTL_MS = 2 * 60_000;
+const LOOKUP_EXPIRED = "This lookup was not sent in time, so it was held back and will not be sent. Take a new one if you still need it.";
 const UPLOAD_TIMEOUT_MS = 30_000;
 const FIRST_BACKOFF_MS = 2000;
 const MAX_BACKOFF_MS = 60_000;
@@ -230,9 +233,10 @@ export async function discardFrame(id: string): Promise<void> {
 /** Put failed frames back in line. With no id, every failed frame of the account. */
 export async function retryFrames(owner: string, id?: string): Promise<void> {
   for (const frame of await framesOf(owner)) {
-    if (frame.state !== "failed" || (id && frame.id !== id)) continue;
-    // A manual retry of an expired lookup is the teacher saying it still matters.
-    await patch(frame.id, { state: "pending", lastError: null, createdAt: frame.mode === "lookup" ? Date.now() : frame.createdAt });
+    // An expired lookup stays failed: sent now it would whisper about a student
+    // the teacher looked at minutes ago. A frame's capture time is never edited.
+    if (frame.state !== "failed" || frame.expired || (id && frame.id !== id)) continue;
+    await patch(frame.id, { state: "pending", lastError: null });
   }
   pausedUntil = 0;
   backoff = FIRST_BACKOFF_MS;
@@ -265,6 +269,7 @@ type Outcome =
   | { kind: "done"; requestId: number | null; imageKey: string | null }
   | { kind: "retry"; reason: string }
   | { kind: "sign-in" }
+  | { kind: "expired" }
   | { kind: "rejected"; reason: string };
 
 async function send(to: Account, frame: QueuedFrame, data: ArrayBuffer): Promise<Outcome> {
@@ -277,6 +282,9 @@ async function send(to: Account, frame: QueuedFrame, data: ArrayBuffer): Promise
         authorization: `Bearer ${to.auth.token}`,
         "content-type": "image/jpeg",
         "x-lens-capture-id": frame.id,
+        // An age, not a timestamp: both ends come from this phone's clock, so
+        // a phone with the wrong time still reports when the photo was taken.
+        "x-lens-capture-age-ms": String(Math.max(0, Date.now() - frame.createdAt)),
         "x-lens-session-id": String(sessionId ?? ""),
         "x-lens-mode": frame.mode,
         ...(frame.examId ? { "x-lens-exam-id": String(frame.examId) } : {}),
@@ -292,6 +300,7 @@ async function send(to: Account, frame: QueuedFrame, data: ArrayBuffer): Promise
     return { kind: "done", requestId: body?.request?.id ?? null, imageKey: body?.image_key ?? null };
   }
   if (response.status === 401 || response.status === 403) return { kind: "sign-in" };
+  if (response.status === 410) return { kind: "expired" };
   // 409 is the server still working on an earlier attempt of this same capture.
   if (response.status >= 500 || [408, 409, 425, 429].includes(response.status))
     return { kind: "retry", reason: `School server busy (HTTP ${response.status}). Retrying automatically.` };
@@ -319,8 +328,16 @@ async function pump(): Promise<void> {
       }
       const frame = (await framesOf(mine.owner)).find((candidate) => candidate.state === "pending");
       if (!frame) break;
+      // The server routes whispers by session, so a frame sent before the
+      // session exists would be answered into the void. Starting one is the
+      // first thing the lens does once the server is reachable.
+      if (mine.sessionId() == null) {
+        clearTimeout(timer);
+        timer = setTimeout(kick, 1000);
+        break;
+      }
       if (frame.mode === "lookup" && Date.now() - frame.createdAt > LOOKUP_TTL_MS) {
-        await patch(frame.id, { state: "failed", lastError: "This lookup was not sent in time, so it was held back. Retry only if you still need it." });
+        await patch(frame.id, { state: "failed", expired: true, lastError: LOOKUP_EXPIRED });
         changed();
         continue;
       }
@@ -338,6 +355,8 @@ async function pump(): Promise<void> {
         await patch(frame.id, { state: "done", lastError: null, requestId: outcome.requestId, imageKey: outcome.imageKey, uploadedAt: Date.now() }, true);
         backoff = FIRST_BACKOFF_MS;
         await pruneDone(mine.owner);
+      } else if (outcome.kind === "expired") {
+        await patch(frame.id, { state: "failed", expired: true, lastError: LOOKUP_EXPIRED });
       } else if (outcome.kind === "rejected") {
         await patch(frame.id, { state: "failed", lastError: outcome.reason });
       } else {

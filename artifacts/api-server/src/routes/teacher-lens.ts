@@ -8,10 +8,19 @@ import { FaceGalleryError, enrollStudentFace } from "../lib/face-gallery";
 import {
   enqueueVisionAnalysis,
   enqueueVisionAnalysisSafe,
+  ensureVisionQueueTables,
   getVisionRequest,
   type VisionAnalysisRequest,
 } from "../lib/vision-queue";
-import { claimLensCapture, finishLensCapture, parseCaptureId, releaseLensCapture } from "../lib/lens-capture";
+import {
+  LOOKUP_MAX_AGE_MS,
+  ensureLensCaptureTable,
+  findLensCapture,
+  lockLensCapture,
+  parseCaptureAgeMs,
+  parseCaptureId,
+  recordLensCapture,
+} from "../lib/lens-capture";
 import { getMergedProfile } from "../lib/learning-profile";
 import {
   generateCuratedNotesForPaper,
@@ -825,17 +834,33 @@ router.get("/v1/teacher-lens/student/:studentCode/exam-summary", requireTeacher,
  * — lands here, so there is exactly one place that writes a frame, enqueues
  * the vision question and whispers back.
  */
+type LensIngest =
+  | { status: "created"; request: VisionAnalysisRequest; image_key: string | null }
+  /** An earlier attempt at this same capture already produced a request. */
+  | { status: "duplicate"; requestId: number; image_key: string | null }
+  /** Another attempt at this same capture is being ingested right now. */
+  | { status: "busy" }
+  | { status: "error"; error: string };
+
 async function ingestLensFrame(args: {
   bytes: Buffer;
   mode: string;
   sessionId: number | null;
   examId: number | null;
   teacherUserId: number | null;
-}): Promise<{ request: Awaited<ReturnType<typeof enqueueVisionAnalysis>> | null; image_key: string | null; error?: string }> {
+  /** The phone's name for this photograph; makes the upload idempotent. */
+  captureId?: string | null;
+  /** How long ago the phone took it. Null when the client did not say. */
+  captureAgeMs?: number | null;
+}): Promise<LensIngest> {
   await ensureTables();
+  await ensureVisionQueueTables();
   const kind = args.mode === "mark" ? "mark_paper" : "lookup";
   // The exam picked on the mark sheet tells the brain the subject and total.
+  // It travels with the frame, so a frame replayed from the phone's queue is
+  // read against the exam it was captured for, not whichever is selected now.
   const exam = kind === "mark_paper" && args.examId ? await getExam(args.examId).catch(() => null) : null;
+  const capturedAt = new Date(Date.now() - (args.captureAgeMs ?? 0));
 
   const framesDir = resolve(process.env["KOBEAI_LENS_FRAMES_DIR"] ?? "/var/lib/kobeai/lens-frames");
   const today = new Date().toISOString().slice(0, 10);
@@ -850,16 +875,19 @@ async function ingestLensFrame(args: {
       "lens frame dir mkdir failed; enqueueing without image",
     );
   }
-  const stamp = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+  // A capture with an id always lands in the same file, so an attempt that
+  // died after writing it is overwritten by the retry rather than orphaned.
+  const stamp = args.captureId ?? Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
   const filename = `${stamp}.${kind}.jpg`;
-  const fullPath = join(dayDir, filename);
-  let key: string | null = null;
-  try {
-    await writeFile(fullPath, args.bytes);
-    key = join(today, filename);
-  } catch (err) {
-    logger.warn({ err: err instanceof Error ? err.message : String(err) }, "lens frame write failed");
-  }
+  const saveFrame = async (): Promise<string | null> => {
+    try {
+      await writeFile(join(dayDir, filename), args.bytes);
+      return join(today, filename);
+    } catch (err) {
+      logger.warn({ err: err instanceof Error ? err.message : String(err) }, "lens frame write failed");
+      return null;
+    }
+  };
 
   // Enqueue the appropriate vision question. Priority 3 (higher than
   // the auto-enqueued wrong_location questions from presence).
@@ -867,23 +895,68 @@ async function ingestLensFrame(args: {
     kind === "mark_paper"
       ? `You are K9 Exam Vision. The teacher NEVER reads the question or answer aloud. Use ONLY the camera image. Identify the exam paper and student, read the printed question number/text, read the student's written answer, identify the teacher's visible marks/ticks/corrections and marks awarded/possible. Return JSON with student_code, student_confidence, profile_attachment_confidence (separate threshold; do not permanently attach below 0.90), paper_fingerprint, page_number, paper_complete, and items[]. Each item: question_number, question_text, question_topic, student_answer, expected_answer if visible/known, is_correct only when visually justified, marks_awarded, marks_possible, marking_confidence. NEVER invent a teacher mark. If a mark is not visible, leave marks_awarded null. The teacher's mark is authoritative; K9 analysis must not overwrite it.`
       : "Face-recognise the closest / largest face in this frame and return the matched student_code + confidence. Return JSON.";
-  let request;
-  try {
-    request = await enqueueVisionAnalysis({
-      question,
-      reason: `lens:${kind}`,
-      requestedBy: args.teacherUserId,
-      priority: 3,
-      context: {
-        image_key: key,
-        image_bytes: args.bytes.length,
-        lens_session_id: args.sessionId,
-        lens_mode: args.mode,
-        ...(exam ? { exam_id: exam.id, subject: exam.subject, total_marks: exam.total_marks } : {}),
+  const enqueue = (key: string | null, db?: Parameters<typeof enqueueVisionAnalysis>[1]) =>
+    enqueueVisionAnalysis(
+      {
+        question,
+        // The marking instruction above is longer than the 500 characters an
+        // API caller is allowed. Without this every marking frame was refused
+        // with question_required_max_500_chars and the route answered 500.
+        maxQuestionChars: 2000,
+        reason: `lens:${kind}`,
+        requestedBy: args.teacherUserId,
+        priority: 3,
+        context: {
+          image_key: key,
+          image_bytes: args.bytes.length,
+          lens_session_id: args.sessionId,
+          lens_mode: args.mode,
+          captured_at: capturedAt.toISOString(),
+          ...(args.captureId ? { capture_id: args.captureId } : {}),
+          ...(exam ? { exam_id: exam.id, subject: exam.subject, total_marks: exam.total_marks } : {}),
+        },
       },
-    });
-  } catch (err) {
-    return { request: null, image_key: key, error: err instanceof Error ? err.message : "enqueue_failed" };
+      db,
+    );
+
+  let request: VisionAnalysisRequest;
+  let key: string | null;
+  if (args.captureId && args.teacherUserId !== null) {
+    await ensureLensCaptureTable();
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      // Held until COMMIT/ROLLBACK, or until this connection dies. A retry
+      // that arrives while this attempt is still working is turned away
+      // however long that takes; there is no timeout after which it is
+      // allowed to start a second ingestion.
+      if (!(await lockLensCapture(client, args.teacherUserId, args.captureId))) {
+        await client.query("ROLLBACK");
+        return { status: "busy" };
+      }
+      const earlier = await findLensCapture(client, args.teacherUserId, args.captureId);
+      if (earlier) {
+        await client.query("ROLLBACK");
+        return { status: "duplicate", requestId: earlier.requestId, image_key: earlier.imageKey };
+      }
+      key = await saveFrame();
+      request = await enqueue(key, client);
+      await recordLensCapture(client, args.teacherUserId, args.captureId, { requestId: request.id, imageKey: key });
+      // After this the capture is done for good; before it, nothing happened.
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      return { status: "error", error: err instanceof Error ? err.message : "enqueue_failed" };
+    } finally {
+      client.release();
+    }
+  } else {
+    key = await saveFrame();
+    try {
+      request = await enqueue(key);
+    } catch (err) {
+      return { status: "error", error: err instanceof Error ? err.message : "enqueue_failed" };
+    }
   }
 
   // A lookup whispers immediately so the teacher knows the frame landed; the
@@ -893,6 +966,9 @@ async function ingestLensFrame(args: {
   // were still writing on. onLensRequestCompleted speaks the marking result
   // once the brain has actually read the page, which is the only point at
   // which there is anything worth saying.
+  //
+  // Only the attempt that created the request reaches this line, so a retried
+  // lookup is whispered once.
   if (kind !== "mark_paper") {
     await enqueueWhisper({
       sessionId: args.sessionId,
@@ -902,7 +978,7 @@ async function ingestLensFrame(args: {
     }).catch(() => undefined);
   }
 
-  return { request, image_key: key };
+  return { status: "created", request, image_key: key };
 }
 
 /**
@@ -927,55 +1003,49 @@ router.post(
       res.status(400).json({ error: "empty or too-small image body" });
       return;
     }
-    const sessionId = Number(req.header("x-lens-session-id"));
+    // positiveInt, not Number(): the lens sends an empty header until its
+    // session has started, and Number("") is 0 — a session that does not exist.
+    const sessionId = positiveInt(req.header("x-lens-session-id"));
     const mode = text(req.header("x-lens-mode"), 40) ?? "lookup";
     // The lens retries a stored frame until the server accepts it, so the same
     // photograph can arrive more than once. x-lens-capture-id names it; a
     // repeat is answered with the first attempt's result instead of being read
     // (and, when marking, counted) a second time. See lib/lens-capture.ts.
     const captureId = parseCaptureId(req.header("x-lens-capture-id"));
-    if (captureId === "invalid") {
-      res.status(400).json({ error: "invalid_capture_id" });
+    const captureAgeMs = parseCaptureAgeMs(req.header("x-lens-capture-age-ms"));
+    if (captureId === "invalid" || captureAgeMs === "invalid") {
+      res.status(400).json({ error: captureId === "invalid" ? "invalid_capture_id" : "invalid_capture_age" });
       return;
     }
     const teacherUserId = req.auth?.user_id ?? null;
-    const idempotent = captureId !== null && teacherUserId !== null;
-    if (idempotent) {
-      const claim = await claimLensCapture(teacherUserId, captureId);
-      if (claim.kind === "done") {
-        const request = await getVisionRequest(claim.requestId).catch(() => null);
-        res.status(200).json({ request: request ?? { id: claim.requestId }, image_key: claim.imageKey, duplicate: true });
-        return;
-      }
-      if (claim.kind === "in_progress") {
-        res.status(409).set("retry-after", "5").json({ error: "capture_in_progress" });
-        return;
-      }
-    }
-    let out: Awaited<ReturnType<typeof ingestLensFrame>>;
-    try {
-      out = await ingestLensFrame({
-        bytes: req.body,
-        mode,
-        sessionId: Number.isFinite(sessionId) ? sessionId : null,
-        examId: mode === "mark" ? positiveInt(req.header("x-lens-exam-id")) : null,
-        teacherUserId,
-      });
-    } catch (err) {
-      if (idempotent) await releaseLensCapture(teacherUserId, captureId).catch(() => undefined);
-      throw err;
-    }
-    if (out.error || !out.request) {
-      if (idempotent) await releaseLensCapture(teacherUserId, captureId).catch(() => undefined);
-      res.status(500).json({ error: out.error ?? "enqueue_failed" });
+    if (mode !== "mark" && captureAgeMs !== null && captureAgeMs > LOOKUP_MAX_AGE_MS) {
+      // Checked before the duplicate lookup on purpose: a lookup that did go
+      // through in time and is only now being retried has nothing left to say
+      // either. Nothing is stored, enqueued or whispered.
+      res.status(410).json({ error: "lookup_expired" });
       return;
     }
-    if (idempotent) {
-      // The frame is enqueued and the phone is about to be told so; it will not
-      // retry. A failure to record that here must not turn success into a 500.
-      await finishLensCapture(teacherUserId, captureId, { requestId: out.request.id, imageKey: out.image_key }).catch((err) =>
-        logger.error({ err: err instanceof Error ? err.message : String(err), captureId }, "lens capture result not recorded"),
-      );
+    const out = await ingestLensFrame({
+      bytes: req.body,
+      mode,
+      sessionId,
+      examId: mode === "mark" ? positiveInt(req.header("x-lens-exam-id")) : null,
+      teacherUserId,
+      captureId,
+      captureAgeMs,
+    });
+    if (out.status === "busy") {
+      res.status(409).set("retry-after", "5").json({ error: "capture_in_progress" });
+      return;
+    }
+    if (out.status === "duplicate") {
+      const request = await getVisionRequest(out.requestId).catch(() => null);
+      res.status(200).json({ request: request ?? { id: out.requestId }, image_key: out.image_key, duplicate: true });
+      return;
+    }
+    if (out.status === "error") {
+      res.status(500).json({ error: out.error });
+      return;
     }
     res.status(202).json({ request: out.request, image_key: out.image_key });
   },
@@ -1022,8 +1092,8 @@ router.post(
       examId: mode === "mark" ? positiveInt(body["examId"]) : null,
       teacherUserId: req.auth?.user_id ?? null,
     });
-    if (out.error) {
-      res.status(500).json({ error: out.error });
+    if (out.status !== "created") {
+      res.status(500).json({ error: out.status === "error" ? out.error : "enqueue_failed" });
       return;
     }
     logger.info(
