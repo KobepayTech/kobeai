@@ -5,7 +5,7 @@ android {
     compileSdk = 36
     defaultConfig {
         applicationId = "tz.kobe.glasses"
-        resValue("string", "app_name", "KobeAI Teacher")
+        resValue("string", "app_name", "K9")
         minSdk = 29
         targetSdk = 36
         versionCode = 1
