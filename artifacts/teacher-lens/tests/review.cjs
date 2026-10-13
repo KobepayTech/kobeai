@@ -140,7 +140,7 @@ function school() {
     await page.getByRole("button", { name: "Review", exact: true }).click();
     await page.getByRole("heading", { name: "Review paper" }).waitFor();
     // Wait for K9's reading to be on the sheet before judging what it did with it.
-    await page.getByText(/Kobe read 2 answers/).waitFor({ timeout: 15_000 });
+    await page.getByText(/K9 read 2 answers/).waitFor({ timeout: 15_000 });
   };
   const save = (page) => page.getByRole("button", { name: "Confirm student and save result" });
   const studentPicker = (page) => page.locator("select.mark-input").nth(1);
