@@ -82,15 +82,17 @@ const signedIn = (page, bearer) =>
 
 /** Open the lens; on the phone-camera path, wait until the camera has a picture. */
 const openLens = async (page, phoneCamera = true) => {
+  if (await page.getByRole("tab", { name: "Home", exact: true }).isVisible())
+    await page.getByRole("tab", { name: "Home", exact: true }).click();
   await page.getByRole("button", { name: /Student insights/ }).click();
   if (phoneCamera) await page.waitForFunction(() => document.querySelector("video")?.videoWidth > 0);
 };
 const shutter = (page) => page.getByRole("button", { name: "Capture / check frame" }).click();
 const closeSheet = (page) => page.getByRole("button", { name: "Cancel", exact: true }).click();
 const openActivity = async (page) => {
-  if (!(await page.getByRole("tab", { name: "Activity", exact: true }).isVisible()))
-    await page.getByRole("button", { name: "Teacher workspace" }).click();
-  await page.getByRole("tab", { name: "Activity", exact: true }).click();
+  if (!(await page.getByRole("tab", { name: "Papers", exact: true }).isVisible()))
+    await page.getByRole("button", { name: "← Back to K9 home" }).click();
+  await page.getByRole("tab", { name: "Papers", exact: true }).click();
 };
 const stored = (page) =>
   page.evaluate(
@@ -210,7 +212,7 @@ async function captureWhileDown(page, server) {
     // know it arrived and has to send it again.
     server.mode = "lose-reply";
     await shutter(page);
-    await page.getByText(/Kobe is recognising the face|Pick the student/).waitFor({ timeout: 15_000 });
+    await page.getByText(/K9 is checking the photo|Pick the student/).waitFor({ timeout: 15_000 });
     await closeSheet(page);
     await openActivity(page);
     await page.getByText(/#501/).waitFor();
@@ -322,9 +324,9 @@ async function captureWhileDown(page, server) {
     await signedIn(page, ASHA);
     await page.goto(BASE);
     await openLens(page);
-    await page.getByRole("button", { name: "Automatic capture while marking: on" }).click();
-    await page.getByRole("button", { name: "Automatic capture while marking: off" }).waitFor();
     await page.getByRole("button", { name: "Mark paper", exact: true }).click();
+    await page.getByRole("button", { name: "Auto-capture: On ✓" }).click();
+    await page.getByRole("button", { name: "Auto-capture: Off" }).waitFor();
     await page.getByText(/Automatic capture is off\. Tap the shutter/).waitFor();
     await sleep(6000);
     assert.equal(server.attempts.length, 0, "no photograph is taken on a timer");
@@ -336,7 +338,8 @@ async function captureWhileDown(page, server) {
     // The choice survives the app being closed.
     await page.reload();
     await openLens(page);
-    await page.getByRole("button", { name: "Automatic capture while marking: off" }).waitFor();
+    await page.getByRole("button", { name: "Mark paper", exact: true }).click();
+    await page.getByRole("button", { name: "Auto-capture: Off" }).waitFor();
   });
 
   await scenario("account switching", async (page, server) => {
@@ -348,8 +351,8 @@ async function captureWhileDown(page, server) {
     const signIn = async (email) => {
       await page.getByLabel("Email").fill(email);
       await page.getByLabel("Password").fill("irrelevant");
-      await page.getByRole("button", { name: "Sign in", exact: true }).click();
-      await page.getByRole("tab", { name: "Activity", exact: true }).waitFor();
+      await page.getByRole("button", { name: "Continue to K9 →", exact: true }).click();
+      await page.getByRole("tab", { name: "Papers", exact: true }).waitFor();
     };
 
     // Another teacher signs in on the same phone, on a working server.
@@ -366,10 +369,10 @@ async function captureWhileDown(page, server) {
     assert.equal((await stored(page))[0].state, "pending", "and it is still stored");
 
     // Baraka's own capture goes up as Baraka.
-    await page.getByRole("tab", { name: "Today", exact: true }).click();
+    await page.getByRole("tab", { name: "Home", exact: true }).click();
     await openLens(page);
     await shutter(page);
-    await page.getByText(/Kobe is recognising the face|Pick the student/).waitFor({ timeout: 15_000 });
+    await page.getByText(/K9 is checking the photo|Pick the student/).waitFor({ timeout: 15_000 });
     await closeSheet(page);
     assert.deepEqual(server.attempts.map((a) => a.auth), [`Bearer ${BARAKA}`]);
     assert.notEqual(server.attempts[0].captureId, ashasFrame.id);
@@ -513,8 +516,8 @@ async function captureWhileDown(page, server) {
     assert.deepEqual(server.attempts, []);
 
     // Choosing the phone camera explicitly is still honoured.
-    await page.getByRole("button", { name: "Teacher workspace" }).click();
-    await page.getByRole("button", { name: "Connections: school server and Rokid glasses" }).click();
+    await page.getByRole("button", { name: "← Back to K9 home" }).click();
+    await page.getByRole("button", { name: "Open glasses settings" }).click();
     await page.getByLabel("Camera source").selectOption("");
     await page.getByRole("button", { name: "Connect", exact: true }).click();
     await page.getByText(/automatic glasses connection paused/).waitFor();
@@ -522,12 +525,12 @@ async function captureWhileDown(page, server) {
     await openLens(page);
     assert.ok((await page.evaluate(() => window.cameraCalls)) > 0);
     await shutter(page);
-    await page.getByText(/Kobe is recognising the face|Pick the student/).waitFor({ timeout: 15_000 });
+    await page.getByText(/K9 is checking the photo|Pick the student/).waitFor({ timeout: 15_000 });
     assert.equal(server.processed.size, 1, "the explicitly chosen phone camera captures and uploads");
 
     // The choice is remembered when the app is reopened.
     await page.reload();
-    await page.getByRole("button", { name: "Connections: school server and Rokid glasses" }).click();
+    await page.getByRole("button", { name: "Open glasses settings" }).click();
     await page.getByText("Phone camera", { exact: true }).last().waitFor();
     assert.equal(await page.getByLabel("Camera source").inputValue(), "", "still on the phone camera");
     await sleep(4000);
