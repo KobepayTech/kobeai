@@ -15,7 +15,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 //                 ("Asha. Last Biology: 92 percent. Weak in Newton's laws.")
 //   Mark paper  — teacher grades a paper. On shutter, a sheet slides up
 //                 with an editable list of items (question → student
-//                 answer → correct/wrong). "Send to KobeAI" submits.
+//                 answer → correct/wrong). "Send to K9" submits.
 //
 // The camera streams via getUserMedia. Actual face-recognition / OCR
 // happens server-side on the K9 GPU box; this client just captures a
@@ -372,11 +372,11 @@ function LookupPanel({
                 });
                 if (r?.answer) speak(r.answer);
               } catch {
-                speak("Kobe is offline right now.");
+                speak("K9 is offline right now.");
               }
             }}
           >
-            Ask Kobe
+            Ask K9
           </button>
         </div>
       </div>
@@ -594,7 +594,7 @@ function MarkPanel({
         const found = result.status === "completed" ? (result.response?.items ?? []) : [];
         if (found.length === 0) {
           setReadState("failed");
-          setReadNote(`Kobe couldn't read the paper: ${result.response?.note ?? "no answers found"}`);
+          setReadNote(`K9 couldn't read the paper: ${result.response?.note ?? "no answers found"}`);
           return;
         }
         setItems((prev) =>
@@ -619,14 +619,14 @@ function MarkPanel({
         if (total != null) setMarksObtained((marks) => marks || String(total));
         setReadState("read");
         setReadNote(
-          `Kobe read ${found.length} answer${found.length === 1 ? "" : "s"}` +
+          `K9 read ${found.length} answer${found.length === 1 ? "" : "s"}` +
             " — check them against the paper before saving.",
         );
         return;
       }
       if (!cancelled) {
         setReadState("failed");
-        setReadNote("Kobe is taking too long — enter the marks by hand.");
+        setReadNote("K9 is taking too long — enter the marks by hand.");
       }
     })();
     return () => {
@@ -788,7 +788,7 @@ function MarkPanel({
         {error && <div className="mark-error">{error}</div>}
         {readState !== "none" && (
           <div className={readState === "failed" ? "mark-error" : "mark-result"}>
-            {readState === "reading" ? "📄 Kobe is reading the paper… you can start filling in meanwhile." : readNote}
+            {readState === "reading" ? "📄 K9 is reading the paper… you can start filling in meanwhile." : readNote}
           </div>
         )}
 
@@ -832,7 +832,7 @@ function MarkPanel({
               />
               <span className="mark-outof">out of {exam.total_marks}</span>
             </div>
-            <p className="mark-hint">Enter the paper total, or mark questions below and KobeAI works the total out.</p>
+            <p className="mark-hint">Enter the paper total, or mark questions below and K9 calculates the total.</p>
           </>
         ) : (
           <div className="mark-row">
@@ -910,7 +910,7 @@ function MarkPanel({
         )}
         <div className="mark-actions">
           <button className="mark-primary" onClick={submit} disabled={busy || !studentCode.trim() || (!!review && !checked)}>
-            {busy ? "Sending…" : review ? "Confirm student and save result" : exam ? "Record result" : "Send to KobeAI"}
+            {busy ? "Sending…" : review ? "Confirm student and save result" : exam ? "Record result" : "Send to K9"}
           </button>
           {review && onReviewed && (
             <button
