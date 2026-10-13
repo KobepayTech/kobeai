@@ -167,7 +167,7 @@ export function GlassesControl({
         if (!mounted.current || active !== glasses) return;
         setStatus(
           provider === "rokid"
-            ? "Rokid reconnecting automatically…"
+            ? "Glasses reconnecting automatically…"
             : "Glasses disconnected",
         );
         onSource(device.model, false);
@@ -183,7 +183,7 @@ export function GlassesControl({
       if (!mounted.current) return;
       setStatus(
         automatic
-          ? "Waiting for Rokid · retrying automatically"
+          ? "Waiting for glasses · retrying automatically"
           : "Connection needs attention",
       );
       if (!automatic) setError(String(e));
@@ -244,7 +244,7 @@ export function GlassesControl({
         setDevices(found);
         // A teacher who chose the phone camera keeps that choice when the app
         // is reopened; it is cleared by connecting glasses or forgetting them.
-        const preferred = phoneCameraChosen() ? undefined : found.find((d) => d.id === "rokid");
+        const preferred = phoneCameraChosen() ? undefined : (found.find((d) => d.id === "heycyan") ?? found.find((d) => d.id === "rokid"));
         setSelected(preferred?.id ?? "");
         // Otherwise Rokid is preselected in this app, so it is the capture
         // source from the start. Until it connects, captures fail with a
@@ -278,8 +278,8 @@ export function GlassesControl({
   if (!window.KobeNative)
     return (
       <div className="glasses-hint">
-        Rokid reconnects automatically in the Android app after its first setup.
-        Phone camera works here.
+        Glasses pairing is available in the installed K9 Android app.
+        You can use the phone camera in this preview.
       </div>
     );
   const connect = () => runConnect(selected);
@@ -292,7 +292,7 @@ export function GlassesControl({
       active = null;
       rememberPhoneCamera(false);
       onSource(null);
-      setStatus("Pairing removed. Connect Rokid to set up again.");
+      setStatus("Pairing removed. Choose glasses to connect again.");
       setError("");
     } catch {
       setError("Could not remove pairing. Try again.");
@@ -323,11 +323,7 @@ export function GlassesControl({
           onClick={() => void connect()}
           disabled={busy}
         >
-          {busy
-            ? "Connecting…"
-            : selected === "rokid"
-              ? "Connect Rokid"
-              : "Connect"}
+          {busy ? "Connecting…" : selected ? `Connect ${devices.find((d) => d.id === selected)?.model ?? "glasses"}` : "Use phone camera"}
         </button>
       </div>
       <div role="status" className="glasses-status">
