@@ -190,7 +190,11 @@ async function enqueueWhisper(args: {
  */
 router.post("/v1/teacher-lens/session", requireTeacher, async (req, res) => {
   await ensureTables();
-  const mode = text(req.body?.mode, 40) ?? "marking";
+  // The lens calls its marking mode "mark" everywhere else (x-lens-mode), and
+  // sent that here too, which was refused: a lens opened straight into marking
+  // never got a session.
+  const requested = text(req.body?.mode, 40) ?? "marking";
+  const mode = requested === "mark" ? "marking" : requested;
   if (!["marking", "lookup", "ambient"].includes(mode)) {
     res.status(400).json({ error: "invalid mode" });
     return;

@@ -382,6 +382,18 @@ describe("lens frame upload", { skip: DB ? false : "set K9_TEST_DATABASE_URL to 
     assert.equal(reply.status, 202, "exam evidence does not expire");
   });
 
+  test("a lens opened straight into marking gets a session", async () => {
+    for (const mode of ["mark", "marking", "lookup"]) {
+      const response = await fetch(`${base}/api/v1/teacher-lens/session`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${asha.token}`, "content-type": "application/json" },
+        body: JSON.stringify({ mode }),
+      });
+      assert.equal(response.status, 201, `mode ${mode}`);
+    }
+    await db.pool.query(`DELETE FROM teacher_lens_sessions WHERE teacher_user_id = $1`, [asha.id]);
+  });
+
   test("malformed idempotency headers are rejected, and a client without them still works", async () => {
     assert.equal((await post(base, asha.token, { "x-lens-capture-id": "short" })).status, 400);
     assert.equal((await post(base, asha.token, { "x-lens-capture-id": captureId(), "x-lens-capture-age-ms": "-5" })).status, 400);

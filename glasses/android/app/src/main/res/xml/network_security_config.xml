@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Release builds: nothing here applies. They keep Android's defaults — HTTPS
+  only, system certificate authorities only.
+
+  Debuggable builds only: also trust certificate authorities the tester has
+  installed on the phone. A school server on a test bench has an address like
+  https://192.168.1.20:8443 and a certificate from a private test CA; without
+  this the debug app cannot reach it at all, and the alternative people reach
+  for is turning TLS checks off. debug-overrides is ignored by Android unless
+  the APK is debuggable, so this cannot leak into a release.
+-->
+<network-security-config>
+    <debug-overrides>
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </debug-overrides>
+</network-security-config>
