@@ -183,6 +183,7 @@ export function TeacherWorkspace({
   onSignOut: () => void;
 }) {
   const [tab, setTab] = useState(initialTab);
+  const serverOnline = serverStatus === "School server connected";
   const workspaceRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
     workspaceRef.current?.scrollTo({ top: 0 });
@@ -447,11 +448,11 @@ export function TeacherWorkspace({
           </span>
           <span className="teacher-connection-indicator" data-online={connected} aria-hidden="true" />
         </button>
-        <div className="teacher-server" role="status">
+        <div className="teacher-server" role="status" data-online={serverOnline}>
           <span className="teacher-device-icon"><ToolIcon name="Activity" /></span>
           <span className="teacher-device-copy">
             <small>SCHOOL SERVER</small>
-            <strong>Connection</strong>
+            <strong>{serverOnline ? "Connected" : serverStatus.startsWith("Checking") ? "Checking…" : "Needs attention"}</strong>
             <small>{serverStatus}</small>
           </span>
         </div>
