@@ -417,14 +417,14 @@ export function TeacherWorkspace({
       <header className="teacher-heading">
         <div>
           <span className="teacher-eyebrow">
-            <span className="teacher-logo">k.</span> KobeAI{" "}
+            <span className="teacher-logo">K9</span> KobeAI{" "}
             <span className="teacher-edition">FOR TEACHERS</span>
           </span>
           <h1>
             Hello, {auth.teacher_name.split(" ")[0]}{" "}
             <span className="teacher-greeting">✦</span>
           </h1>
-          <p>A little support. A bigger impact.</p>
+          <p>Your classroom, ready for today.</p>
         </div>
         <button className="teacher-lens-button" onClick={onClose}>
           <ToolIcon name="lens" />
@@ -441,12 +441,12 @@ export function TeacherWorkspace({
         </span>
         <div>
           <strong>
-            {connected ? `${source} connected` : "Your Rokid glasses"}
+            {connected ? `${source} connected` : "Connect your glasses"}
           </strong>
           <small>
             {connected
               ? "Ready for photos and teacher prompts"
-              : "Automatic after first setup"}
+              : "Choose your device in Connections"}
           </small>
         </div>
         <span className="connection-link">Settings ↗</span>
@@ -473,20 +473,20 @@ export function TeacherWorkspace({
             <Status k="today" />
             <article className="teacher-hero">
               <div className="teacher-hero-kicker">
-                <ToolIcon name="Ask Kobe" /> YOUR TEACHING COMPANION
+                <ToolIcon name="Ask Kobe" /> PAPER MARKING
               </div>
               <h2>
-                More time to teach.
+                Capture. Review.
                 <br />
-                More room to inspire.
+                Back to teaching.
               </h2>
               <p>
-                Plan a lesson, find the right explanation,
+                Photograph a marked paper. Check the reading,
                 <br />
-                or give a student a little extra help.
+                confirm the student, and save the result.
               </p>
-              <button onClick={() => setTab("Ask Kobe")}>
-                Let’s prepare a lesson <span aria-hidden="true">↗</span>
+              <button onClick={() => onCapture("mark")}>
+                Start marking <span aria-hidden="true">↗</span>
               </button>
               <div className="teacher-orbit" aria-hidden="true">
                 <i />
@@ -536,9 +536,9 @@ export function TeacherWorkspace({
                 <p>No current or upcoming lessons recorded.</p>
               )}
             <aside className="teacher-card teacher-tip">
-              <h3>A thoughtful teaching partner</h3>
+              <h3>You make the final call</h3>
               <p>
-                Connect Rokid, check the school server, then open Lens. Review
+                Connect your glasses or choose the phone camera. Review
                 AI suggestions before recording marks.
               </p>
             </aside>

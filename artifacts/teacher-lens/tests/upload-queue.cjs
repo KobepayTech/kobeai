@@ -61,7 +61,11 @@ function school() {
       return route.fulfill({ status: 202, json: { request: { id }, image_key: `k/${id}.jpg` } });
     }
     if (/\/teacher-lens\/frame\/\d+$/.test(path)) return route.fulfill({ json: { status: "completed" } });
-    if (path.endsWith("/session")) return route.fulfill({ json: { session: { id: 10 } } });
+    if (path.endsWith("/session")) {
+      // An unreachable server is unreachable for everything, not only uploads.
+      if (server.mode === "down") return route.abort("connectionfailed");
+      return route.fulfill({ json: { session: { id: 10 } } });
+    }
     if (path.endsWith("/teacher/students")) return route.fulfill({ json: { students: [{ student_id: "K9-001", name: "Neema" }] } });
     return route.fulfill({ json: { current_period: null, upcoming_periods: [] } });
   };
@@ -177,6 +181,25 @@ async function captureWhileDown(page, server) {
     await openActivity(page);
     await page.getByText(/Student lookup · completed/).waitFor();
     assert.deepEqual([...server.processed.keys()], [before.id], "the stored frame, under its original capture id");
+  });
+
+  await scenario("opened offline, uploads once the network returns without being reopened", async (page, server) => {
+    await signedIn(page, ASHA);
+    await page.goto(BASE);
+    await openLens(page);
+    await captureWhileDown(page, server);
+    // The app is closed and reopened with the server still unreachable, so it
+    // cannot even start its session…
+    await page.reload();
+    await openActivity(page);
+    await page.getByText("1 waiting to upload").waitFor();
+    await sleep(4000);
+    assert.equal(server.processed.size, 0);
+    // …and then the Wi-Fi comes back while the app is simply left open.
+    server.mode = "up";
+    await page.getByText(/Student lookup · completed/).waitFor({ timeout: 45_000 });
+    assert.equal(server.processed.size, 1);
+    assert.equal(server.detail.at(-1).sessionId, "10", "sent under the session it finally obtained");
   });
 
   await scenario("duplicate retries", async (page, server) => {
@@ -425,7 +448,8 @@ async function captureWhileDown(page, server) {
       window.nativeCalls = [];
       let connected = false;
       let provider = null;
-      let enabled = true;
+      // Like the real host, "paused" outlives the page.
+      let enabled = sessionStorage.getItem("native-paused") !== "1";
       window.KobeNative = {
         postMessage(raw) {
           const call = JSON.parse(raw);
@@ -448,6 +472,7 @@ async function captureWhileDown(page, server) {
           }
           if (call.method === "pause" || call.method === "forget") {
             enabled = false;
+            sessionStorage.setItem("native-paused", "1");
             connected = false;
             provider = null;
           }
@@ -499,6 +524,17 @@ async function captureWhileDown(page, server) {
     await shutter(page);
     await page.getByText(/Kobe is recognising the face|Pick the student/).waitFor({ timeout: 15_000 });
     assert.equal(server.processed.size, 1, "the explicitly chosen phone camera captures and uploads");
+
+    // The choice is remembered when the app is reopened.
+    await page.reload();
+    await page.getByRole("button", { name: "Connections: school server and Rokid glasses" }).click();
+    await page.getByText("Phone camera", { exact: true }).last().waitFor();
+    assert.equal(await page.getByLabel("Camera source").inputValue(), "", "still on the phone camera");
+    await sleep(4000);
+    assert.equal(await page.evaluate(() => window.nativeCalls.filter((m) => m === "connect").length), 0, "and no glasses connection is attempted");
+    await page.getByRole("button", { name: "Done", exact: true }).click();
+    await openLens(page);
+    assert.equal(await page.getByText(/selected but not connected/).count(), 0);
   });
 
   await browser.close();

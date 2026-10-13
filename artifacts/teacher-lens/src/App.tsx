@@ -1013,10 +1013,17 @@ export function App() {
   }, [studentPicker]);
   const { videoRef, ready: camReady, err: camErr, captureFrame, captureBlob } = useCamera(!!auth && !glassesSource && !workspaceOpen && !connectionsOpen);
 
-  // Start a session as soon as we have auth.
+  // Start a session as soon as we have auth — and keep trying. The lens is
+  // often opened before the school Wi-Fi is: with one attempt, a teacher who
+  // opened it offline stayed without a session after the network came back,
+  // and every photograph on the phone waited for a session that never started.
+  const [sessionAttempt, setSessionAttempt] = useState(0);
   useEffect(() => {
     if (!auth || sessionId != null) return;
     let cancelled = false;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    const again = () => { if (!cancelled) setSessionAttempt((n) => n + 1); };
+    window.addEventListener("online", again);
     (async () => {
       try {
         const r = await apiPost<{ session: { id: number } }>(auth, "/v1/teacher-lens/session", {
@@ -1029,11 +1036,13 @@ export function App() {
         }
         setSessionId(r.session.id);
       } catch {
-        setToast("Couldn't start lens session — check the server URL.");
+        if (cancelled) return;
+        if (sessionAttempt === 0) setToast("Couldn't start lens session — check the server URL.");
+        retry = setTimeout(again, Math.min(3000 * 2 ** Math.min(sessionAttempt, 4), 30_000));
       }
     })();
-    return () => { cancelled = true; };
-  }, [auth, mode, sessionId]);
+    return () => { cancelled = true; clearTimeout(retry); window.removeEventListener("online", again); };
+  }, [auth, mode, sessionId, sessionAttempt]);
 
   useWhisperPoll(auth ?? ({ api_base: "", token: "", teacher_name: "" } as StoredAuth), sessionId);
 
@@ -1142,7 +1151,9 @@ export function App() {
   // Camera-first exam marking: no shutter and no teacher narration are required.
   // K9 samples the teacher's view while they mark normally.
   useEffect(() => {
-    if (mode !== "mark" || !autoCapture || !auth || sessionId == null) return;
+    // No session is needed to photograph: frames are stored on the phone and
+    // wait there, so marking can start before the school server is reachable.
+    if (mode !== "mark" || !autoCapture || !auth) return;
     const tick = async () => {
       if (markUploadInFlight.current) return;
       markUploadInFlight.current = true;
@@ -1159,7 +1170,7 @@ export function App() {
     tick();
     const timer = window.setInterval(tick, 2500);
     return () => window.clearInterval(timer);
-  }, [auth, autoCapture, mode, sessionId, uploadFrame]);
+  }, [auth, autoCapture, mode, uploadFrame]);
 
   const runLookup = useCallback(
     async (studentCode: string, quiet = false) => {

@@ -15,6 +15,16 @@ declare global {
     };
   }
 }
+const PHONE_CAMERA_KEY = "k9-lens.camera-source";
+function phoneCameraChosen(): boolean {
+  try { return localStorage.getItem(PHONE_CAMERA_KEY) === "phone"; } catch { return false; }
+}
+function rememberPhoneCamera(chosen: boolean): void {
+  try {
+    if (chosen) localStorage.setItem(PHONE_CAMERA_KEY, "phone");
+    else localStorage.removeItem(PHONE_CAMERA_KEY);
+  } catch { /* this session only */ }
+}
 let transport: NativeTransport | null = null;
 let active: NativeGlasses | null = null;
 function native(): NativeTransport | null {
@@ -137,12 +147,14 @@ export function GlassesControl({
       if (!provider) {
         await bridge.request("pause");
         active = null;
+        rememberPhoneCamera(true);
         onSource(null);
         setStatus("Phone camera · automatic glasses connection paused");
         return;
       }
       const device = knownDevices.current.find((d) => d.id === provider);
       if (!device) throw new Error("Choose a glasses model");
+      if (!automatic) rememberPhoneCamera(false);
       if (!automatic) await bridge.request("disconnect");
       const glasses = await new NativeAdapter(bridge).open(device);
       active = glasses;
@@ -230,12 +242,14 @@ export function GlassesControl({
         if (!mounted.current) return;
         knownDevices.current = found;
         setDevices(found);
-        const preferred = found.find((d) => d.id === "rokid");
+        // A teacher who chose the phone camera keeps that choice when the app
+        // is reopened; it is cleared by connecting glasses or forgetting them.
+        const preferred = phoneCameraChosen() ? undefined : found.find((d) => d.id === "rokid");
         setSelected(preferred?.id ?? "");
-        // Rokid is preselected in this app, so it is the capture source from
-        // the start. Until it connects, captures fail with a message; they do
-        // not fall back to the phone camera, which only an explicit choice of
-        // "Phone camera" below turns on.
+        // Otherwise Rokid is preselected in this app, so it is the capture
+        // source from the start. Until it connects, captures fail with a
+        // message; they do not fall back to the phone camera, which only an
+        // explicit choice of "Phone camera" below turns on.
         if (preferred) {
           onSource(preferred.model, false);
           setStatus(`${preferred.model} selected · not connected`);
@@ -276,6 +290,7 @@ export function GlassesControl({
     try {
       await native()?.request("forget");
       active = null;
+      rememberPhoneCamera(false);
       onSource(null);
       setStatus("Pairing removed. Connect Rokid to set up again.");
       setError("");

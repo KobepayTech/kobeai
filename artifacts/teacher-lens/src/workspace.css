@@ -653,3 +653,47 @@
 .teacher-frame-failed .connection-actions {
   margin-top: 8px;
 }
+
+/* K9 workspace: readable type, quiet surfaces, task-first hierarchy. */
+.teacher-workspace { background: #f5f4ef; color: #182c29; padding: max(28px, env(safe-area-inset-top)) 24px 112px; }
+.teacher-workspace > * { max-width: 760px; }
+.teacher-heading { align-items: flex-start; padding-bottom: 24px; }
+.teacher-eyebrow { font-size: 17px; margin-bottom: 28px; }
+.teacher-logo { width: 42px; height: 42px; background: #183e35; border-radius: 13px; font-size: 19px; }
+.teacher-edition { font-size: 10px; color: #53675f; }
+.teacher-heading h1 { font-size: clamp(26px, 5vw, 34px); font-weight: 700; }
+.teacher-heading p { font-size: 14px; color: #53675f; line-height: 1.6; }
+.teacher-greeting { display: none; }
+.teacher-heading .teacher-lens-button { margin-top: 0; min-height: 44px; font-size: 13px; box-shadow: none; color: #244c3f; }
+.teacher-workspace button { font-size: 14px; min-height: 44px; }
+.teacher-workspace button:disabled { cursor: not-allowed; }
+.teacher-workspace .teacher-device { width: 100%; background: #fff; border: 1px solid #dbe2dc; color: #182c29; text-align: left; border-radius: 16px; margin-bottom: 8px; }
+.teacher-device-icon { background: #eaf0e9; color: #315c43; }
+.teacher-device strong { font-size: 15px; }
+.teacher-workspace small, .teacher-actions small { font-size: 13px; color: #596d64; }
+.teacher-workspace .teacher-muted { font-size: 13px; color: #596d64; }
+.teacher-hero { background: #193f35; border-radius: 22px; padding: 28px; min-height: auto; margin-top: 22px; margin-bottom: 28px; }
+.teacher-hero-kicker { font-size: 11px; color: #cbdcc9; letter-spacing: 1.5px; }
+.teacher-workspace .teacher-hero h2 { font-size: clamp(30px, 6vw, 42px); line-height: 1.12; letter-spacing: -1.5px; margin: 20px 0 14px; }
+.teacher-hero p { font-size: 15px; color: #d5e3d9; line-height: 1.6; max-width: 400px; }
+.teacher-hero p br { display: none; }
+.teacher-hero button { background: #dceeaf; color: #183529; font-size: 15px; padding: 13px 20px; margin-top: 12px; border-radius: 12px; }
+.teacher-orbit { display: none; }
+.teacher-workspace h2 { font-size: 20px; }
+.teacher-workspace h3 { font-size: 16px; }
+.teacher-actions { gap: 14px; }
+.teacher-actions button { border-radius: 16px; border-color: #dbe2dc; padding: 20px; min-height: 156px; }
+.teacher-actions strong { font-size: 16px; }
+.teacher-tool-icon, .teacher-actions button:nth-child(2) .teacher-tool-icon { background: #edf1e7; color: #315c43; }
+.teacher-period { border-color: #dbe2dc; border-radius: 14px; padding: 18px; }
+.teacher-period > span, .teacher-period button { font-size: 12px; }
+.teacher-period strong { font-size: 15px; }
+.teacher-card { border-color: #dbe2dc; border-radius: 16px; font-size: 15px; }
+.teacher-tip { background: #e9eee5; }
+.teacher-nav { background: #fdfdfb; border-color: #dbe2dc; box-shadow: none; }
+.teacher-nav button { font-size: 12px; min-height: 56px; color: #596d64; }
+.teacher-nav button[aria-selected="true"] { background: #e8efdc; color: #244c3f; }
+.teacher-workspace label { font-size: 14px; }
+.teacher-workspace :is(input, textarea, select) { font-size: 16px; }
+@media (max-width: 380px) { .teacher-workspace { padding-left: 16px; padding-right: 16px; } .teacher-edition { display: none; } .teacher-hero { padding: 22px; } .teacher-actions { grid-template-columns: 1fr; } }
+@media (prefers-reduced-motion: reduce) { .teacher-workspace button { transition: none; } }
