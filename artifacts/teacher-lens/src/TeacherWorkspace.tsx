@@ -832,7 +832,6 @@ export function TeacherWorkspace({
         {tab === "Papers" && (
           <>
             <div className="teacher-page-intro"><div><span className="teacher-overline">YOUR EXAM WORKFLOW</span><h2>Papers</h2><p>Captured, waiting and ready for review.</p></div><button onClick={() => onCapture("mark")}>Start marking ↗</button></div>
-          <>
             <Status k="captures" />
             <div className="teacher-section-title">
               <h2>Capture history</h2>
