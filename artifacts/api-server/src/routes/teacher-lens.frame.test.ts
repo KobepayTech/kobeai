@@ -173,6 +173,7 @@ describe("lens frame upload", { skip: DB ? false : "set K9_TEST_DATABASE_URL to 
       await db.pool.query(`DELETE FROM vision_analysis_requests WHERE requested_by = ANY($1::int[])`, [teachers]);
       await db.pool.query(`DELETE FROM teacher_lens_captures WHERE teacher_user_id = ANY($1::int[])`, [teachers]);
       await db.pool.query(`DELETE FROM teacher_lens_whispers WHERE teacher_user_id = ANY($1::int[])`, [teachers]);
+      await db.pool.query(`DELETE FROM teacher_lens_reviews WHERE teacher_user_id = ANY($1::int[])`, [teachers]);
       await db.pool.query(`DELETE FROM graded_papers WHERE teacher_user_id = ANY($1::int[])`, [teachers]);
       await db.pool.query(`DELETE FROM academic_terms WHERE id = $1`, [termId]);
       await db.pool.query(`DELETE FROM classes WHERE id = $1`, [classId]);
@@ -380,6 +381,173 @@ describe("lens frame upload", { skip: DB ? false : "set K9_TEST_DATABASE_URL to 
     const id = captureId();
     const reply = await post(base, asha.token, { "x-lens-capture-id": id, "x-lens-mode": "mark", "x-lens-capture-age-ms": String(6 * 3600_000) });
     assert.equal(reply.status, 202, "exam evidence does not expire");
+  });
+
+  // --- teacher review of a camera-read paper --------------------------------
+
+  /** A marking frame the worker has read: a name on the paper, no usable code. */
+  async function reading(as = asha): Promise<{ id: number; capturedAt: number; imageKey: string }> {
+    const id = captureId();
+    const reply = await post(base, as.token, {
+      "x-lens-capture-id": id,
+      "x-lens-mode": "mark",
+      "x-lens-exam-id": String(examId),
+      "x-lens-capture-age-ms": String(20 * 60_000),
+    });
+    assert.equal(reply.status, 202);
+    const { completeVisionRequest } = await import("../lib/vision-queue");
+    const { onLensRequestCompleted } = await import("./teacher-lens");
+    const completed = await completeVisionRequest(reply.body.request!.id, {
+      ok: true,
+      response: {
+        // What the real worker returns: a name it read, no code, no confidence.
+        student_name: "Neema",
+        student_code: null,
+        model: "test-vlm",
+        total_marks_awarded: 2,
+        items: [
+          { question_number: 1, is_correct: true, marks_awarded: 2, marks_possible: 2, student_answer: "x = 6" },
+          { question_number: 2, is_correct: false, marks_awarded: 0, marks_possible: 2, student_answer: "7" },
+        ],
+      },
+    });
+    await onLensRequestCompleted(completed!);
+    const [request] = await requestsFor(id);
+    return { id: request.id, capturedAt: Date.parse(String(request.context["captured_at"])), imageKey: reply.body.image_key! };
+  }
+
+  const api = async (method: string, path: string, token: string, body?: unknown) => {
+    const response = await fetch(`${base}/api/v1/teacher-lens${path}`, {
+      method,
+      headers: { authorization: `Bearer ${token}`, ...(body === undefined ? {} : { "content-type": "application/json" }) },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return { status: response.status, body: (await response.json().catch(() => ({}))) as any, raw: response };
+  };
+  const confirmation = (requestId: number, code = student.code) => ({
+    lens_request_id: requestId,
+    student_code: code,
+    exam_id: examId,
+    items: [
+      { question_number: 1, is_correct: true, marks_awarded: 2, marks_possible: 2, metadata: { ai_is_correct: true, ai_marks_awarded: 2 } },
+      { question_number: 2, is_correct: true, marks_awarded: 1, marks_possible: 2, metadata: { ai_is_correct: false, ai_marks_awarded: 0 } },
+    ],
+  });
+  const papersFor = async (requestId: number) =>
+    (await db.pool.query(`SELECT * FROM graded_papers WHERE metadata->'review'->>'lens_request_id' = $1 ORDER BY id`, [String(requestId)])).rows;
+
+  test("a name K9 read never assigns a student: the paper waits for review", async () => {
+    const read = await reading();
+    assert.equal((await papersFor(read.id)).length, 0);
+    const results = await db.pool.query(`SELECT 1 FROM exam_results WHERE exam_id = $1`, [examId]);
+    const before = results.rows.length;
+
+    const list = await api("GET", "/reviews", asha.token);
+    assert.equal(list.status, 200);
+    const item = list.body.reviews.find((r: { request_id: number }) => r.request_id === read.id);
+    assert.ok(item, "the reading is listed for its teacher");
+    assert.equal(item.ai.student_name, "Neema");
+    assert.equal(item.ai.student_code, null);
+    assert.equal(item.ai.student_confidence, null, "no confidence is reported as none, not as zero or as certain");
+    assert.equal(item.exam_id, examId);
+    assert.equal(item.questions, 2);
+    assert.ok(Math.abs(Date.parse(item.captured_at) - read.capturedAt) < 1000);
+
+    const theirs = await api("GET", "/reviews", baraka.token);
+    assert.equal(theirs.body.reviews.some((r: { request_id: number }) => r.request_id === read.id), false, "another teacher does not see it");
+    assert.equal((await db.pool.query(`SELECT 1 FROM exam_results WHERE exam_id = $1`, [examId])).rows.length, before);
+  });
+
+  test("the teacher sees the photograph that was read", async () => {
+    const read = await reading();
+    const image = await fetch(`${base}/api/v1/teacher-lens/frame/${read.id}/image`, { headers: { authorization: `Bearer ${asha.token}` } });
+    assert.equal(image.status, 200);
+    assert.equal(image.headers.get("content-type"), "image/jpeg");
+    assert.deepEqual(Buffer.from(await image.arrayBuffer()), jpeg);
+    const other = await fetch(`${base}/api/v1/teacher-lens/frame/${read.id}/image`, { headers: { authorization: `Bearer ${baraka.token}` } });
+    assert.equal(other.status, 404, "not another teacher's paper");
+  });
+
+  test("confirming records the result once, with K9's reading and the teacher's decision kept apart", async () => {
+    const read = await reading();
+    const saved = await api("POST", "/paper-graded", asha.token, confirmation(read.id));
+    assert.equal(saved.status, 201);
+    assert.equal(saved.body.result.marks, 30, "the teacher's 3 of 4, scaled to the exam's 40 marks");
+
+    const [paper] = await papersFor(read.id);
+    assert.equal(paper.student_code, student.code, "filed under the student the teacher chose");
+    const review = paper.metadata.review;
+    assert.equal(review.ai.student_name, "Neema", "what K9 read is preserved");
+    assert.equal(review.ai.student_code, null);
+    assert.equal(review.ai.student_confidence, null);
+    assert.equal(review.ai.model, "test-vlm");
+    assert.equal(review.confirmed_student_code, student.code);
+    assert.equal(review.confirmed_by, asha.id);
+    assert.ok(Date.parse(review.confirmed_at) > read.capturedAt);
+    assert.equal(paper.paper_image_key, read.imageKey);
+    assert.ok(Math.abs(new Date(paper.graded_at).getTime() - read.capturedAt) < 1000, "dated when the paper was marked");
+    const row = (await db.pool.query(`SELECT * FROM teacher_lens_reviews WHERE request_id = $1`, [read.id])).rows[0];
+    assert.equal(row.decision, "confirmed");
+    assert.equal(row.teacher_user_id, asha.id);
+    assert.equal(row.confirmed_student_code, student.code);
+    assert.equal(row.ai_reading.student_name, "Neema");
+    assert.equal(Number(row.graded_paper_id), paper.id);
+    const items = await db.pool.query(`SELECT question_number, marks_awarded, metadata FROM graded_paper_items WHERE paper_id = $1 ORDER BY question_number`, [paper.id]);
+    assert.equal(items.rows[1].marks_awarded, 1, "the teacher's mark is the one recorded");
+    assert.equal(items.rows[1].metadata.ai_marks_awarded, 0, "beside what K9 proposed");
+
+    // The same confirmation again: tapped twice, or retried after a lost reply.
+    const again = await api("POST", "/paper-graded", asha.token, confirmation(read.id));
+    assert.equal(again.status, 200);
+    assert.equal(again.body.duplicate, true);
+    assert.equal(again.body.paper.id, paper.id, "answered with what was saved the first time");
+    assert.equal((await papersFor(read.id)).length, 1);
+    assert.equal((await db.pool.query(`SELECT 1 FROM exam_results WHERE graded_paper_id = $1`, [paper.id])).rows.length, 1);
+
+    const list = await api("GET", "/reviews", asha.token);
+    assert.equal(list.body.reviews.some((r: { request_id: number }) => r.request_id === read.id), false, "it has left the review list");
+  });
+
+  test("confirmations sent at the same moment save one paper", async () => {
+    const read = await reading();
+    const replies = await Promise.all(Array.from({ length: 6 }, () => api("POST", "/paper-graded", asha.token, confirmation(read.id))));
+    const statuses = replies.map((r) => r.status).sort();
+    assert.equal(statuses.filter((status) => status === 201).length, 1, `one saves: ${statuses}`);
+    assert.ok(replies.filter((r) => r.status !== 201).every((r) => r.status === 200 && r.body.duplicate === true), `the rest are duplicates: ${statuses}`);
+    assert.equal((await papersFor(read.id)).length, 1);
+  });
+
+  test("a refused confirmation leaves the reading open to review", async () => {
+    const read = await reading();
+    const wrong = await api("POST", "/paper-graded", asha.token, confirmation(read.id, "NOT-IN-CLASS"));
+    assert.equal(wrong.status, 400);
+    assert.equal(wrong.body.error, "student_not_in_exam_class");
+    assert.equal((await papersFor(read.id)).length, 0);
+    const list = await api("GET", "/reviews", asha.token);
+    assert.ok(list.body.reviews.some((r: { request_id: number }) => r.request_id === read.id), "still waiting for the right student");
+    assert.equal((await api("POST", "/paper-graded", asha.token, confirmation(read.id))).status, 201);
+  });
+
+  test("only the teacher who captured a paper can confirm it", async () => {
+    const read = await reading();
+    const other = await api("POST", "/paper-graded", baraka.token, confirmation(read.id));
+    assert.equal(other.status, 404);
+    assert.equal((await papersFor(read.id)).length, 0);
+  });
+
+  test("a dismissed reading records nothing and cannot be confirmed afterwards", async () => {
+    const read = await reading();
+    const dismissed = await api("POST", `/frame/${read.id}/dismiss`, asha.token, {});
+    assert.equal(dismissed.status, 200);
+    assert.equal(dismissed.body.decision, "dismissed");
+    const list = await api("GET", "/reviews", asha.token);
+    assert.equal(list.body.reviews.some((r: { request_id: number }) => r.request_id === read.id), false);
+    const late = await api("POST", "/paper-graded", asha.token, confirmation(read.id));
+    assert.equal(late.status, 200);
+    assert.equal(late.body.duplicate, true);
+    assert.equal(late.body.decision, "dismissed");
+    assert.equal((await papersFor(read.id)).length, 0);
   });
 
   test("a lens opened straight into marking gets a session", async () => {

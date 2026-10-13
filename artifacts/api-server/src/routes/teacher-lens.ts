@@ -130,6 +130,26 @@ function ensureTables(): Promise<void> {
           played_at TIMESTAMPTZ
         )
       `);
+      // One row per camera-read paper a decision has been made about. The
+      // primary key is what makes a confirmation happen once: a second
+      // confirmation of the same reading cannot insert, so it cannot record.
+      //
+      // ai_reading is what K9 believed before anyone checked (the name and
+      // code it read, and its confidences where the model gave any). It is
+      // never edited. confirmed_student_code and teacher_user_id are what a
+      // person decided. Keeping them apart is the point: how often teachers
+      // agree with the reading is only measurable if the reading survives.
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS teacher_lens_reviews (
+          request_id BIGINT PRIMARY KEY,
+          teacher_user_id INTEGER,
+          decision TEXT NOT NULL CHECK (decision IN ('confirmed', 'dismissed', 'auto_recorded')),
+          graded_paper_id INTEGER,
+          confirmed_student_code TEXT,
+          ai_reading JSONB NOT NULL DEFAULT '{}'::jsonb,
+          decided_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `);
     })().catch((err) => {
       tablesReady = null;
       throw err;
@@ -230,6 +250,147 @@ router.post("/v1/teacher-lens/session/:id/end", requireTeacher, async (req, res)
   res.json({ session: rows.rows[0] });
 });
 
+/** What K9 read about whose paper this is, exactly as the worker returned it. */
+function aiReading(request: VisionAnalysisRequest): Record<string, unknown> {
+  const response = request.response ?? {};
+  const pick = (key: string) => (response[key] === undefined ? null : response[key]);
+  return {
+    student_code: pick("student_code"),
+    student_name: pick("student_name"),
+    // Null means the model gave no confidence at all, which is not the same
+    // as a low one and must not be shown as either.
+    student_confidence: pick("student_confidence"),
+    profile_attachment_confidence: pick("profile_attachment_confidence"),
+    total_marks_awarded: pick("total_marks_awarded"),
+    model: pick("model"),
+    note: pick("note"),
+  };
+}
+
+/** A camera-read paper this teacher may review: theirs, or any for an admin. */
+async function reviewableRequest(req: Request, id: number | null): Promise<VisionAnalysisRequest | null> {
+  const request = id ? await getVisionRequest(id) : null;
+  if (!request || request.reason !== "lens:mark_paper") return null;
+  const mine = request.requested_by === (req.auth?.user_id ?? null) || req.auth?.role !== "teacher";
+  return mine ? request : null;
+}
+
+/**
+ * GET /v1/teacher-lens/reviews
+ * Papers K9 has read that nobody has decided about yet. A reading is never a
+ * result: it becomes one only when the teacher picks the student and saves
+ * (POST /v1/teacher-lens/paper-graded with lens_request_id), or is set aside
+ * (POST /v1/teacher-lens/frame/:id/dismiss).
+ */
+router.get("/v1/teacher-lens/reviews", requireTeacher, async (req, res) => {
+  await ensureTables();
+  await ensureVisionQueueTables();
+  const { rows } = await pool.query(
+    `SELECT r.id, r.context, r.response, r.created_at, r.completed_at
+     FROM vision_analysis_requests r
+     LEFT JOIN teacher_lens_reviews v ON v.request_id = r.id
+     WHERE r.reason = 'lens:mark_paper' AND r.status = 'completed'
+       AND v.request_id IS NULL
+       AND ($1::int IS NULL OR r.requested_by = $1)
+       AND jsonb_typeof(r.response->'items') = 'array'
+       AND jsonb_array_length(r.response->'items') > 0
+     ORDER BY r.created_at DESC
+     LIMIT 50`,
+    [req.auth?.role === "teacher" ? req.auth.user_id : null],
+  );
+  res.json({
+    reviews: rows.map((row) => {
+      const context = (row.context ?? {}) as Record<string, unknown>;
+      const response = (row.response ?? {}) as Record<string, unknown>;
+      return {
+        request_id: Number(row.id),
+        captured_at: typeof context["captured_at"] === "string" ? context["captured_at"] : new Date(row.created_at).toISOString(),
+        read_at: row.completed_at ? new Date(row.completed_at).toISOString() : null,
+        exam_id: positiveInt(context["exam_id"]),
+        has_image: typeof context["image_key"] === "string",
+        questions: Array.isArray(response["items"]) ? response["items"].length : 0,
+        // Shown to the teacher as what K9 read, never used to pick a student.
+        ai: {
+          student_code: response["student_code"] ?? null,
+          student_name: response["student_name"] ?? null,
+          student_confidence: response["student_confidence"] ?? null,
+        },
+      };
+    }),
+  });
+});
+
+/**
+ * GET /v1/teacher-lens/frame/:id/image
+ * The photograph behind a reading, so the teacher checks the paper itself and
+ * not only what K9 says is on it.
+ */
+router.get("/v1/teacher-lens/frame/:id/image", requireTeacher, async (req, res) => {
+  const request = await reviewableRequest(req, positiveInt(req.params.id));
+  const key = request ? text(request.context?.["image_key"], 300) : null;
+  if (!key) {
+    res.status(404).json({ error: "lens_image_not_found" });
+    return;
+  }
+  const framesDir = resolve(process.env["KOBEAI_LENS_FRAMES_DIR"] ?? "/var/lib/kobeai/lens-frames");
+  const file = resolve(framesDir, key);
+  if (!file.startsWith(framesDir + sep)) {
+    res.status(404).json({ error: "lens_image_not_found" });
+    return;
+  }
+  try {
+    const bytes = await readFile(file);
+    res.set("content-type", "image/jpeg").set("cache-control", "private, max-age=300").send(bytes);
+  } catch {
+    res.status(404).json({ error: "lens_image_not_found" });
+  }
+});
+
+/**
+ * POST /v1/teacher-lens/frame/:id/dismiss
+ * Set a reading aside without recording anything: a blurred frame, a second
+ * photograph of a paper already saved, the wrong sheet.
+ */
+router.post("/v1/teacher-lens/frame/:id/dismiss", requireTeacher, async (req, res) => {
+  await ensureTables();
+  const request = await reviewableRequest(req, positiveInt(req.params.id));
+  if (!request) {
+    res.status(404).json({ error: "lens_request_not_found" });
+    return;
+  }
+  await pool.query(
+    `INSERT INTO teacher_lens_reviews (request_id, teacher_user_id, decision, ai_reading)
+     VALUES ($1, $2, 'dismissed', $3::jsonb)
+     ON CONFLICT (request_id) DO NOTHING`,
+    [request.id, req.auth?.user_id ?? null, JSON.stringify(aiReading(request))],
+  );
+  const { rows } = await pool.query(`SELECT decision FROM teacher_lens_reviews WHERE request_id = $1`, [request.id]);
+  res.json({ request_id: request.id, decision: rows[0]?.decision ?? null });
+});
+
+/** The reply for a reading that was already decided: what was saved then. */
+async function alreadyReviewed(requestId: number): Promise<Record<string, unknown> | null> {
+  const { rows } = await pool.query(`SELECT * FROM teacher_lens_reviews WHERE request_id = $1`, [requestId]);
+  const review = rows[0];
+  if (!review) return null;
+  const paper = review.graded_paper_id
+    ? (await pool.query(`SELECT * FROM graded_papers WHERE id = $1`, [review.graded_paper_id])).rows[0] ?? null
+    : null;
+  const result = review.graded_paper_id
+    ? (await pool.query(`SELECT * FROM exam_results WHERE graded_paper_id = $1`, [review.graded_paper_id])).rows[0] ?? null
+    : null;
+  return {
+    duplicate: true,
+    decision: review.decision,
+    confirmed_student_code: review.confirmed_student_code,
+    paper,
+    summary: paper
+      ? { total: paper.total_questions, correct: paper.correct_count, incorrect: paper.incorrect_count, score_percent: paper.score_percent }
+      : null,
+    result: result ? { ...result, marks: Number(result.marks), percent: Number(result.percent) } : null,
+  };
+}
+
 /**
  * POST /v1/teacher-lens/paper-graded
  * Ingest one graded paper. Body:
@@ -257,7 +418,13 @@ router.post("/v1/teacher-lens/session/:id/end", requireTeacher, async (req, res)
  *       }, ...
  *     ],
  *     paper_image_key?: string,
- *     metadata?: object
+ *     metadata?: object,
+ *     // Saving a paper K9 read from a photograph: the id of that reading.
+ *     // The student_code above is then the teacher's confirmation of whose
+ *     // paper it is. K9's own reading of the name is kept alongside, never
+ *     // used in its place, and the reading can be saved only once — a second
+ *     // save answers 200 { duplicate: true } with what the first recorded.
+ *     lens_request_id?: number
  *   }
  *
  * Client can call this from the phone with structured input (either the
@@ -271,6 +438,20 @@ router.post("/v1/teacher-lens/paper-graded", requireTeacher, async (req, res) =>
   if (!studentCode) {
     res.status(400).json({ error: "student_code required" });
     return;
+  }
+  const lensRequestId = positiveInt(body.lens_request_id);
+  let reading: VisionAnalysisRequest | null = null;
+  if (body.lens_request_id !== undefined && body.lens_request_id !== null) {
+    reading = await reviewableRequest(req, lensRequestId);
+    if (!reading || reading.status !== "completed") {
+      res.status(404).json({ error: "lens_request_not_found" });
+      return;
+    }
+    const earlier = await alreadyReviewed(reading.id);
+    if (earlier) {
+      res.status(200).json(earlier);
+      return;
+    }
   }
   const examId = positiveInt(body.exam_id);
   const marksObtained =
@@ -317,10 +498,25 @@ router.post("/v1/teacher-lens/paper-graded", requireTeacher, async (req, res) =>
     }
   }
 
-  const sessionId = Number.isFinite(Number(body.session_id)) ? Number(body.session_id) : null;
+  const sessionId = positiveInt(body.session_id);
   const subject = text(body.subject, 200) ?? exam?.subject ?? null;
   const assessment = text(body.assessment_title, 300) ?? exam?.title ?? null;
-  const paperImage = text(body.paper_image_key, 300);
+  // For a camera reading the photograph and its time come from the reading
+  // itself, not from whatever the client says they were.
+  const paperImage = reading ? text(reading.context?.["image_key"], 300) : text(body.paper_image_key, 300);
+  const capturedAt = reading && typeof reading.context?.["captured_at"] === "string" ? String(reading.context["captured_at"]) : null;
+  const review = reading
+    ? {
+        lens_request_id: reading.id,
+        capture_id: reading.context?.["capture_id"] ?? null,
+        // What K9 believed, untouched.
+        ai: aiReading(reading),
+        // What a person decided, and who.
+        confirmed_student_code: studentCode,
+        confirmed_by: req.auth?.user_id ?? null,
+        confirmed_at: new Date().toISOString(),
+      }
+    : null;
 
   let correct = 0;
   let incorrect = 0;
@@ -348,12 +544,29 @@ router.post("/v1/teacher-lens/paper-graded", requireTeacher, async (req, res) =>
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    if (reading && review) {
+      // Claim the reading before recording anything. Two confirmations sent
+      // at once both reach this line; the second waits on the first's row,
+      // then finds it and stops, so one paper and one result exist.
+      const claimed = await client.query(
+        `INSERT INTO teacher_lens_reviews (request_id, teacher_user_id, decision, confirmed_student_code, ai_reading)
+         VALUES ($1, $2, 'confirmed', $3, $4::jsonb)
+         ON CONFLICT (request_id) DO NOTHING
+         RETURNING request_id`,
+        [reading.id, req.auth?.user_id ?? null, studentCode, JSON.stringify(review.ai)],
+      );
+      if (claimed.rows.length === 0) {
+        await client.query("ROLLBACK");
+        res.status(200).json((await alreadyReviewed(reading.id)) ?? { duplicate: true });
+        return;
+      }
+    }
     const paper = await client.query(
       `INSERT INTO graded_papers (
          session_id, teacher_user_id, student_code, class_id, subject,
          assessment_title, total_questions, correct_count, incorrect_count,
-         score_percent, paper_image_key, metadata
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb)
+         score_percent, paper_image_key, metadata, graded_at
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, COALESCE($13::timestamptz, NOW()))
        RETURNING *`,
       [
         sessionId,
@@ -370,10 +583,15 @@ router.post("/v1/teacher-lens/paper-graded", requireTeacher, async (req, res) =>
         JSON.stringify({
           ...(body.metadata && typeof body.metadata === "object" ? body.metadata : {}),
           ...(exam ? { exam_id: exam.id } : {}),
+          ...(review ? { source: "glasses_camera_reviewed", review } : {}),
         }),
+        capturedAt,
       ],
     );
     const paperId = Number(paper.rows[0].id);
+    if (reading) {
+      await client.query(`UPDATE teacher_lens_reviews SET graded_paper_id = $2 WHERE request_id = $1`, [reading.id, paperId]);
+    }
     for (const it of items) {
       await client.query(
         `INSERT INTO graded_paper_items (
@@ -634,6 +852,13 @@ export async function onLensRequestCompleted(request: VisionAnalysisRequest): Pr
         teacherUserId: request.requested_by,
       });
       if (result.status === "recorded") {
+        await pool
+          .query(
+            `INSERT INTO teacher_lens_reviews (request_id, teacher_user_id, decision, graded_paper_id, confirmed_student_code, ai_reading)
+             VALUES ($1, NULL, 'auto_recorded', $2, NULL, $3::jsonb) ON CONFLICT (request_id) DO NOTHING`,
+            [request.id, result.paperId ?? null, JSON.stringify(aiReading(request))],
+          )
+          .catch(() => undefined);
         await say(`Recorded ${result.studentCode ?? "student"} exam marking.`, 6);
       } else if (result.status === "needs_confirmation") {
         await say("K9 found the paper but needs student confirmation before saving it permanently.", 3);

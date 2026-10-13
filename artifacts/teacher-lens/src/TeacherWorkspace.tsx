@@ -2,6 +2,17 @@ import { useEffect, useRef, useState } from "react";
 import "./workspace.css";
 import type { QueuedFrame, QueueStatus } from "./uploadQueue";
 
+/** A paper K9 has read that is waiting for the teacher to say whose it is. */
+export type PaperReview = {
+  request_id: number;
+  captured_at: string;
+  read_at: string | null;
+  exam_id: number | null;
+  has_image: boolean;
+  questions: number;
+  /** What K9 read. Shown to the teacher; never used to choose a student. */
+  ai: { student_code: string | null; student_name: string | null; student_confidence: number | null };
+};
 export type TeacherAuth = {
   api_base: string;
   token: string;
@@ -136,6 +147,8 @@ export function TeacherWorkspace({
   connected,
   source,
   queue,
+  reviews,
+  onReview,
   onRetry,
   onRetryNow,
   onDiscard,
@@ -151,6 +164,8 @@ export function TeacherWorkspace({
   source: string | null;
   /** This account's captures stored on the phone, newest first. */
   queue: { frames: QueuedFrame[]; status: QueueStatus; otherAccounts: number };
+  reviews: PaperReview[];
+  onReview: (review: PaperReview) => void;
   /** Put one failed capture (or, with no id, all of them) back in line. */
   onRetry: (id?: string) => void;
   /** Stop waiting out the backoff and try the server again now. */
@@ -840,6 +855,38 @@ export function TeacherWorkspace({
               school server accepts it, including after the app is closed. A
               processed capture is not a submitted grade.
             </p>
+            {reviews.length > 0 && (
+              <section aria-label="Papers to review" className="teacher-queue">
+                <div className="teacher-section-title">
+                  <h3>
+                    {reviews.length} paper{reviews.length === 1 ? "" : "s"} to
+                    review
+                  </h3>
+                </div>
+                <p className="teacher-muted">
+                  K9 has read these. No result is recorded until you choose
+                  the student and save.
+                </p>
+                {reviews.map((r) => (
+                  <article className="teacher-period" key={r.request_id}>
+                    <span>{clock(Date.parse(r.captured_at))}</span>
+                    <div>
+                      <strong>
+                        {r.questions} question{r.questions === 1 ? "" : "s"} read
+                      </strong>
+                      <small>
+                        {r.ai.student_name || r.ai.student_code
+                          ? `K9 read “${r.ai.student_name ?? r.ai.student_code}” on the paper · not confirmed`
+                          : "K9 could not read a name · choose the student"}
+                      </small>
+                      <div className="connection-actions">
+                        <button onClick={() => onReview(r)}>Review</button>
+                      </div>
+                    </div>
+                  </article>
+                ))}
+              </section>
+            )}
             {queue.status.needsSignIn && (
               <p role="alert" className="teacher-queue-alert">
                 The school server no longer accepts this sign-in, so uploads
@@ -923,7 +970,7 @@ export function TeacherWorkspace({
                 teacher signs in again.
               </p>
             )}
-            {!queue.frames.length && (
+            {!queue.frames.length && !reviews.length && (
               <p>No captures sent yet. Open Lens to begin.</p>
             )}
             {captures.map((c) => (

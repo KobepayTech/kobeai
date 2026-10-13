@@ -38,6 +38,15 @@ version offers the phone camera and explains where to connect Rokid.
 - A lookup more than two minutes old is refused by the server (410) and held
   back by the phone; it is never whispered late. It can be removed, not
   retried. Marking frames do not expire.
+- Papers to review: a paper K9 has read is not a result. Activity lists each
+  reading; Review shows the photograph, the marks K9 read and the name or code
+  it read on the paper. That reading is displayed, never applied: the teacher
+  picks the student from the exam's class, ticks that they have checked the
+  paper, and saves. The server records one result per reading (a second save
+  answers `duplicate`), keeps K9's reading (`metadata.review.ai`,
+  `teacher_lens_reviews.ai_reading`) apart from who confirmed which student,
+  and stores K9's proposed mark beside the teacher's on each question. A
+  photograph can also be set aside without recording anything.
 - Queued photos belong to the school server and teacher that captured them and
   are only uploaded under that same sign-in. Another teacher on the same phone
   sees a count, not the photos.

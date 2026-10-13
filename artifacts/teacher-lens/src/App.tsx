@@ -1,6 +1,6 @@
 import { useServerConnection } from "./serverConnection";
 import { Connections } from "./Connections";
-import { TeacherWorkspace } from "./TeacherWorkspace";
+import { TeacherWorkspace, type PaperReview } from "./TeacherWorkspace";
 import { assertRoom, discardFrame, enqueueFrame, ownerKey, retryFrames, retryNow, settled, startUploads, useUploadQueue } from "./uploadQueue";
 import { useCamera } from "./camera";
 import { captureGlasses, GlassesControl, speakThroughGlasses } from "./glasses";
@@ -426,6 +426,10 @@ type LensExam = {
 type ExamStudent = { student_id: number; name: string; student_code: string | null; marks: number | null };
 
 type PaperGraded = {
+  /** This reading had already been decided; nothing new was recorded. */
+  duplicate?: boolean;
+  decision?: "confirmed" | "dismissed" | "auto_recorded";
+  confirmed_student_code?: string | null;
   summary: { total: number; correct: number; score_percent: number | null };
   result: null | {
     marks: number;
@@ -477,16 +481,52 @@ function MarkPanel({
   auth,
   sessionId,
   paper,
+  review,
+  onReviewed,
   onClose,
 }: {
   auth: StoredAuth;
   sessionId: number | null;
   /** The photo taken with the shutter, queued for the K9 brain to read. */
   paper: { requestId: number | null; imageKey: string | null };
+  /**
+   * Set when the sheet is confirming a paper K9 read from a photograph. The
+   * teacher then has to choose the student themselves and say so before
+   * anything is recorded; what K9 read is shown, never applied.
+   */
+  review?: PaperReview;
+  /** A review was saved or set aside: close and say what happened. */
+  onReviewed?: (message: string) => void;
   onClose: () => void;
 }) {
   const [exams, setExams] = useState<LensExam[]>([]);
-  const [examId, setExamId] = useState<number | null>(storedExamId);
+  const [examId, setExamId] = useState<number | null>(() => review?.exam_id ?? storedExamId());
+  const [checked, setChecked] = useState(false);
+  const [photo, setPhoto] = useState<string | null>(null);
+  // K9's own reading of each question, kept so the saved paper records where
+  // the teacher's mark differs from it.
+  const aiItems = useRef(new Map<number, ReadItem>());
+  const [aiStudent, setAiStudent] = useState<{ name: string | null; code: string | null } | null>(
+    review ? { name: review.ai.student_name, code: review.ai.student_code } : null,
+  );
+
+  useEffect(() => {
+    if (!review || !paper.requestId) return;
+    let cancelled = false;
+    let url: string | null = null;
+    fetch(`${auth.api_base}/api/v1/teacher-lens/frame/${paper.requestId}/image`, { headers: { authorization: `Bearer ${auth.token}` } })
+      .then((response) => (response.ok ? response.blob() : null))
+      .then((blob) => {
+        if (!blob || cancelled) return;
+        url = URL.createObjectURL(blob);
+        setPhoto(url);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [auth, paper.requestId, review]);
   const [students, setStudents] = useState<ExamStudent[]>([]);
   const [studentCode, setStudentCode] = useState("");
   const [marksObtained, setMarksObtained] = useState("");
@@ -521,14 +561,18 @@ function MarkPanel({
 
   useEffect(() => {
     try {
-      if (examId) localStorage.setItem(EXAM_STORAGE_KEY, String(examId));
+      // Reviewing an old paper must not change which exam new photographs are
+      // captured for.
+      if (review) {
+        /* leave the stored exam alone */
+      } else if (examId) localStorage.setItem(EXAM_STORAGE_KEY, String(examId));
       else localStorage.removeItem(EXAM_STORAGE_KEY);
     } catch {
       // storage unavailable — the picker still works for this sheet
     }
     setStudents([]);
     if (examId) loadStudents(examId);
-  }, [examId, loadStudents]);
+  }, [examId, loadStudents, review]);
 
   // The brain reads the photo in the background; its answers fill the sheet
   // for the teacher to check before saving.
@@ -565,15 +609,17 @@ function MarkPanel({
               }))
             : prev,
         );
-        const codeOnPaper = result.response?.student_code;
-        if (codeOnPaper) setStudentCode((code) => code || codeOnPaper);
+        for (const it of found) aiItems.current.set(Number(it.question_number), it);
+        // What K9 read about whose paper this is goes on screen as a reading.
+        // It is never put in the student field: a name on a page is a guess
+        // until the teacher has looked at the paper.
+        setAiStudent({ name: result.response?.student_name ?? null, code: result.response?.student_code ?? null });
         const total = result.response?.total_marks_awarded;
         if (total != null) setMarksObtained((marks) => marks || String(total));
         setReadState("read");
         setReadNote(
           `Kobe read ${found.length} answer${found.length === 1 ? "" : "s"}` +
-            (result.response?.student_name ? ` for ${result.response.student_name}` : "") +
-            " — check them before saving.",
+            " — check them against the paper before saving.",
         );
         return;
       }
@@ -618,13 +664,33 @@ function MarkPanel({
         subject: exam ? undefined : subject.trim() || undefined,
         assessment_title: exam ? undefined : assessment.trim() || undefined,
         paper_image_key: paperImageKey ?? undefined,
-        items: filled.map(({ marks_awarded, marks_possible, ...it }) => ({
-          ...it,
-          marks_awarded: num(marks_awarded),
-          marks_possible: num(marks_possible),
-        })),
+        // Saving a paper K9 read: the server records it once per reading and
+        // keeps K9's own reading beside the teacher's choice of student.
+        lens_request_id: review ? paper.requestId : undefined,
+        items: filled.map(({ marks_awarded, marks_possible, ...it }) => {
+          const ai = aiItems.current.get(it.question_number);
+          return {
+            ...it,
+            marks_awarded: num(marks_awarded),
+            marks_possible: num(marks_possible),
+            ...(ai ? { metadata: { ai_is_correct: ai.is_correct ?? undefined, ai_marks_awarded: ai.marks_awarded ?? undefined } } : {}),
+          };
+        }),
       };
       const r = await apiPost<PaperGraded>(auth, "/v1/teacher-lens/paper-graded", payload);
+      if (review && onReviewed) {
+        const name = students.find((s) => s.student_code === code)?.name ?? code;
+        onReviewed(
+          r.duplicate
+            ? r.decision === "dismissed"
+              ? "This paper was already set aside. Nothing was recorded."
+              : `This paper was already saved${r.confirmed_student_code ? ` for ${r.confirmed_student_code}` : ""}. Nothing was recorded twice.`
+            : r.result
+              ? `Saved for ${name}: ${r.result.marks}/${r.result.exam.total_marks} (${r.result.percent}%).`
+              : `Saved for ${name}: ${r.summary.correct} of ${r.summary.total}.`,
+        );
+        return;
+      }
       if (r.result) {
         // The server whispers the result through the earbud. Keep the sheet
         // open on the same exam so the next paper is one tap away.
@@ -676,7 +742,22 @@ function MarkPanel({
   return (
     <div className="lens-sheet" onClick={onClose}>
       <div className="lens-sheet-body" onClick={(e) => e.stopPropagation()}>
-        <h2>Mark paper</h2>
+        <h2>{review ? "Review paper" : "Mark paper"}</h2>
+        {review && (
+          <>
+            <p>
+              Photographed {new Date(review.captured_at).toLocaleString([], { hour: "2-digit", minute: "2-digit", day: "numeric", month: "short" })}.
+              Nothing is recorded until you choose the student and save.
+            </p>
+            {photo ? (
+              <a href={photo} target="_blank" rel="noreferrer">
+                <img className="mark-paper-photo" src={photo} alt="The photographed paper" />
+              </a>
+            ) : (
+              <div className="mark-error">The photograph could not be loaded. Check the marks against the paper itself.</div>
+            )}
+          </>
+        )}
         <label className="mark-label">Exam</label>
         <select
           className="mark-input"
@@ -711,11 +792,17 @@ function MarkPanel({
         )}
 
         <label className="mark-label">Student</label>
+        {aiStudent && (aiStudent.name || aiStudent.code) && (
+          <div className="mark-reading" role="note">
+            K9 read on the paper: {[aiStudent.name && `name “${aiStudent.name}”`, aiStudent.code && `code “${aiStudent.code}”`].filter(Boolean).join(", ")}.
+            This is not confirmed. Choose the student yourself.
+          </div>
+        )}
         {exam && pickable.length > 0 && (
           <select
             className="mark-input"
             value={pickable.some((s) => s.student_code === studentCode) ? studentCode : ""}
-            onChange={(e) => setStudentCode(e.target.value)}
+            onChange={(e) => { setStudentCode(e.target.value); setChecked(false); }}
           >
             <option value="">Pick a student…</option>
             {pickable.map((s) => (
@@ -729,7 +816,7 @@ function MarkPanel({
         <input
           className="mark-input"
           value={studentCode}
-          onChange={(e) => setStudentCode(e.target.value)}
+          onChange={(e) => { setStudentCode(e.target.value); setChecked(false); }}
           placeholder={exam ? "Or type a student code" : "K9-002"}
         />
         {exam ? (
@@ -813,10 +900,37 @@ function MarkPanel({
         <button className="mark-add" onClick={() => setItems((p) => [...p, newItem(p.length + 1)])}>
           + Add another question
         </button>
+        {review && studentCode.trim() && (
+          <label className="mark-check">
+            <input type="checkbox" checked={checked} onChange={(e) => setChecked(e.target.checked)} />
+            I have checked the paper: it belongs to{" "}
+            {students.find((s) => s.student_code === studentCode.trim())?.name ?? studentCode.trim()} and these marks are mine.
+          </label>
+        )}
         <div className="mark-actions">
-          <button className="mark-primary" onClick={submit} disabled={busy || !studentCode.trim()}>
-            {busy ? "Sending…" : exam ? "Record result" : "Send to KobeAI"}
+          <button className="mark-primary" onClick={submit} disabled={busy || !studentCode.trim() || (!!review && !checked)}>
+            {busy ? "Sending…" : review ? "Confirm student and save result" : exam ? "Record result" : "Send to KobeAI"}
           </button>
+          {review && onReviewed && (
+            <button
+              className="mark-ghost"
+              disabled={busy}
+              onClick={async () => {
+                if (!window.confirm("Set this photograph aside? No result will be recorded from it.")) return;
+                setBusy(true);
+                try {
+                  await apiPost(auth, `/v1/teacher-lens/frame/${paper.requestId}/dismiss`, {});
+                  onReviewed("Photograph set aside. Nothing was recorded.");
+                } catch (err) {
+                  setError(errorDetail(err));
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              Not a paper to save
+            </button>
+          )}
           <button className="mark-ghost" onClick={onClose}>{lastResult ? "Done" : "Cancel"}</button>
         </div>
       </div>
@@ -865,7 +979,9 @@ export function App() {
   const [mode, setMode] = useState<Mode>("lookup");
   const [sessionId, setSessionId] = useState<number | null>(null);
   const [lookupBrief, setLookupBrief] = useState<StudentBrief | null>(null);
-  const [markOpen, setMarkOpen] = useState<null | { requestId: number | null; imageKey: string | null }>(null);
+  const [markOpen, setMarkOpen] = useState<null | { requestId: number | null; imageKey: string | null; review?: PaperReview }>(null);
+  const [reviews, setReviews] = useState<PaperReview[]>([]);
+  const [reviewsStamp, setReviewsStamp] = useState(0);
   const [toast, setToast] = useState<string | null>(null);
   const [wakeWordOn, setWakeWordOn] = useState<boolean>(false);
   const [studentPicker, setStudentPicker] = useState<null | {
@@ -910,6 +1026,30 @@ export function App() {
   }, [auth, mode, sessionId]);
 
   useWhisperPoll(auth ?? ({ api_base: "", token: "", teacher_name: "" } as StoredAuth), sessionId);
+
+  // Papers K9 has read that are waiting for this teacher to confirm whose
+  // they are. Refreshed while signed in, and at once after a decision or a
+  // finished upload.
+  const uploadedCount = queue.frames.filter((f) => f.state === "done").length;
+  useEffect(() => {
+    if (!auth) {
+      setReviews([]);
+      return;
+    }
+    let stopped = false;
+    const load = async () => {
+      const r = await apiGet<{ reviews: PaperReview[] }>(auth, "/v1/teacher-lens/reviews").catch(() => null);
+      // A server without the review route answers 404 (null here); anything
+      // that is not a list is treated the same way.
+      if (!stopped && r) setReviews(Array.isArray(r.reviews) ? r.reviews : []);
+    };
+    void load();
+    const timer = window.setInterval(load, 20_000);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [auth, reviewsStamp, uploadedCount]);
 
   // Upload whatever this account has stored on the phone — including frames
   // from before the app was last closed — for as long as it stays signed in.
@@ -1132,7 +1272,7 @@ export function App() {
             authRef.current = null;
             setGlassesSource(null);
             setGlassesConnected(false);
-            setCaptureProblem(null); setWorkspaceOpen(true); setWakeWordOn(false);
+            setCaptureProblem(null); setReviews([]); setWorkspaceOpen(true); setWakeWordOn(false);
             clearAuth();
             setAuth(null);
             setConnectionsOpen(false);
@@ -1226,7 +1366,8 @@ export function App() {
         </button>
       </div>
 
-      {workspaceOpen && <TeacherWorkspace serverStatus={serverStatus} auth={auth} connected={glassesConnected} source={glassesSource} queue={queue}
+      {workspaceOpen && <TeacherWorkspace serverStatus={serverStatus} auth={auth} connected={glassesConnected} source={glassesSource} queue={queue} reviews={reviews}
+        onReview={(review) => { setWorkspaceOpen(false); setMarkOpen({ requestId: review.request_id, imageKey: null, review }); }}
         onRetry={(id) => void retryFrames(ownerKey(auth), id)} onRetryNow={retryNow} onDiscard={(id) => void discardFrame(id)}
         onConnections={() => setConnectionsOpen(true)} onClose={() => setWorkspaceOpen(false)} onCapture={next => { setMode(next); setWorkspaceOpen(false); }} onSpeak={speak} />}
       {toast && <div className="lens-toast">{toast}</div>}
@@ -1287,7 +1428,9 @@ export function App() {
       )}
 
       <LookupPanel auth={auth} sessionId={sessionId} onClose={() => setLookupBrief(null)} brief={lookupBrief} />
-      {markOpen && <MarkPanel auth={auth} sessionId={sessionId} paper={markOpen} onClose={() => setMarkOpen(null)} />}
+      {markOpen && <MarkPanel key={markOpen.requestId ?? "new"} auth={auth} sessionId={sessionId} paper={markOpen} review={markOpen.review}
+        onReviewed={(message) => { setMarkOpen(null); setToast(message); setReviewsStamp((n) => n + 1); setWorkspaceOpen(true); }}
+        onClose={() => { const reviewing = !!markOpen.review; setMarkOpen(null); if (reviewing) setWorkspaceOpen(true); }} />}
     </div>
   );
 }
