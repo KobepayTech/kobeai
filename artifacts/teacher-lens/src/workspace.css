@@ -639,3 +639,17 @@
     display: none;
   }
 }
+
+/* Capture queue (Activity tab) */
+.teacher-queue-alert,
+.teacher-frame-failed {
+  border: 1px solid rgba(239, 71, 111, 0.5);
+  background: rgba(239, 71, 111, 0.12);
+  border-radius: 12px;
+}
+.teacher-queue-alert {
+  padding: 12px 14px;
+}
+.teacher-frame-failed .connection-actions {
+  margin-top: 8px;
+}

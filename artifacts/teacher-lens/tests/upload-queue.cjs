@@ -1,0 +1,405 @@
+// The durable upload queue, driven through the built Lens in a mobile browser.
+//
+// Run like workspace.cjs: serve dist/public on 127.0.0.1:5178, then
+//   NODE_PATH=<playwright>/node_modules node tests/upload-queue.cjs
+//
+// The school server is a route mock that can be switched off (requests fail at
+// the network, as on a dropped Wi-Fi), made to lose its reply, or made to
+// refuse. Everything else is the real app: real IndexedDB, a real reload for
+// "the app was closed", and Chromium's fake camera for the phone-camera path.
+
+const { chromium } = require("playwright");
+const assert = require("node:assert/strict");
+
+const BASE = process.env.LENS_URL ?? "http://127.0.0.1:5178";
+const token = (userId) =>
+  `e30.${Buffer.from(JSON.stringify({ sub: String(userId) })).toString("base64url")}.sig`;
+const ASHA = token(7);
+const BARAKA = token(8);
+
+/** A school server. `frames` is what it accepted; `attempts` is everything it was sent. */
+function school() {
+  const server = {
+    mode: "up", // up | down | lose-reply | refuse | expired
+    attempts: [],
+    processed: new Map(), // capture id -> request id
+    nextRequestId: 500,
+    logins: { "asha@school.tz": ASHA, "baraka@school.tz": BARAKA },
+  };
+  server.route = async (route) => {
+    const req = route.request();
+    const path = new URL(req.url()).pathname;
+    if (path.includes("/whisper/next")) return route.fulfill({ status: 204 });
+    if (path.endsWith("/auth/teacher/login")) {
+      const { email } = JSON.parse(req.postData());
+      return route.fulfill({ json: { access_token: server.logins[email], teacher_name: email.split("@")[0] } });
+    }
+    if (path.endsWith("/teacher-lens/frame") && req.method() === "POST") {
+      const headers = req.headers();
+      const attempt = { captureId: headers["x-lens-capture-id"], auth: headers.authorization, mode: headers["x-lens-mode"] };
+      server.attempts.push(attempt);
+      if (server.mode === "down") return route.abort("connectionfailed");
+      if (server.mode === "expired") return route.fulfill({ status: 401, json: { error: "expired" } });
+      if (server.mode === "refuse") return route.fulfill({ status: 400, json: { error: "empty or too-small image body" } });
+      // Idempotency, as api-server lib/lens-capture.ts implements it.
+      const seen = server.processed.get(attempt.captureId);
+      if (seen) return route.fulfill({ status: 200, json: { request: { id: seen }, image_key: `k/${seen}.jpg`, duplicate: true } });
+      const id = ++server.nextRequestId;
+      server.processed.set(attempt.captureId, id);
+      if (server.mode === "lose-reply") {
+        server.mode = "up";
+        return route.abort("connectionreset");
+      }
+      return route.fulfill({ status: 202, json: { request: { id }, image_key: `k/${id}.jpg` } });
+    }
+    if (/\/teacher-lens\/frame\/\d+$/.test(path)) return route.fulfill({ json: { status: "completed" } });
+    if (path.endsWith("/session")) return route.fulfill({ json: { session: { id: 10 } } });
+    if (path.endsWith("/teacher/students")) return route.fulfill({ json: { students: [{ student_id: "K9-001", name: "Neema" }] } });
+    return route.fulfill({ json: { current_period: null, upcoming_periods: [] } });
+  };
+  return server;
+}
+
+const signedIn = (page, bearer) =>
+  page.addInitScript((value) => {
+    if (!sessionStorage.getItem("seeded")) {
+      localStorage.setItem("k9-lens.auth", JSON.stringify({ api_base: location.origin, token: value, teacher_name: "Asha" }));
+      sessionStorage.setItem("seeded", "1");
+    }
+  }, bearer);
+
+/** Open the lens; on the phone-camera path, wait until the camera has a picture. */
+const openLens = async (page, phoneCamera = true) => {
+  await page.getByRole("button", { name: /Student insights/ }).click();
+  if (phoneCamera) await page.waitForFunction(() => document.querySelector("video")?.videoWidth > 0);
+};
+const shutter = (page) => page.getByRole("button", { name: "Capture / check frame" }).click();
+const closeSheet = (page) => page.getByRole("button", { name: "Cancel", exact: true }).click();
+const openActivity = async (page) => {
+  if (!(await page.getByRole("tab", { name: "Activity", exact: true }).isVisible()))
+    await page.getByRole("button", { name: "Teacher workspace" }).click();
+  await page.getByRole("tab", { name: "Activity", exact: true }).click();
+};
+const stored = (page) =>
+  page.evaluate(
+    () =>
+      new Promise((resolve, reject) => {
+        const open = indexedDB.open("k9-lens-uploads");
+        open.onerror = () => reject(open.error);
+        open.onsuccess = () => {
+          const all = open.result.transaction("frames").objectStore("frames").getAll();
+          all.onsuccess = () => resolve(all.result);
+        };
+      }),
+  );
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Take one lookup photo while the server is unreachable, leaving it queued. */
+async function captureWhileDown(page, server) {
+  server.mode = "down";
+  await shutter(page);
+  await page.getByText(/saved on this phone but has not reached the school server/).waitFor({ timeout: 15_000 });
+  await closeSheet(page);
+}
+
+(async () => {
+  const browser = await chromium.launch({
+    headless: true,
+    args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"],
+  });
+  const passed = [];
+  async function scenario(name, run) {
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, permissions: ["camera"] });
+    const page = await context.newPage();
+    const errors = [];
+    page.on("pageerror", (e) => errors.push(e.message));
+    const server = school();
+    await page.route("**/api/**", server.route);
+    try {
+      await run(page, server);
+      assert.deepEqual(errors, [], "no uncaught page errors");
+      passed.push(name);
+    } catch (error) {
+      error.message = `[${name}] ${error.message}`;
+      throw error;
+    } finally {
+      await context.close();
+    }
+  }
+
+  await scenario("outage recovery", async (page, server) => {
+    await signedIn(page, ASHA);
+    await page.goto(BASE);
+    await openLens(page);
+    await captureWhileDown(page, server);
+    await page.getByText(/1 photo saved on this phone, waiting to upload/).waitFor();
+    const [frame] = await stored(page);
+    assert.equal(frame.state, "pending", "an unsent frame stays stored");
+    await openActivity(page);
+    await page.getByText("1 waiting to upload").waitFor();
+    await page.getByText(/Student lookup · pending/).waitFor();
+
+    server.mode = "up";
+    await page.getByRole("button", { name: "Try now" }).click();
+    await page.getByText(/Student lookup · completed/).waitFor();
+    await page.getByText(/#501/).waitFor();
+    assert.equal(server.processed.size, 1, "the frame reached the server once");
+    assert.ok(server.attempts.length >= 2, "it was attempted during the outage and again after");
+    assert.equal(new Set(server.attempts.map((a) => a.captureId)).size, 1, "every attempt carried the same capture id");
+    assert.match(server.attempts[0].captureId, /^[A-Za-z0-9_-]{16,64}$/);
+    assert.equal((await stored(page))[0].state, "done");
+  });
+
+  await scenario("restart recovery", async (page, server) => {
+    await signedIn(page, ASHA);
+    await page.goto(BASE);
+    await openLens(page);
+    await captureWhileDown(page, server);
+    const before = (await stored(page))[0];
+
+    // The app is closed and reopened while the server is still unreachable…
+    await page.reload();
+    await openActivity(page);
+    await page.getByText("1 waiting to upload").waitFor();
+    assert.equal(server.processed.size, 0);
+
+    // …and again once it is back: the upload resumes with nobody pressing anything.
+    server.mode = "up";
+    await page.reload();
+    await openActivity(page);
+    await page.getByText(/Student lookup · completed/).waitFor();
+    assert.deepEqual([...server.processed.keys()], [before.id], "the stored frame, under its original capture id");
+  });
+
+  await scenario("duplicate retries", async (page, server) => {
+    await signedIn(page, ASHA);
+    await page.goto(BASE);
+    await openLens(page);
+    // The server takes the photo but the reply is lost, so the phone cannot
+    // know it arrived and has to send it again.
+    server.mode = "lose-reply";
+    await shutter(page);
+    await page.getByText(/Kobe is recognising the face|Pick the student/).waitFor({ timeout: 15_000 });
+    await closeSheet(page);
+    await openActivity(page);
+    await page.getByText(/#501/).waitFor();
+    assert.ok(server.attempts.length >= 2, "the phone retried");
+    assert.equal(new Set(server.attempts.map((a) => a.captureId)).size, 1, "with the same capture id");
+    assert.equal(server.processed.size, 1, "and the server processed the capture once");
+    assert.equal(server.nextRequestId, 501, "no second vision request was created");
+    assert.equal((await stored(page))[0].requestId, 501, "the phone records the first attempt's result");
+  });
+
+  await scenario("refused upload and retry control", async (page, server) => {
+    await signedIn(page, ASHA);
+    await page.goto(BASE);
+    await openLens(page);
+    server.mode = "refuse";
+    await shutter(page);
+    await page.getByText(/No photo was taken|has not reached the school server/).waitFor({ timeout: 15_000 });
+    await closeSheet(page);
+    await page.getByText(/1 could not be uploaded/).waitFor();
+    await openActivity(page);
+    await page.getByText(/Student lookup · failed/).waitFor();
+    await page.getByText(/refused this photo \(HTTP 400\)/).waitFor();
+    assert.equal((await stored(page))[0].state, "failed", "a refused frame is kept, not dropped");
+    const attemptsWhileFailed = server.attempts.length;
+    await sleep(3000);
+    assert.equal(server.attempts.length, attemptsWhileFailed, "a refused frame is not retried on its own");
+
+    server.mode = "up";
+    await page.getByRole("button", { name: "Retry", exact: true }).click();
+    await page.getByText(/Student lookup · completed/).waitFor();
+  });
+
+  await scenario("account switching", async (page, server) => {
+    await signedIn(page, ASHA);
+    await page.goto(BASE);
+    await openLens(page);
+    await captureWhileDown(page, server);
+    const ashasFrame = (await stored(page))[0];
+    const signIn = async (email) => {
+      await page.getByLabel("Email").fill(email);
+      await page.getByLabel("Password").fill("irrelevant");
+      await page.getByRole("button", { name: "Sign in", exact: true }).click();
+      await page.getByRole("tab", { name: "Activity", exact: true }).waitFor();
+    };
+
+    // Another teacher signs in on the same phone, on a working server.
+    await page.getByRole("button", { name: "Sign out" }).click();
+    server.mode = "up";
+    server.attempts.length = 0;
+    await signIn("baraka@school.tz");
+    await openActivity(page);
+    await page.getByText(/1 photo from a different sign-in is stored on this phone/).waitFor();
+    await page.getByText(/No captures sent yet/).waitFor();
+    assert.equal(await page.getByText(/waiting to upload/).count(), 0, "another teacher's queue is not shown");
+    await sleep(4000);
+    assert.deepEqual(server.attempts, [], "nothing of Asha's was uploaded under Baraka's sign-in");
+    assert.equal((await stored(page))[0].state, "pending", "and it is still stored");
+
+    // Baraka's own capture goes up as Baraka.
+    await page.getByRole("tab", { name: "Today", exact: true }).click();
+    await openLens(page);
+    await shutter(page);
+    await page.getByText(/Kobe is recognising the face|Pick the student/).waitFor({ timeout: 15_000 });
+    await closeSheet(page);
+    assert.deepEqual(server.attempts.map((a) => a.auth), [`Bearer ${BARAKA}`]);
+    assert.notEqual(server.attempts[0].captureId, ashasFrame.id);
+
+    // Asha returns: her frame uploads, under her sign-in.
+    await page.getByRole("button", { name: "Sign out" }).click();
+    server.attempts.length = 0;
+    await signIn("asha@school.tz");
+    await openActivity(page);
+    await page.getByText(/Student lookup · completed/).waitFor();
+    assert.deepEqual(server.attempts, [{ captureId: ashasFrame.id, auth: `Bearer ${ASHA}`, mode: "lookup" }]);
+  });
+
+  await scenario("expired sign-in pauses uploads without losing frames", async (page, server) => {
+    await signedIn(page, ASHA);
+    await page.goto(BASE);
+    await openLens(page);
+    server.mode = "expired";
+    await shutter(page);
+    await page.getByText(/saved on this phone but has not reached the school server/).waitFor({ timeout: 15_000 });
+    await closeSheet(page);
+    await page.getByText(/sign in again to send them/).waitFor();
+    await openActivity(page);
+    await page.getByText(/no longer accepts this sign-in, so uploads\s+are paused/).waitFor();
+    const attempts = server.attempts.length;
+    await sleep(3000);
+    assert.equal(server.attempts.length, attempts, "no retry storm against a server that said no");
+    assert.equal((await stored(page))[0].state, "pending");
+  });
+
+  await scenario("storage full", async (page, server) => {
+    await signedIn(page, ASHA);
+    await page.goto(BASE);
+    await openLens(page);
+    await captureWhileDown(page, server);
+    // Fill the rest of this account's allowance with stored frames.
+    await page.evaluate(
+      () =>
+        new Promise((resolve, reject) => {
+          const open = indexedDB.open("k9-lens-uploads");
+          open.onsuccess = () => {
+            const tx = open.result.transaction(["frames", "images"], "readwrite");
+            const frames = tx.objectStore("frames");
+            const first = frames.getAll();
+            first.onsuccess = () => {
+              const template = first.result[0];
+              for (let i = 1; i < 240; i++) {
+                const id = `filler${String(i).padStart(26, "0")}`;
+                frames.put({ ...template, id, createdAt: template.createdAt + i });
+                tx.objectStore("images").put(new ArrayBuffer(600), id);
+              }
+            };
+            tx.oncomplete = resolve;
+            tx.onerror = () => reject(tx.error);
+          };
+        }),
+    );
+    await shutter(page);
+    await page.getByRole("alert").filter({ hasText: /Capture storage on this phone is full: 240 photos are waiting/ }).waitFor();
+    await sleep(500);
+    const frames = await stored(page);
+    assert.equal(frames.length, 240, "the new photo was refused out loud, and nothing stored was dropped to make room");
+    assert.ok(frames.every((f) => f.state !== "done"));
+  });
+
+  // --- glasses -------------------------------------------------------------
+  /** A native host whose glasses connect (or not) and whose camera can fail. */
+  const nativeHost = (page, options) =>
+    page.addInitScript((opts) => {
+      window.cameraCalls = 0;
+      const realCamera = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+      navigator.mediaDevices.getUserMedia = (constraints) => {
+        window.cameraCalls++;
+        return realCamera(constraints);
+      };
+      window.nativeCalls = [];
+      let connected = false;
+      let provider = null;
+      let enabled = true;
+      window.KobeNative = {
+        postMessage(raw) {
+          const call = JSON.parse(raw);
+          window.nativeCalls.push(call.method);
+          const reply = { id: call.id, result: null };
+          if (call.method === "info") reply.result = { version: 1, providers: ["rokid"], automaticRokid: enabled, connected, provider };
+          if (call.method === "connect") {
+            if (opts.connects) {
+              connected = true;
+              provider = "rokid";
+              reply.result = { capabilities: { camera: true, display: true, speaker: true, speechSynthesis: true } };
+            } else {
+              delete reply.result;
+              reply.error = "Connection failed or cancelled. Check permissions, Bluetooth and the vendor licence.";
+            }
+          }
+          if (call.method === "capture") {
+            delete reply.result;
+            reply.error = "Photo capture failed. Reconnect glasses and try again.";
+          }
+          if (call.method === "pause" || call.method === "forget") {
+            enabled = false;
+            connected = false;
+            provider = null;
+          }
+          if (call.method === "disconnect") {
+            connected = false;
+            provider = null;
+          }
+          setTimeout(() => window.KobeNative.onmessage?.({ data: JSON.stringify(reply) }), 0);
+        },
+      };
+    }, options);
+
+  await scenario("glasses capture failure", async (page, server) => {
+    await signedIn(page, ASHA);
+    await nativeHost(page, { connects: true });
+    await page.goto(BASE);
+    await page.getByText("Rokid Glasses connected", { exact: true }).waitFor();
+    await openLens(page, false);
+    await shutter(page);
+    await page
+      .getByRole("alert")
+      .filter({ hasText: /Rokid Glasses did not return a photo, and the phone camera was not used in their place\..*Reconnect glasses and try again/ })
+      .waitFor();
+    assert.equal(await page.evaluate(() => window.cameraCalls), 0, "the phone camera was never opened");
+    assert.deepEqual(server.attempts, [], "nothing was uploaded in the glasses' place");
+    assert.deepEqual(await stored(page).catch(() => []), [], "and nothing was queued");
+  });
+
+  await scenario("glasses selected but not connected", async (page, server) => {
+    await signedIn(page, ASHA);
+    await nativeHost(page, { connects: false });
+    await page.goto(BASE);
+    await openLens(page, false);
+    await page.getByText(/Rokid Glasses are selected but not connected\. Open Connections/).first().waitFor();
+    await shutter(page);
+    await page.getByRole("alert").filter({ hasText: /selected but not connected, so no photo was taken/ }).waitFor();
+    assert.equal(await page.evaluate(() => window.cameraCalls), 0, "no silent fall back to the phone camera");
+    assert.deepEqual(server.attempts, []);
+
+    // Choosing the phone camera explicitly is still honoured.
+    await page.getByRole("button", { name: "Teacher workspace" }).click();
+    await page.getByRole("button", { name: "Connections: school server and Rokid glasses" }).click();
+    await page.getByLabel("Camera source").selectOption("");
+    await page.getByRole("button", { name: "Connect", exact: true }).click();
+    await page.getByText(/automatic glasses connection paused/).waitFor();
+    await page.getByRole("button", { name: "Done", exact: true }).click();
+    await openLens(page);
+    assert.ok((await page.evaluate(() => window.cameraCalls)) > 0);
+    await shutter(page);
+    await page.getByText(/Kobe is recognising the face|Pick the student/).waitFor({ timeout: 15_000 });
+    assert.equal(server.processed.size, 1, "the explicitly chosen phone camera captures and uploads");
+  });
+
+  await browser.close();
+  console.log(`PASS: ${passed.join(", ")}`);
+})().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});

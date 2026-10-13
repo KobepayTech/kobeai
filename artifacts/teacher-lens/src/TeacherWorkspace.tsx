@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import "./workspace.css";
+import type { QueuedFrame, QueueStatus } from "./uploadQueue";
 
 export type TeacherAuth = {
   api_base: string;
   token: string;
   teacher_name: string;
 };
-export type CaptureActivity = { id: number; mode: string; at: string };
 type Period = {
   period_id: number;
   class_name: string | null;
@@ -135,7 +135,10 @@ export function TeacherWorkspace({
   auth,
   connected,
   source,
-  captures,
+  queue,
+  onRetry,
+  onRetryNow,
+  onDiscard,
   onCapture,
   onClose,
   onSpeak,
@@ -146,7 +149,13 @@ export function TeacherWorkspace({
   auth: TeacherAuth;
   connected: boolean;
   source: string | null;
-  captures: CaptureActivity[];
+  /** This account's captures stored on the phone, newest first. */
+  queue: { frames: QueuedFrame[]; status: QueueStatus; otherAccounts: number };
+  /** Put one failed capture (or, with no id, all of them) back in line. */
+  onRetry: (id?: string) => void;
+  /** Stop waiting out the backoff and try the server again now. */
+  onRetryNow: () => void;
+  onDiscard: (id: string) => void;
   onCapture: (mode: "lookup" | "mark") => void;
   onClose: () => void;
   onSpeak: (text: string) => void;
@@ -255,6 +264,20 @@ export function TeacherWorkspace({
   // The dependency is the *ids* of the unresolved captures, not the objects:
   // this effect calls setStatuses, and depending on `statuses` would restart
   // the timer on every poll — a 4-second interval turned into a hot loop.
+  // Only uploaded captures have a server request to ask about.
+  const captures = queue.frames.flatMap((f) =>
+    f.state === "done" && f.requestId != null
+      ? [{ id: f.requestId, mode: f.mode, at: f.uploadedAt ?? f.createdAt }]
+      : [],
+  );
+  const waitingFrames = queue.frames.filter(
+    (f) => f.state === "pending" || f.state === "uploading",
+  );
+  const failedFrames = queue.frames.filter((f) => f.state === "failed");
+  const clock = (at: number) =>
+    new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const kind = (mode: string) =>
+    mode === "mark" ? "Paper reading" : "Student lookup";
   const unresolvedIds = captures
     .filter((c) => !statuses[c.id] || statuses[c.id] === "pending")
     .map((c) => c.id);
@@ -813,24 +836,99 @@ export function TeacherWorkspace({
               </button>
             </div>
             <p className="teacher-muted">
-              Last 20 accepted captures in this sign-in. Cleared on sign-out or
-              reload. A processed capture is not a submitted grade.
+              Every photo is saved on this phone first and stays here until the
+              school server accepts it, including after the app is closed. A
+              processed capture is not a submitted grade.
             </p>
-            {!captures.length && (
+            {queue.status.needsSignIn && (
+              <p role="alert" className="teacher-queue-alert">
+                The school server no longer accepts this sign-in, so uploads
+                are paused. Your photos are safe on this phone. Use
+                Connections → Change server / sign in, and sign in as the same
+                teacher to send them.
+              </p>
+            )}
+            {(waitingFrames.length > 0 || failedFrames.length > 0) && (
+              <section aria-label="Waiting to upload" className="teacher-queue">
+                <div className="teacher-section-title">
+                  <h3>
+                    {waitingFrames.length} waiting to upload
+                    {failedFrames.length
+                      ? ` · ${failedFrames.length} failed`
+                      : ""}
+                  </h3>
+                  <div className="connection-actions">
+                    <button
+                      disabled={!waitingFrames.length || queue.status.needsSignIn}
+                      onClick={onRetryNow}
+                    >
+                      Try now
+                    </button>
+                    {failedFrames.length > 1 && (
+                      <button onClick={() => onRetry()}>Retry all failed</button>
+                    )}
+                  </div>
+                </div>
+                {failedFrames.map((f) => (
+                  <article className="teacher-period teacher-frame-failed" key={f.id}>
+                    <span>{clock(f.createdAt)}</span>
+                    <div>
+                      <strong>{kind(f.mode)} · failed</strong>
+                      <small>{f.lastError ?? "Upload failed."}</small>
+                      <div className="connection-actions">
+                        <button onClick={() => onRetry(f.id)}>Retry</button>
+                        <button
+                          onClick={() => {
+                            if (
+                              window.confirm(
+                                "Remove this photo from the phone? It has not reached the school server and cannot be recovered.",
+                              )
+                            )
+                              onDiscard(f.id);
+                          }}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  </article>
+                ))}
+                {waitingFrames.map((f) => (
+                  <article className="teacher-period" key={f.id}>
+                    <span>{clock(f.createdAt)}</span>
+                    <div>
+                      <strong>
+                        {kind(f.mode)} ·{" "}
+                        {f.state === "uploading" ? "uploading" : "pending"}
+                      </strong>
+                      <small>
+                        {f.lastError ??
+                          (f.state === "uploading"
+                            ? "Sending to the school server…"
+                            : "Saved on this phone. Next in line.")}
+                      </small>
+                    </div>
+                  </article>
+                ))}
+              </section>
+            )}
+            {queue.otherAccounts > 0 && (
+              <p className="teacher-muted">
+                {queue.otherAccounts} photo
+                {queue.otherAccounts === 1 ? "" : "s"} from a different sign-in
+                {queue.otherAccounts === 1 ? " is" : " are"} stored on this
+                phone. They are not shown here and are only sent when that
+                teacher signs in again.
+              </p>
+            )}
+            {!queue.frames.length && (
               <p>No captures sent yet. Open Lens to begin.</p>
             )}
             {captures.map((c) => (
               <article className="teacher-period" key={c.id}>
-                <span>
-                  {new Date(c.at).toLocaleTimeString([], {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })}
-                </span>
+                <span>{clock(c.at)}</span>
                 <div>
-                  <strong>
-                    {c.mode === "mark" ? "Paper reading" : "Student lookup"}
-                  </strong>
+                  <strong>{kind(c.mode)} · completed</strong>
                   <small>
                     #{c.id} · {statuses[c.id] ?? "Accepted by server"}
                   </small>

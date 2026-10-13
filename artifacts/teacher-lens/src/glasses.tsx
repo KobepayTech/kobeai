@@ -40,10 +40,31 @@ function native(): NativeTransport | null {
   return transport;
 }
 
-/** Returns null only when the wearer explicitly chose the phone camera. */
-export async function captureGlasses(): Promise<Blob | null> {
-  if (!active) return null;
-  const bytes = await active.camera.capture();
+/**
+ * Photograph through the selected glasses, or fail saying why.
+ *
+ * This used to return null whenever no glasses session was open, and the
+ * caller took null to mean "use the phone camera". That was right when the
+ * teacher had chosen the phone, and wrong every other time: glasses selected
+ * but not yet connected, or dropped mid-lesson, quietly became photographs of
+ * whatever the phone in the teacher's pocket was pointing at, filed as exam
+ * evidence. The caller now decides the source from what the teacher selected,
+ * and this never substitutes one camera for another.
+ */
+export async function captureGlasses(model: string): Promise<Blob> {
+  if (!active || active.state !== "connected")
+    throw new Error(
+      `${model} are selected but not connected, so no photo was taken. Open Connections to reconnect them, or choose Phone camera there.`,
+    );
+  let bytes: Uint8Array;
+  try {
+    bytes = await active.camera.capture();
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `${model} did not return a photo, and the phone camera was not used in their place. ${detail}`,
+    );
+  }
   return new Blob([new Uint8Array(bytes)], { type: "image/jpeg" });
 }
 /**
@@ -209,7 +230,16 @@ export function GlassesControl({
         if (!mounted.current) return;
         knownDevices.current = found;
         setDevices(found);
-        setSelected(found.find((d) => d.id === "rokid")?.id ?? "");
+        const preferred = found.find((d) => d.id === "rokid");
+        setSelected(preferred?.id ?? "");
+        // Rokid is preselected in this app, so it is the capture source from
+        // the start. Until it connects, captures fail with a message; they do
+        // not fall back to the phone camera, which only an explicit choice of
+        // "Phone camera" below turns on.
+        if (preferred) {
+          onSource(preferred.model, false);
+          setStatus(`${preferred.model} selected · not connected`);
+        }
         void sync();
       })
       .catch((e) => {

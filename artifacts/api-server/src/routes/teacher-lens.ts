@@ -11,6 +11,7 @@ import {
   getVisionRequest,
   type VisionAnalysisRequest,
 } from "../lib/vision-queue";
+import { claimLensCapture, finishLensCapture, parseCaptureId, releaseLensCapture } from "../lib/lens-capture";
 import { getMergedProfile } from "../lib/learning-profile";
 import {
   generateCuratedNotesForPaper,
@@ -928,16 +929,53 @@ router.post(
     }
     const sessionId = Number(req.header("x-lens-session-id"));
     const mode = text(req.header("x-lens-mode"), 40) ?? "lookup";
-    const out = await ingestLensFrame({
-      bytes: req.body,
-      mode,
-      sessionId: Number.isFinite(sessionId) ? sessionId : null,
-      examId: mode === "mark" ? positiveInt(req.header("x-lens-exam-id")) : null,
-      teacherUserId: req.auth?.user_id ?? null,
-    });
-    if (out.error) {
-      res.status(500).json({ error: out.error });
+    // The lens retries a stored frame until the server accepts it, so the same
+    // photograph can arrive more than once. x-lens-capture-id names it; a
+    // repeat is answered with the first attempt's result instead of being read
+    // (and, when marking, counted) a second time. See lib/lens-capture.ts.
+    const captureId = parseCaptureId(req.header("x-lens-capture-id"));
+    if (captureId === "invalid") {
+      res.status(400).json({ error: "invalid_capture_id" });
       return;
+    }
+    const teacherUserId = req.auth?.user_id ?? null;
+    const idempotent = captureId !== null && teacherUserId !== null;
+    if (idempotent) {
+      const claim = await claimLensCapture(teacherUserId, captureId);
+      if (claim.kind === "done") {
+        const request = await getVisionRequest(claim.requestId).catch(() => null);
+        res.status(200).json({ request: request ?? { id: claim.requestId }, image_key: claim.imageKey, duplicate: true });
+        return;
+      }
+      if (claim.kind === "in_progress") {
+        res.status(409).set("retry-after", "5").json({ error: "capture_in_progress" });
+        return;
+      }
+    }
+    let out: Awaited<ReturnType<typeof ingestLensFrame>>;
+    try {
+      out = await ingestLensFrame({
+        bytes: req.body,
+        mode,
+        sessionId: Number.isFinite(sessionId) ? sessionId : null,
+        examId: mode === "mark" ? positiveInt(req.header("x-lens-exam-id")) : null,
+        teacherUserId,
+      });
+    } catch (err) {
+      if (idempotent) await releaseLensCapture(teacherUserId, captureId).catch(() => undefined);
+      throw err;
+    }
+    if (out.error || !out.request) {
+      if (idempotent) await releaseLensCapture(teacherUserId, captureId).catch(() => undefined);
+      res.status(500).json({ error: out.error ?? "enqueue_failed" });
+      return;
+    }
+    if (idempotent) {
+      // The frame is enqueued and the phone is about to be told so; it will not
+      // retry. A failure to record that here must not turn success into a 500.
+      await finishLensCapture(teacherUserId, captureId, { requestId: out.request.id, imageKey: out.image_key }).catch((err) =>
+        logger.error({ err: err instanceof Error ? err.message : String(err), captureId }, "lens capture result not recorded"),
+      );
     }
     res.status(202).json({ request: out.request, image_key: out.image_key });
   },

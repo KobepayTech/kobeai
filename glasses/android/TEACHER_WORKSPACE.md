@@ -16,9 +16,24 @@ version offers the phone camera and explains where to connect Rokid.
 - Ask Kobe: subject-aware questions sent to the existing school AI endpoint;
   display its provider/model so a fallback is not represented as a live model.
   Responses can be spoken and sent to the connected display.
-- Activity: last 20 accepted capture request IDs in this sign-in, with an explicit
-  server status refresh. This is memory-only, cleared on reload/sign-out, and
-  does not claim an OCR completion is a submitted grade.
+- Activity: the capture queue. Every photo is written to the phone
+  (IndexedDB) before it is uploaded and stays there until the school server
+  accepts it, across outages and app restarts. Photos are listed as pending,
+  failed or completed, with Try now / Retry / Remove; nothing unsent is deleted
+  without the teacher pressing Remove. The queue holds 240 unsent photos (or
+  160 MB) per account; when full, capture stops and says so. The last 40
+  completed captures stay listed, with an explicit server status refresh, and
+  a completed capture is still not a submitted grade.
+- Each capture has an id, sent as `x-lens-capture-id` on every attempt. The
+  server answers a repeat with the first attempt's result
+  (`api-server/src/lib/lens-capture.ts`), so a retry cannot be read or counted
+  twice.
+- Queued photos belong to the school server and teacher that captured them and
+  are only uploaded under that same sign-in. Another teacher on the same phone
+  sees a count, not the photos.
+- The camera is the one selected in Connections. Glasses that are selected but
+  not connected, or that fail to return a photo, produce an error; the phone
+  camera is used only when "Phone camera" is chosen (always, on the web).
 - Phone camera is off while the workspace is open. Hardware pairing stays alive;
   no background capture or new microphone streaming is introduced.
 
