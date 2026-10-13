@@ -119,8 +119,12 @@ worth testing is already resolved on hardware we can license.
 
 ## Build
 
-Requirements: JDK 17, Android SDK platform 36, pnpm 9.15.9, and network access to
-Google/Maven Central/Rokid Maven/Gradle.
+For Android Studio specifically, see [ANDROID_STUDIO.md](ANDROID_STUDIO.md):
+which directory to open, the exact toolchain versions, and the web-asset step
+that a Gradle sync passes without and the build then fails on.
+
+Requirements: JDK 17 or newer, Android SDK platform 36 with Build Tools 36.0.0,
+pnpm, and network access to Google/Maven Central/Rokid Maven/Gradle.
 
 From the repository root:
 
@@ -129,6 +133,14 @@ corepack pnpm@9.15.9 --filter @workspace/glasses --filter @workspace/teacher-len
 corepack pnpm@9.15.9 --filter @workspace/teacher-lens build
 cd glasses/android
 ./gradlew :app:assembleCompanionDebug :app:assembleRayneoDebug
+```
+
+The student tablet is a second module. It needs its own web app built first:
+
+```sh
+corepack pnpm --filter @workspace/student-tablet install --frozen-lockfile
+corepack pnpm --filter @workspace/student-tablet build
+cd glasses/android && ./gradlew :student:assembleDebug
 ```
 
 Set `ANDROID_HOME` or an untracked `local.properties` with `sdk.dir` first.
@@ -166,10 +178,17 @@ Gradle wrapper is from xg.glass commit `c697e7faadde27762c9aa3954f6ed7e65961c28f
 
 ## Validation record and remaining gates
 
-Local validation: 16 SDK tests passed; SDK + Teacher Lens TypeScript checks passed;
-Teacher Lens production web build passed. Android assembly was attempted but the
-local environment could not download Gradle (`Network is unreachable`). Check the
-PR's native CI result before installing. No physical glasses were available.
+Local validation: SDK and Teacher Lens TypeScript checks pass, the Teacher Lens
+production web build passes, and the Android project now compiles and packages —
+`:app:assembleCompanionDebug`, `:app:assembleRayneoDebug` and
+`:student:assembleDebug` all succeed from clean, and `Glasses Android` CI
+compiles both `:app` variants. An earlier version of this section recorded that
+assembly had never run because Gradle could not be downloaded; that is no longer
+the case, and the first real compile found two faults in this Kotlin that
+reading the SDK's bytecode had not (see ANDROID_STUDIO.md).
+
+**No physical glasses have been used.** Compiling and packaging say nothing
+about pairing, reconnection or capture cadence. Every item below is still open.
 
 For each sample record model, firmware, Android version and SDK licence:
 
