@@ -181,7 +181,7 @@ function useWakeWord({ enabled, onFire }: WakeWordOptions) {
       for (let i = ev.resultIndex; i < ev.results.length; i += 1) {
         const t = (ev.results[i]?.[0]?.transcript ?? "").toLowerCase().trim();
         if (!t) continue;
-        if (/\bkobe\b/.test(t) || /\bcoby\b/.test(t) || /\bkobey\b/.test(t)) {
+        if (/\bk9\b/.test(t) || /\bkay nine\b/.test(t) || /\bk nine\b/.test(t) || /\bkobe\b/.test(t) || /\bcoby\b/.test(t) || /\bkobey\b/.test(t)) {
           onFire();
           break;
         }
@@ -1373,11 +1373,11 @@ export function App() {
           className={"lens-secondary" + (wakeWordOn ? " lens-wake-on" : "")}
           onClick={() => {
             setWakeWordOn((v) => !v);
-            speak(!wakeWordOn ? "Listening for Kobe." : "Wake-word off.");
+            speak(!wakeWordOn ? "Listening for K9." : "Wake-word off.");
           }}
           aria-label="Wake word"
         >
-          {wakeWordOn ? "🎙️ Kobe on" : "🎙️ Kobe off"}
+          {wakeWordOn ? "🎙️ K9 on" : "🎙️ K9 off"}
         </button>
         <button className="lens-shutter" onClick={onShutter} aria-label="Capture / check frame" />
         <button
