@@ -323,3 +323,9 @@ select.mark-input option { background: #fff; color: #213b34; }
 
 /* Keep the native bridge mounted while hiding advanced device controls off Settings. */
 .k9-controls-mounted { display: none; }
+
+/* Select the exam before glasses begin collecting marking photos. */
+.lens-exam-picker { display: grid; gap: 7px; margin: 14px 18px 4px; }
+.lens-exam-picker label { color: #335f51; font-size: 14px; font-weight: 800; }
+.lens-exam-picker select { min-height: 49px; border: 1px solid #cadfd5; color: #193f35; background: #fff; border-radius: 13px; padding: 12px; font-size: 16px; width: 100%; }
+.lens-exam-picker p { color: #9a581a; font-size: 14px; line-height: 1.4; margin: 4px 0; }
