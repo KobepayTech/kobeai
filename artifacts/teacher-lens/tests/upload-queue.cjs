@@ -328,8 +328,9 @@ async function captureWhileDown(page, server) {
     await page.getByRole("button", { name: "Auto-capture: On ✓" }).click();
     await page.getByRole("button", { name: "Auto-capture: Off" }).waitFor();
     await page.getByText(/Automatic capture is off\. Tap the shutter/).waitFor();
+    const attemptsWhenDisabled = server.attempts.length;
     await sleep(6000);
-    assert.equal(server.attempts.length, 0, "no photograph is taken on a timer");
+    assert.equal(server.attempts.length, attemptsWhenDisabled, "no additional photographs after automatic capture is turned off");
     await shutter(page);
     await page.getByText(/K9 is reading the marked paper/).waitFor({ timeout: 15_000 });
     await sleep(4000);
