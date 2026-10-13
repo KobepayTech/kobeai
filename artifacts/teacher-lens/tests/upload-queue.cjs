@@ -295,6 +295,27 @@ async function captureWhileDown(page, server) {
     assert.equal(server.processed.size, 0);
   });
 
+  await scenario("with automatic capture off, marking photographs only on the shutter", async (page, server) => {
+    await signedIn(page, ASHA);
+    await page.goto(BASE);
+    await openLens(page);
+    await page.getByRole("button", { name: "Automatic capture while marking: on" }).click();
+    await page.getByRole("button", { name: "Automatic capture while marking: off" }).waitFor();
+    await page.getByRole("button", { name: "Mark paper", exact: true }).click();
+    await page.getByText(/Automatic capture is off\. Tap the shutter/).waitFor();
+    await sleep(6000);
+    assert.equal(server.attempts.length, 0, "no photograph is taken on a timer");
+    await shutter(page);
+    await page.getByText(/K9 is reading the marked paper/).waitFor({ timeout: 15_000 });
+    await sleep(4000);
+    assert.equal(server.processed.size, 1, "one tap, one photograph");
+    assert.equal(server.attempts[0].mode, "mark");
+    // The choice survives the app being closed.
+    await page.reload();
+    await openLens(page);
+    await page.getByRole("button", { name: "Automatic capture while marking: off" }).waitFor();
+  });
+
   await scenario("account switching", async (page, server) => {
     await signedIn(page, ASHA);
     await page.goto(BASE);

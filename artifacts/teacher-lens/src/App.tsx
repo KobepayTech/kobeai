@@ -998,6 +998,16 @@ export function App() {
   const pickerRequest = useRef<number | null>(null);
   // Guards the continuous marking tick: one upload in flight at a time.
   const markUploadInFlight = useRef(false);
+  // Marking photographs the paper every 2.5 seconds on its own. That suits a
+  // school server that reads a page in seconds; one that needs minutes per
+  // page is buried by it. Off, marking takes a photograph only on the shutter.
+  const [autoCapture, setAutoCapture] = useState<boolean>(() => {
+    try { return localStorage.getItem("k9-lens.auto-capture") !== "off"; } catch { return true; }
+  });
+  const toggleAutoCapture = () => setAutoCapture((on) => {
+    try { localStorage.setItem("k9-lens.auto-capture", on ? "off" : "on"); } catch { /* this session only */ }
+    return !on;
+  });
   useEffect(() => {
     if (!studentPicker) pickerRequest.current = null;
   }, [studentPicker]);
@@ -1132,7 +1142,7 @@ export function App() {
   // Camera-first exam marking: no shutter and no teacher narration are required.
   // K9 samples the teacher's view while they mark normally.
   useEffect(() => {
-    if (mode !== "mark" || !auth || sessionId == null) return;
+    if (mode !== "mark" || !autoCapture || !auth || sessionId == null) return;
     const tick = async () => {
       if (markUploadInFlight.current) return;
       markUploadInFlight.current = true;
@@ -1149,7 +1159,7 @@ export function App() {
     tick();
     const timer = window.setInterval(tick, 2500);
     return () => window.clearInterval(timer);
-  }, [auth, mode, sessionId, uploadFrame]);
+  }, [auth, autoCapture, mode, sessionId, uploadFrame]);
 
   const runLookup = useCallback(
     async (studentCode: string, quiet = false) => {
@@ -1324,7 +1334,9 @@ export function App() {
         <div className="lens-overlay">
           <div className="headline">{mode === "lookup" ? "Point at a student" : "Point at a marked paper"}</div>
           <div className="sub">
-            K9 continuously reads the marked paper through the camera. The teacher does not read questions or answers aloud.
+            {mode === "mark" && !autoCapture
+              ? "Automatic capture is off. Tap the shutter to photograph a paper."
+              : "K9 continuously reads the marked paper through the camera. The teacher does not read questions or answers aloud."}
           </div>
         </div>
       </div>
@@ -1340,6 +1352,9 @@ export function App() {
           Mark paper
         </button>
       </div>
+      <button className="lens-secondary lens-auto-capture" aria-pressed={autoCapture} onClick={toggleAutoCapture}>
+        Automatic capture while marking: {autoCapture ? "on" : "off"}
+      </button>
 
       <div className="lens-actions">
         <button
