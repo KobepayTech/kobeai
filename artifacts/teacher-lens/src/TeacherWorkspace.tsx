@@ -115,10 +115,12 @@ export async function teacherRequest<T>(
 
 function ToolIcon({ name }: { name: string }) {
   const paths: Record<string, string> = {
-    Today: "M3 10 12 3l9 7M5 9v12h5v-7h4v7h5V9",
+    Home: "M3 10 12 3l9 7M5 9v12h5v-7h4v7h5V9",
+    Papers: "M14 2H5v20h14V7l-5-5v5h5M8 12h8M8 16h5",
+    Settings: "M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8M4 12a8 8 0 1 0 16 0 8 8 0 0 0-16 0",
     Students:
       "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M20 21v-2a4 4 0 0 0-3-3.9M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M17 3a4 4 0 0 1 0 8",
-    "Ask Kobe": "m12 3 2.6 6.4L21 12l-6.4 2.6L12 21l-2.6-6.4L3 12l6.4-2.6L12 3",
+    "Ask K9": "m12 3 2.6 6.4L21 12l-6.4 2.6L12 21l-2.6-6.4L3 12l6.4-2.6L12 3",
     Activity: "M3 12h4l3-8 4 16 3-8h4",
     lens: "M8 4H4v4M16 4h4v4M4 16v4h4M20 16v4h-4M16 12a4 4 0 1 0-8 0 4 4 0 0 0 8 0",
     paper: "M14 2H5v20h14V7l-5-5v5h5M8 12h8M8 16h5",
@@ -156,6 +158,7 @@ export function TeacherWorkspace({
   onClose,
   onSpeak,
   onConnections,
+  onSignOut,
   serverStatus,
 }: {
   serverStatus: string;
@@ -175,8 +178,9 @@ export function TeacherWorkspace({
   onClose: () => void;
   onSpeak: (text: string) => void;
   onConnections: () => void;
+  onSignOut: () => void;
 }) {
-  const [tab, setTab] = useState("Today");
+  const [tab, setTab] = useState("Home");
   const workspaceRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
     workspaceRef.current?.scrollTo({ top: 0 });
@@ -400,7 +404,7 @@ export function TeacherWorkspace({
       <button
         onClick={() => {
           setSubject(p.subject);
-          setTab("Ask Kobe");
+          setTab("Ask K9");
         }}
       >
         Prepare
@@ -417,45 +421,41 @@ export function TeacherWorkspace({
       <header className="teacher-heading">
         <div>
           <span className="teacher-eyebrow">
-            <span className="teacher-logo">K9</span> KobeAI{" "}
-            <span className="teacher-edition">FOR TEACHERS</span>
+            <span className="teacher-logo">K9</span> <span className="teacher-wordmark">K9</span>{" "}
+            <span className="teacher-edition">CLASSROOM</span>
           </span>
           <h1>
-            Hello, {auth.teacher_name.split(" ")[0]}{" "}
+            Welcome, {auth.teacher_name.split(" ")[0]}{" "}
             <span className="teacher-greeting">✦</span>
           </h1>
-          <p>Your classroom, ready for today.</p>
+          <p>Your teaching day, made simpler.</p>
         </div>
         <button className="teacher-lens-button" onClick={onClose}>
           <ToolIcon name="lens" />
-          <span>Open Lens</span>
+          <span>Camera</span>
         </button>
       </header>
-      <button
-        className="teacher-device"
-        onClick={onConnections}
-        aria-label="Connections: school server and Rokid glasses"
-      >
-        <span className="teacher-device-icon">
-          <ToolIcon name="glasses" />
-        </span>
-        <div>
-          <strong>
-            {connected ? `${source} connected` : "Connect your glasses"}
-          </strong>
-          <small>
-            {connected
-              ? "Ready for photos and teacher prompts"
-              : "Choose your device in Connections"}
-          </small>
+      <div className="teacher-live-grid">
+        <button className="teacher-device" onClick={onConnections} aria-label="Open glasses settings">
+          <span className="teacher-device-icon"><ToolIcon name="glasses" /></span>
+          <span className="teacher-device-copy">
+            <small>GLASSES</small>
+            <strong>{connected ? `${source ?? "Glasses"} connected` : "Not connected"}</strong>
+            <small>{connected ? "Ready to capture" : "Tap to connect"}</small>
+          </span>
+          <span className="teacher-connection-indicator" data-online={connected} aria-hidden="true" />
+        </button>
+        <div className="teacher-server" role="status">
+          <span className="teacher-device-icon"><ToolIcon name="Activity" /></span>
+          <span className="teacher-device-copy">
+            <small>SCHOOL SERVER</small>
+            <strong>Connection</strong>
+            <small>{serverStatus}</small>
+          </span>
         </div>
-        <span className="connection-link">Settings ↗</span>
-      </button>
-      <p className="teacher-muted" role="status">
-        {serverStatus}
-      </p>
+      </div>
       <nav className="teacher-nav" role="tablist" aria-label="Teacher tools">
-        {["Today", "Students", "Ask Kobe", "Activity"].map((t) => (
+        {["Home", "Papers", "Students", "Settings"].map((t) => (
           <button
             key={t}
             role="tab"
@@ -468,22 +468,22 @@ export function TeacherWorkspace({
         ))}
       </nav>
       <main className="teacher-content" role="tabpanel">
-        {tab === "Today" && (
+        {tab === "Home" && (
           <>
             <Status k="today" />
             <article className="teacher-hero">
               <div className="teacher-hero-kicker">
-                <ToolIcon name="Ask Kobe" /> PAPER MARKING
+                <ToolIcon name="Ask K9" /> YOUR MARKING ASSISTANT
               </div>
               <h2>
-                Capture. Review.
+                Every paper.
                 <br />
-                Back to teaching.
+                Every learner.
               </h2>
               <p>
-                Photograph a marked paper. Check the reading,
+                Capture exam papers, review K9’s readings,
                 <br />
-                confirm the student, and save the result.
+                and keep progress in one place.
               </p>
               <button onClick={() => onCapture("mark")}>
                 Start marking <span aria-hidden="true">↗</span>
@@ -495,7 +495,7 @@ export function TeacherWorkspace({
               </div>
             </article>
             <div className="teacher-section-title">
-              <h2>Your teaching tools</h2>
+              <h2>Quick actions</h2>
               <span className="teacher-muted">Made for your day</span>
             </div>
             <div className="teacher-actions">
@@ -512,6 +512,11 @@ export function TeacherWorkspace({
                 </span>
                 <strong>Mark a paper</strong>
                 <small>Capture, review & record</small>
+              </button>
+              <button onClick={() => setTab("Ask K9")}>
+                <span className="teacher-tool-icon"><ToolIcon name="Ask K9" /></span>
+                <strong>Ask K9</strong>
+                <small>Prepare lessons and get support</small>
               </button>
             </div>
             <div className="teacher-section-title">
@@ -759,7 +764,7 @@ export function TeacherWorkspace({
             )}
           </>
         )}
-        {tab === "Ask Kobe" && (
+        {tab === "Ask K9" && (
           <>
             <Status k="ask" />
             <h2>Your teaching assistant</h2>
@@ -807,7 +812,7 @@ export function TeacherWorkspace({
                 />
               </label>
               <button disabled={task("ask").busy || !question.trim()}>
-                Ask Kobe
+                Ask K9
               </button>
             </form>
             {answer && (
@@ -824,11 +829,13 @@ export function TeacherWorkspace({
             )}
           </>
         )}
-        {tab === "Activity" && (
+        {tab === "Papers" && (
+          <>
+            <div className="teacher-page-intro"><div><span className="teacher-overline">YOUR EXAM WORKFLOW</span><h2>Papers</h2><p>Captured, waiting and ready for review.</p></div><button onClick={() => onCapture("mark")}>Start marking ↗</button></div>
           <>
             <Status k="captures" />
             <div className="teacher-section-title">
-              <h2>Capture activity</h2>
+              <h2>Capture history</h2>
               <button
                 disabled={task("captures").busy || !captures.length}
                 onClick={() =>
@@ -971,7 +978,7 @@ export function TeacherWorkspace({
               </p>
             )}
             {!queue.frames.length && !reviews.length && (
-              <p>No captures sent yet. Open Lens to begin.</p>
+              <p>No papers yet. Tap Start marking to begin.</p>
             )}
             {captures.map((c) => (
               <article className="teacher-period" key={c.id}>
@@ -984,6 +991,24 @@ export function TeacherWorkspace({
                 </div>
               </article>
             ))}
+          </>
+        )}
+        {tab === "Settings" && (
+          <>
+            <div className="teacher-page-intro"><div><span className="teacher-overline">YOUR K9 APP</span><h2>Settings</h2><p>Everything you need for a reliable classroom session.</p></div></div>
+            <article className="teacher-card teacher-settings-card">
+              <span className="teacher-settings-icon"><ToolIcon name="glasses" /></span>
+              <div><h3>Camera and glasses</h3><p>{connected ? `${source ?? "Glasses"} is connected and ready.` : "Connect glasses or choose the phone camera."}</p><button onClick={onConnections}>Manage devices →</button></div>
+            </article>
+            <article className="teacher-card teacher-settings-card">
+              <span className="teacher-settings-icon"><ToolIcon name="Activity" /></span>
+              <div><h3>School connection</h3><p>{serverStatus}</p><button onClick={onConnections}>Connection settings →</button></div>
+            </article>
+            <article className="teacher-card teacher-settings-card">
+              <span className="teacher-settings-icon"><ToolIcon name="Students" /></span>
+              <div><h3>Your account</h3><p>Signed in as {auth.teacher_name}</p><button className="teacher-signout" onClick={onSignOut}>Sign out</button></div>
+            </article>
+            <p className="teacher-muted">K9 saves unsent photos on this device until the school server accepts them. Check Papers for upload status.</p>
           </>
         )}
       </main>
