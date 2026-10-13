@@ -62,7 +62,7 @@ export function Connections({
   }
   return (
     <section
-      className={open ? "teacher-workspace teacher-connections" : undefined}
+      className={open ? "teacher-workspace teacher-connections" : "k9-controls-mounted"}
       aria-label={open ? "Connections" : "Device controls"}
     >
       {open && (
