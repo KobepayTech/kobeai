@@ -1,3 +1,5 @@
+> Current phone companion: **MoYoung / DA ECHO**. See [Android setup](ANDROID_STUDIO.md) and `MOYOUNG.md`. Earlier Rokid/HeyCyan details below describe historical integrations.
+
 # Rokid teacher workspace
 
 Rokid is the preferred device for the teacher companion app. On Android, Lens

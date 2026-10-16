@@ -117,7 +117,7 @@ const assert = require("node:assert/strict");
   );
   await page
     .getByRole("button", {
-      name: "Connections: school server and Rokid glasses",
+      name: "Open glasses settings",
     })
     .click();
   assert.equal(
@@ -126,7 +126,7 @@ const assert = require("node:assert/strict");
       .inputValue(),
     "http://127.0.0.1:5178",
   );
-  await page.getByRole("button", { name: "Check server connection" }).click();
+  await page.getByRole("button", { name: "Test connection" }).click();
   await page.getByText(/Connected. Your school API accepted/).waitFor();
   await page.getByRole("button", { name: "Done", exact: true }).click();
   await page.getByRole("tab", { name: "Students", exact: true }).click();
@@ -155,28 +155,29 @@ const assert = require("node:assert/strict");
   const saved = requests.find((r) => r.path.endsWith("/behavior/event"));
   assert.equal(JSON.parse(saved.body).student_code, "K9-001");
   assert.equal(saved.auth, "Bearer teacher-test");
-  await page.getByRole("tab", { name: "Ask Kobe", exact: true }).click();
+  await page.getByRole("tab", { name: "Home", exact: true }).click();
+  await page.getByRole("button", { name: /Ask K9/ }).click();
   await page
     .getByLabel("Question", { exact: true })
     .fill("Suggest an activity");
-  await page.getByRole("button", { name: "Ask Kobe", exact: true }).click();
+  await page.getByRole("button", { name: "Ask K9", exact: true }).click();
   await page.getByText("Use a leaf for the activity.").waitFor();
   await page.getByText("Source: ollama · qwen").waitFor();
-  await page.getByRole("tab", { name: "Activity", exact: true }).click();
-  await page.getByText(/No captures sent yet/).waitFor();
+  await page.getByRole("tab", { name: "Papers", exact: true }).click();
+  await page.getByText(/No papers yet/).waitFor();
   await page
     .getByRole("button", {
-      name: "Connections: school server and Rokid glasses",
+      name: "Open glasses settings",
     })
     .click();
-  await page.getByRole("button", { name: "Change server / sign in" }).click();
-  await page.getByRole("button", { name: "Sign in", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Change school" }).click();
+  await page.getByRole("button", { name: "Continue to K9 →", exact: true }).waitFor();
   assert.equal(
     await page.evaluate(() => localStorage.getItem("k9-lens.auth")),
     null,
   );
   assert.equal(
-    await page.getByLabel("School server URL").inputValue(),
+    await page.getByLabel("School server").inputValue(),
     "http://127.0.0.1:5178",
   );
   assert.deepEqual(errors, []);
@@ -205,14 +206,14 @@ const assert = require("node:assert/strict");
         if (call.method === "info")
           result = {
             version: 1,
-            providers: ["rokid"],
-            automaticRokid: enabled,
+            providers: ["moyoung"],
+            automaticMoYoung: enabled,
             connected,
             provider,
           };
         if (call.method === "connect") {
           connected = true;
-          provider = "rokid";
+          provider = "moyoung";
           result = {
             capabilities: {
               camera: true,
@@ -252,7 +253,7 @@ const assert = require("node:assert/strict");
   });
   await nativePage.goto("http://127.0.0.1:5178");
   await nativePage
-    .getByText("Rokid Glasses connected", { exact: true })
+    .getByText("MoYoung Glasses connected", { exact: true })
     .waitFor();
   assert.equal(
     await nativePage.evaluate(
@@ -263,12 +264,12 @@ const assert = require("node:assert/strict");
   );
   await nativePage
     .getByRole("button", {
-      name: "Connections: school server and Rokid glasses",
+      name: "Open glasses settings",
     })
     .click();
   await nativePage.getByLabel("Camera source").selectOption("");
   await nativePage
-    .getByRole("button", { name: "Connect", exact: true })
+    .getByRole("button", { name: "Use phone camera", exact: true })
     .click();
   await nativePage.getByText(/automatic glasses connection paused/).waitFor();
   const connectionCount = await nativePage.evaluate(
@@ -284,10 +285,10 @@ const assert = require("node:assert/strict");
   await nativePage.getByRole("button", { name: "Forget pairing" }).click();
   await nativePage.getByText(/Pairing removed/).waitFor();
   await nativePage
-    .getByRole("button", { name: "Change server / sign in" })
+    .getByRole("button", { name: "Change school" })
     .click();
   await nativePage
-    .getByRole("button", { name: "Sign in", exact: true })
+    .getByRole("button", { name: "Continue to K9 →", exact: true })
     .waitFor();
   await nativePage.waitForFunction(
     () => window.nativeCalls.at(-1).method === "disconnect",
