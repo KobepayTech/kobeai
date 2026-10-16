@@ -459,11 +459,11 @@ async function captureWhileDown(page, server) {
           const call = JSON.parse(raw);
           window.nativeCalls.push(call.method);
           const reply = { id: call.id, result: null };
-          if (call.method === "info") reply.result = { version: 1, providers: ["rokid"], automaticRokid: enabled, connected, provider };
+          if (call.method === "info") reply.result = { version: 1, providers: ["moyoung"], automaticMoYoung: enabled, connected, provider };
           if (call.method === "connect") {
             if (opts.connects) {
               connected = true;
-              provider = "rokid";
+              provider = "moyoung";
               reply.result = { capabilities: { camera: true, display: true, speaker: true, speechSynthesis: true } };
             } else {
               delete reply.result;
@@ -493,12 +493,12 @@ async function captureWhileDown(page, server) {
     await signedIn(page, ASHA);
     await nativeHost(page, { connects: true });
     await page.goto(BASE);
-    await page.getByText("Rokid Glasses connected", { exact: true }).waitFor();
+    await page.getByText("MoYoung Glasses connected", { exact: true }).waitFor();
     await openLens(page, false);
     await shutter(page);
     await page
       .getByRole("alert")
-      .filter({ hasText: /Rokid Glasses did not return a photo, and the phone camera was not used in their place\..*Reconnect glasses and try again/ })
+      .filter({ hasText: /MoYoung Glasses did not return a photo, and the phone camera was not used in their place\..*Reconnect glasses and try again/ })
       .waitFor();
     assert.equal(await page.evaluate(() => window.cameraCalls), 0, "the phone camera was never opened");
     assert.deepEqual(server.attempts, [], "nothing was uploaded in the glasses' place");
@@ -510,7 +510,7 @@ async function captureWhileDown(page, server) {
     await nativeHost(page, { connects: false });
     await page.goto(BASE);
     await openLens(page, false);
-    await page.getByText(/Rokid Glasses are selected but not connected\. Open Connections/).first().waitFor();
+    await page.getByText(/MoYoung Glasses are selected but not connected\. Open Connections/).first().waitFor();
     await shutter(page);
     await page.getByRole("alert").filter({ hasText: /selected but not connected, so no photo was taken/ }).waitFor();
     assert.equal(await page.evaluate(() => window.cameraCalls), 0, "no silent fall back to the phone camera");

@@ -98,8 +98,8 @@ same PWA runs on:
 
 - Any Android phone (Chrome, Firefox, Samsung Internet).
 - iOS Safari (with a "Add to Home Screen" install).
-- Android-based AR glasses (XREAL / Rokid / Viture) — the built-in Chrome
-  browser opens it identically.
+- MoYoung / DA ECHO glasses use the Android phone companion; they do not run
+  this PWA themselves. See `glasses/android/MOYOUNG.md`.
 - Enterprise glasses with a WebView (Vuzix, RealWear).
 
 Meta Ray-Bans and Oakley Meta are **not** supported — closed platforms,
