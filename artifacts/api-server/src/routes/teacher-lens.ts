@@ -1,3 +1,4 @@
+import { ensureLearningPacks } from "../lib/learning-packs";
 import express, { Router, type Request, type Response } from "express";
 import multer from "multer";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -29,7 +30,7 @@ import {
 import { logger } from "../lib/logger";
 import { ingestGradedPaper, studentSkillProfile } from "../lib/skill-engine";
 import { recordCameraMarkedPaper } from "../lib/exam-vision";
-import { getClassExamGaps, ensureExamSummaryTable } from "../lib/exam-summary";
+import { getClassExamGaps } from "../lib/exam-summary";
 import {
   announceResult,
   ensureResultsTables,
@@ -1035,7 +1036,7 @@ router.get("/v1/teacher/exams/:examId/knowledge-gaps", requireTeacher, async (re
 
 /**
  * GET /v1/teacher-lens/student/:studentCode/exam-summary
- * Returns the latest constrained six-page revision pack for a subject/exam.
+ * Returns the quick learning pack after marking is complete.
  */
 router.get("/v1/teacher-lens/student/:studentCode/exam-summary", requireTeacher, async (req, res) => {
   const studentCode = text(req.params.studentCode, 100);
@@ -1045,10 +1046,14 @@ router.get("/v1/teacher-lens/student/:studentCode/exam-summary", requireTeacher,
     res.status(400).json({ error: "student_code, exam_id and subject required" });
     return;
   }
-  await ensureExamSummaryTable();
+  await ensureLearningPacks();
   const result = await pool.query(
-    "SELECT id, student_code, subject, source_exam_id, page_count, split_layout, content, generated_at FROM k9_exam_summaries WHERE student_code=$1 AND subject=$2 AND source_exam_id=$3",
-    [studentCode, subject, examId],
+    `SELECT p.id,u.student_code,e.subject,p.exam_id AS source_exam_id,p.sides AS page_count,
+       FALSE AS split_layout,p.content,p.status,p.created_at AS generated_at
+       FROM learning_packs p JOIN users u ON u.id=p.student_id JOIN result_exams e ON e.id=p.exam_id
+       JOIN classes c ON c.id=e.class_id WHERE u.student_code=$1 AND e.subject=$2 AND p.exam_id=$3
+       AND p.kind='quick' AND (c.teacher_id=$4 OR $5::boolean)`,
+    [studentCode, subject, examId,req.auth!.user_id,['admin','super_admin'].includes(req.auth!.role)],
   );
   if (!result.rows[0]) {
     res.status(404).json({ error: "exam_summary_not_ready" });

@@ -1,3 +1,4 @@
+import { processLearningPacks } from "./lib/learning-packs";
 import app from "./app";
 import { logger } from "./lib/logger";
 import { seedDemoData } from "./lib/seed";
@@ -46,6 +47,9 @@ app.listen(port, async (err) => {
   }
 
   logger.info({ port }, "Server listening");
+  const packTick = () => processLearningPacks().catch(err => logger.error({err}, "learning pack worker failed"));
+  setInterval(packTick, 30_000).unref();
+  void packTick();
 
   if (desktopMode) {
     await bootstrapK9School(port).catch((err) =>

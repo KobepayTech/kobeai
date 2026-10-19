@@ -60,6 +60,7 @@ const SCHOOL_NAV: NavItem[] = [
   { href: "/timetable", label: "Timetable", icon: CalendarClock, needs: "teaching" },
   { href: "/exams", label: "Exam Mode", icon: Timer, needs: "teaching" },
   { href: "/results", label: "Results", icon: Trophy, needs: "teaching" },
+  { href: "/learning-packs", label: "Learning Packs", icon: FileText, needs: "teaching" },
   { href: "/documents", label: "Documents", icon: FileText, needs: "teaching" },
   { href: "/onboarding", label: "Staff & Students", icon: QrCode, needs: "onboarding" },
   { href: "/bursar", label: "Bursar & Fees", icon: Wallet, needs: "bursar" },
