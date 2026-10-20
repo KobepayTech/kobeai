@@ -1,3 +1,4 @@
+import SchoolServices from "@/pages/school-services";
 import { Switch, Route, Router as WouterRouter, Redirect } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -40,6 +41,7 @@ function Router() {
       <Route path="/activity" component={Activity} />
       <Route path="/print" component={PrintPage} />
       <Route path="/print/history" component={PrintHistoryPage} />
+      <Route path="/school-services" component={SchoolServices} />
       <Route path="/subscription" component={SubscriptionPage} />
       <Route path="/mini-k9" component={MiniK9Page} />
       <Route path="/profile" component={Profile} />

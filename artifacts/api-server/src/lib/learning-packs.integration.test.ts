@@ -46,6 +46,21 @@ test(
       await pg.exec(
         "UPDATE print_cash_accounts SET balance_tsh=1000 WHERE student_id=1",
       );
+      await pg.exec(
+        "INSERT INTO print_allowances(student_id,monthly_limit_tsh,automatic_enabled) VALUES(1,100,TRUE)",
+      );
+      await service.reservePack(1);
+      assert.equal(
+        (await query("SELECT status FROM learning_packs WHERE id=1")).rows[0]
+          .status,
+        "awaiting_funds",
+      );
+      assert.equal(
+        (await query("SELECT reserved_tsh FROM print_cash_accounts")).rows[0]
+          .reserved_tsh,
+        0,
+      );
+      await pg.exec("UPDATE print_allowances SET monthly_limit_tsh=200");
       await service.reservePack(1);
       await service.reservePack(1);
       assert.deepEqual(
@@ -75,6 +90,23 @@ test(
       await pg.exec(
         "INSERT INTO learning_packs(exam_id,student_id,kind,sides,status) VALUES(1,1,'extended',6,'ready')",
       );
+      await pg.exec("UPDATE print_allowances SET monthly_limit_tsh=700");
+      await service.reservePack(2);
+      assert.equal(
+        (await query("SELECT status FROM learning_packs WHERE id=2")).rows[0]
+          .status,
+        "awaiting_funds",
+      );
+      await pg.exec(
+        "UPDATE print_allowances SET monthly_limit_tsh=800,automatic_enabled=FALSE",
+      );
+      await service.reservePack(2);
+      assert.equal(
+        (await query("SELECT reserved_tsh FROM print_cash_accounts")).rows[0]
+          .reserved_tsh,
+        0,
+      );
+      await pg.exec("UPDATE print_allowances SET automatic_enabled=TRUE");
       await service.reservePack(2);
       await service.settlePack(2, false, 2);
       await service.settlePack(2, false, 2);

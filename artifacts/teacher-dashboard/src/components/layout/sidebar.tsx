@@ -77,6 +77,7 @@ const OPERATOR_NAV: NavItem[] = [
   { href: "/market-agent", label: "Market Agent", icon: Bot, needs: "market_agent" },
   { href: "/central-market", label: "Question Market", icon: Target, needs: "market_agent" },
   { href: "/central-kp", label: "KP Ledger", icon: Coins, needs: "kp_economy" },
+  { href: "/payment-reconciliation", label: "Subscription payments", icon: FileText, needs: "operator" },
   { href: "/central-stationery", label: "Central Stationery", icon: Boxes, needs: "central_stationery" },
   { href: "/moderation-apps", label: "App Moderation", icon: ShieldCheck, needs: "moderation" },
   { href: "/moderation-payments", label: "Dev Payments", icon: Receipt, needs: "moderation" },

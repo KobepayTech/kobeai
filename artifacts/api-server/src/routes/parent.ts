@@ -1,5 +1,4 @@
 import { Router, type Request, type Response as ExpressResponse } from "express";
-import { AddFundsBody } from "@workspace/api-zod";
 import {
   db,
   subscriptionCacheTable,
@@ -181,7 +180,8 @@ router.get("/v1/parent/dashboard", async (req, res) => {
         id: String(c.student_user_id),
         name: c.name,
         grade: c.grade ?? "Form 1",
-        balance: e.balance,
+        balance: 0,
+        wallet_connected: false,
         today_points: e.today_points,
         total_points: e.total_points,
         attendance_streak: e.attendance_streak,
@@ -441,25 +441,8 @@ router.get("/v1/parent/child/:childId/school-day", async (req, res) => {
   });
 });
 
-router.get("/v1/parent/wallet", async (req, res) => {
-  const parentId = parentIdOr401(req, res);
-  if (parentId == null) return;
-  const owned = await listOwnedChildren(parentId);
-  const enriched = owned.map((c) => {
-    const e = extrasFor(c.student_code);
-    return {
-      id: String(c.student_user_id),
-      name: c.name,
-      grade: c.grade ?? "Form 1",
-      balance: e.balance,
-      daily_limit: e.daily_limit,
-      transactions: e.transactions,
-    };
-  });
-  res.json({
-    total_balance: enriched.reduce((sum, c) => sum + c.balance, 0),
-    children: enriched,
-  });
+router.get("/v1/parent/wallet", async (_req, res) => {
+  res.status(503).json({error:"Kobepay wallet connection is not configured. K9 does not keep a second pocket-money balance.",code:"KOBEPAY_NOT_CONNECTED"});
 });
 
 /**
@@ -495,47 +478,23 @@ router.get("/v1/parent/subscriptions", async (req, res) => {
   res.json({ subscriptions: out });
 });
 
-/**
- * POST /v1/parent/subscriptions/pay
- * { child_id, phone? } — initiates an M-Pesa STK push for this child's
- * monthly subscription. The actual STK is simulated in the central server
- * (see routes/central.ts: /central/v1/payments/initiate). Returns the
- * payment_id which the client can poll until status flips to success/failed.
- */
-router.post("/v1/parent/subscriptions/pay", async (req, res) => {
-  const parentId = parentIdOr401(req, res);
-  if (parentId == null) return;
-  const { child_id, phone } = req.body ?? {};
-  if (typeof child_id !== "string" && typeof child_id !== "number") {
-    res.status(400).json({ error: "child_id required" });
-    return;
-  }
-  const child = await resolveOwnedChild(parentId, String(child_id));
-  if (!child) {
-    res.status(404).json({ error: "Child not found" });
-    return;
-  }
-  const code = child.student_code;
-  const [sub] = await db
-    .select()
-    .from(subscriptionCacheTable)
-    .where(eq(subscriptionCacheTable.student_code, code));
-  if (!sub) {
-    res.status(409).json({ error: "Subscription not synced yet — please retry in a moment." });
-    return;
-  }
-  const useAmount = sub.monthly_price_tsh > 0 ? sub.monthly_price_tsh : 5000;
-  const usePhone = (phone ?? sub.parent_phone ?? "").toString().trim();
-  if (!usePhone) {
-    res.status(400).json({ error: "Phone number required" });
-    return;
-  }
-  const upstream = await centralFetch("/api/central/v1/payments/initiate", {
-    method: "POST",
-    body: JSON.stringify({ student_code: code, phone: usePhone, amount_tsh: useAmount }),
-  });
-  const body = await upstream.json();
-  res.status(upstream.status).json(body);
+// Quotes are fetched from the central source of truth: normalized monthly MRR is not the annual charge.
+router.get("/v1/parent/subscriptions/quote/:childId", async(req,res) => {
+  const parentId=parentIdOr401(req,res); if(parentId==null)return;
+  const child=await resolveOwnedChild(parentId,String(req.params.childId));
+  if(!child){res.status(404).json({error:"Child not found"});return;}
+  const upstream=await centralFetch(`/api/central/v1/payments/quote/${encodeURIComponent(child.student_code)}`);
+  res.status(upstream.status).json(await upstream.json());
+});
+router.post("/v1/parent/subscriptions/pay", async(req,res) => {
+  const parentId=parentIdOr401(req,res); if(parentId==null)return;
+  const child=await resolveOwnedChild(parentId,String(req.body?.child_id??""));
+  if(!child){res.status(404).json({error:"Child not found"});return;}
+  const upstream=await centralFetch("/api/central/v1/payments/initiate",{method:"POST",body:JSON.stringify({
+    student_code:child.student_code,phone:req.body.phone,name:req.body.name,email:req.body.email,
+    idempotency_key:req.body.idempotency_key,accepted_amount_tsh:req.body.accepted_amount_tsh,accepted_months:req.body.accepted_months
+  })});
+  res.status(upstream.status).json(await upstream.json());
 });
 
 /**
@@ -633,28 +592,8 @@ router.get("/v1/parent/subscriptions/payment/:id", async (req, res) => {
   res.json({ payment: body.payment });
 });
 
-router.post("/v1/parent/wallet/add-funds", async (req, res) => {
-  const parentId = parentIdOr401(req, res);
-  if (parentId == null) return;
-  const parsed = AddFundsBody.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: "Invalid request" });
-    return;
-  }
-  const { child_id, amount } = parsed.data;
-  const child = await resolveOwnedChild(parentId, String(child_id));
-  if (!child) {
-    res.status(404).json({ error: "Child not found" });
-    return;
-  }
-  const e = extrasFor(child.student_code);
-  const newBalance = e.balance + amount;
-  res.json({
-    success: true,
-    new_balance: newBalance,
-    message: `Successfully added TSh ${amount.toLocaleString()} to ${child.name}'s wallet`,
-    receipt_id: `RCP-${Date.now()}`,
-  });
+router.post("/v1/parent/wallet/add-funds", async (_req,res)=>{
+  res.status(503).json({error:"Pocket-money funding requires the authoritative Kobepay wallet connection. No money has been added.",code:"KOBEPAY_NOT_CONNECTED"});
 });
 
 /**

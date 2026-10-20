@@ -34,8 +34,8 @@ transactions and row locks prevent duplicate charges and negative funds.
 receipts, separate from school fees and KP rewards. It is NOT connected to an
 external Kobepay wallet. Record only money actually received or transferred for
 printing. Do not copy a spendable balance into two ledgers. A future Kobepay
-adapter needs atomic reserve/settle/release operations. Parent spending limits
-and live Kobepay synchronization are not implemented. Negative print ledger
+adapter needs atomic reserve/settle/release operations. Parent monthly printing limits are now available in School Services; live
+Kobepay synchronization still needs the real wallet repository. Negative print ledger
 entries are the printing revenue audit; receipt references prevent double deposits.
 
 ## Printer
@@ -78,3 +78,5 @@ Unicode font, non-ASCII content is blocked instead of printing corrupted text.
 Once a learning-pack batch is scheduled, the Results API blocks reopening or
 editing that assessment. Create a corrected assessment for revised marking;
 this prevents queued/paid packs silently referring to changed exam evidence.
+
+PalmPesa subscriptions, parent printing allowances and reconciliation are documented in K9_PALMPESA_AND_KOBEPAY.md.

@@ -98,7 +98,7 @@ export default function Dashboard() {
               <div className="mt-6 flex justify-between items-center bg-gray-50 rounded-2xl p-4">
                 <div>
                   <p className="text-sm text-gray-500">Wallet Balance</p>
-                  <p className="text-lg font-bold text-gray-900">TSh {child.balance.toLocaleString()}</p>
+                  <p className="text-lg font-bold text-gray-900">Kobepay not connected</p>
                 </div>
                 <button
                   onClick={() => setLocation('/wallet')}

@@ -61,7 +61,7 @@ router.get(
   staff,
   run(async (req, res) => {
     const packs = await pool.query(
-      `SELECT p.id,p.exam_id,p.student_id,p.kind,p.status,p.sides,p.cost_tsh,p.problems,p.printer_job_id,u.name,u.student_code,c.grade,e.title,e.subject
+      `SELECT p.id,p.exam_id,p.student_id,p.kind,p.status,p.sides,p.cost_tsh,p.problems,p.hold_reason,p.printer_job_id,u.name,u.student_code,c.grade,e.title,e.subject
     FROM learning_packs p JOIN users u ON u.id=p.student_id JOIN result_exams e ON e.id=p.exam_id JOIN classes c ON c.id=e.class_id
     WHERE ($1::boolean OR c.teacher_id=$2) ORDER BY c.grade,u.name,p.id DESC LIMIT 500`,
       [admin(req), req.auth!.user_id],
@@ -330,6 +330,14 @@ router.post(
         [printer],
       );
       if (!p) return null;
+      const {rows:[account]}=await q.query("SELECT * FROM print_cash_accounts WHERE student_id=$1 FOR UPDATE",[p.student_id]);
+      const {rows:[allowance]}=await q.query("SELECT * FROM print_allowances WHERE student_id=$1",[p.student_id]);
+      const {rows:[spent]}=await q.query(`SELECT COALESCE(-SUM(delta_tsh),0)::int AS amount FROM print_cash_ledger WHERE student_id=$1 AND pack_id IS NOT NULL AND created_at >= (date_trunc('month',NOW() AT TIME ZONE 'Africa/Dar_es_Salaam') AT TIME ZONE 'Africa/Dar_es_Salaam')`,[p.student_id]);
+      if(allowance&&(!allowance.automatic_enabled||(allowance.monthly_limit_tsh!==null&&spent.amount+account.reserved_tsh>allowance.monthly_limit_tsh))){
+        await q.query("UPDATE print_cash_accounts SET reserved_tsh=reserved_tsh-$2 WHERE student_id=$1",[p.student_id,p.cost_tsh]);
+        await q.query("UPDATE learning_packs SET status='awaiting_funds',hold_reason='Parent printing allowance' WHERE id=$1",[p.id]);
+        return null;
+      }
       const token = randomUUID();
       await q.query(
         "UPDATE learning_packs SET status='claimed',claim_token=$2 WHERE id=$1",

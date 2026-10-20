@@ -1,3 +1,4 @@
+import schoolServicesRouter from "./school-services";
 import { Router, type IRouter } from "express";
 import healthRouter from "./health";
 import authRouter from "./auth";
@@ -76,6 +77,7 @@ router.use(parentK9Router);
 router.use(adminRouter);
 router.use(printRouter);
 router.use(learningPacksRouter);
+router.use(schoolServicesRouter);
 router.use(centralRouter);
 router.use(timetableRouter);
 router.use(examsRouter);

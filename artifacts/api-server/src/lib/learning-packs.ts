@@ -19,6 +19,8 @@ export function ensureLearningPacks(): Promise<void> {
       CREATE TABLE IF NOT EXISTS learning_pack_batches(exam_id INT PRIMARY KEY REFERENCES result_exams(id),requested_by INT REFERENCES users(id),created_at TIMESTAMPTZ DEFAULT NOW());
       CREATE TABLE IF NOT EXISTS print_cash_accounts(student_id INT PRIMARY KEY REFERENCES users(id),balance_tsh INT NOT NULL DEFAULT 0 CHECK(balance_tsh>=0),reserved_tsh INT NOT NULL DEFAULT 0 CHECK(reserved_tsh>=0 AND reserved_tsh<=balance_tsh));
       CREATE TABLE IF NOT EXISTS learning_packs(id SERIAL PRIMARY KEY,exam_id INT NOT NULL REFERENCES result_exams(id),student_id INT NOT NULL REFERENCES users(id),kind TEXT NOT NULL CHECK(kind IN ('quick','extended')),content JSONB,problems JSONB NOT NULL DEFAULT '[]',status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','review','ready','subscription_required','awaiting_funds','queued','claimed','submitted','printed','failed','collected')),sides INT NOT NULL CHECK(sides IN(2,6)),cost_tsh INT NOT NULL DEFAULT 0 CHECK(cost_tsh>=0),printer_id TEXT,claim_token TEXT,printer_job_id TEXT,reviewed_by INT REFERENCES users(id),reviewed_at TIMESTAMPTZ,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),printed_at TIMESTAMPTZ,collected_at TIMESTAMPTZ,UNIQUE(exam_id,student_id,kind));
+      ALTER TABLE learning_packs ADD COLUMN IF NOT EXISTS hold_reason TEXT;
+      CREATE TABLE IF NOT EXISTS print_allowances(student_id INT PRIMARY KEY REFERENCES users(id),monthly_limit_tsh INT CHECK(monthly_limit_tsh>=0),automatic_enabled BOOLEAN NOT NULL DEFAULT TRUE,updated_by INT REFERENCES users(id),updated_at TIMESTAMPTZ DEFAULT NOW());
       CREATE TABLE IF NOT EXISTS print_cash_ledger(id SERIAL PRIMARY KEY,student_id INT NOT NULL REFERENCES users(id),pack_id INT UNIQUE REFERENCES learning_packs(id),delta_tsh INT NOT NULL,reference TEXT NOT NULL UNIQUE,recorded_by INT REFERENCES users(id),created_at TIMESTAMPTZ DEFAULT NOW());
     `);
   })().catch((e) => {
@@ -168,9 +170,15 @@ export async function reservePack(id: number): Promise<void> {
       [p.student_id],
     );
     const cost = p.cost_tsh || p.sides * settings.price_per_side;
+    const {rows:[allowance]}=await q.query("SELECT * FROM print_allowances WHERE student_id=$1",[p.student_id]);
+    const {rows:[spent]}=await q.query(`SELECT COALESCE(-SUM(delta_tsh),0)::int AS amount FROM print_cash_ledger
+      WHERE student_id=$1 AND pack_id IS NOT NULL AND created_at >= (date_trunc('month',NOW() AT TIME ZONE 'Africa/Dar_es_Salaam') AT TIME ZONE 'Africa/Dar_es_Salaam')`,[p.student_id]);
+    if (allowance && (!allowance.automatic_enabled || (allowance.monthly_limit_tsh!==null && spent.amount+account.reserved_tsh+cost>allowance.monthly_limit_tsh))) {
+      await q.query("UPDATE learning_packs SET status='awaiting_funds',hold_reason=$2,cost_tsh=$3 WHERE id=$1",[id,allowance.automatic_enabled?'Monthly printing allowance reached':'Printing paused by parent',cost]);return;
+    }
     if (account.balance_tsh - account.reserved_tsh < cost) {
       await q.query(
-        "UPDATE learning_packs SET status='awaiting_funds',cost_tsh=$2 WHERE id=$1",
+        "UPDATE learning_packs SET status='awaiting_funds',cost_tsh=$2,hold_reason='Insufficient printing funds' WHERE id=$1",
         [id, cost],
       );
       return;
@@ -180,7 +188,7 @@ export async function reservePack(id: number): Promise<void> {
       [p.student_id, cost],
     );
     await q.query(
-      "UPDATE learning_packs SET status='queued',cost_tsh=$2,printer_id=$3 WHERE id=$1",
+      "UPDATE learning_packs SET status='queued',cost_tsh=$2,printer_id=$3,hold_reason=NULL WHERE id=$1",
       [id, cost, settings.printer_id],
     );
   });

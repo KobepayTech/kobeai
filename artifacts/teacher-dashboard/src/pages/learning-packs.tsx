@@ -18,6 +18,7 @@ type Pack = {
   kind: string;
   cost_tsh: number;
   problems: string[];
+  hold_reason: string | null;
 };
 type Lesson = {
   evidence_id: number;
@@ -383,7 +384,8 @@ export default function LearningPacks() {
                   {p.kind} · {p.status.replaceAll("_", " ")} · TZS{" "}
                   {p.cost_tsh || "—"}
                 </p>
-                {p.status === "review" && (
+                {p.hold_reason && <p className="text-amber-800 text-sm">{p.hold_reason}</p>}
+              {p.status === "review" && (
                   <p className="text-amber-800 text-sm">
                     {p.problems.join(" · ")}
                   </p>

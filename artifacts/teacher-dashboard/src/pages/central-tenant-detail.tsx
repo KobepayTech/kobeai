@@ -20,6 +20,8 @@ type Subscription = {
   plan: string;
   status: string;
   monthly_price_tsh: number;
+  billing_period: string;
+  period_price_tsh: number;
   parent_phone: string | null;
   expires_at: string | null;
   last_payment_at: string | null;
@@ -61,7 +63,7 @@ export default function CentralTenantDetail() {
   const [showKey, setShowKey] = useState(false);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Subscription | null>(null);
-  const [form, setForm] = useState({ student_code: "", student_name: "", plan: "basic", status: "active", monthly_price_tsh: 5000, parent_phone: "", expires_at: "" });
+  const [form, setForm] = useState({ student_code: "", student_name: "", plan: "basic", status: "active", monthly_price_tsh: 5000, billing_period: "year", period_price_tsh: 60000, parent_phone: "", expires_at: "" });
 
   const { data, isLoading } = useQuery({
     queryKey: ["/central/v1/admin/tenants", id],
@@ -81,7 +83,7 @@ export default function CentralTenantDetail() {
       qc.invalidateQueries({ queryKey: ["/central/v1/admin/tenants"] });
       setOpen(false);
       setEditing(null);
-      setForm({ student_code: "", student_name: "", plan: "basic", status: "active", monthly_price_tsh: 5000, parent_phone: "", expires_at: "" });
+      setForm({ student_code: "", student_name: "", plan: "basic", status: "active", monthly_price_tsh: 5000, billing_period: "year", period_price_tsh: 60000, parent_phone: "", expires_at: "" });
     },
     onError: (err: Error) => toast({ title: "Failed", description: err.message, variant: "destructive" }),
   });
@@ -94,6 +96,8 @@ export default function CentralTenantDetail() {
       plan: s.plan,
       status: s.status,
       monthly_price_tsh: s.monthly_price_tsh,
+      billing_period: s.billing_period,
+      period_price_tsh: s.period_price_tsh || (s.billing_period === "year" ? s.monthly_price_tsh * 12 : s.monthly_price_tsh),
       parent_phone: s.parent_phone ?? "",
       expires_at: s.expires_at ? s.expires_at.slice(0, 10) : "",
     });
@@ -102,7 +106,7 @@ export default function CentralTenantDetail() {
 
   function openCreate() {
     setEditing(null);
-    setForm({ student_code: "", student_name: "", plan: "basic", status: "active", monthly_price_tsh: 5000, parent_phone: "", expires_at: "" });
+    setForm({ student_code: "", student_name: "", plan: "basic", status: "active", monthly_price_tsh: 5000, billing_period: "year", period_price_tsh: 60000, parent_phone: "", expires_at: "" });
     setOpen(true);
   }
 
@@ -261,7 +265,8 @@ export default function CentralTenantDetail() {
               </div>
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <div><Label>Price (TSh / month)</Label><Input type="number" value={form.monthly_price_tsh} onChange={(e) => setForm({ ...form, monthly_price_tsh: Number(e.target.value) })} /></div>
+              <div><Label>Billing period</Label><select className="border rounded p-2 w-full" value={form.billing_period} onChange={e=>setForm({...form,billing_period:e.target.value})}><option value="month">Monthly</option><option value="year">Annual</option></select></div>
+              <div><Label>Price per billing period (TZS)</Label><Input type="number" min="100" value={form.period_price_tsh} onChange={e=>setForm({...form,period_price_tsh:Number(e.target.value)})}/></div>
               <div><Label>Expires at</Label><Input type="date" value={form.expires_at} onChange={(e) => setForm({ ...form, expires_at: e.target.value })} /></div>
             </div>
             <div><Label>Parent phone</Label><Input value={form.parent_phone} onChange={(e) => setForm({ ...form, parent_phone: e.target.value })} placeholder="+255 …" /></div>
