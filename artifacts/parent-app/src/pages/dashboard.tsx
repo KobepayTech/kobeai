@@ -35,6 +35,11 @@ export default function Dashboard() {
 
       <div className="px-6 -mt-8 relative z-20 space-y-6">
         <RenewalBanner />
+        <a href={`${import.meta.env.BASE_URL}kobepay-design.html`} className="block bg-emerald-950 text-white rounded-2xl p-5">
+          <span className="text-xs uppercase tracking-widest text-lime-200">Kobepay · Interactive design</span>
+          <h3 className="text-lg font-bold mt-2">School &amp; beyond →</h3>
+          <p className="text-sm text-emerald-100 mt-1">Explore student wallets, school hubs and authorized shops. Demo data only.</p>
+        </a>
         <AdBanner placement="parent_app_home" />
         <div className="grid grid-cols-2 gap-3">
           <button
