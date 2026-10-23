@@ -571,6 +571,7 @@ function MarkPanel({
     } catch {
       // storage unavailable — the picker still works for this sheet
     }
+    if (!review) window.dispatchEvent(new CustomEvent("k9:exam-selected", { detail: examId }));
     setStudents([]);
     if (examId) loadStudents(examId);
   }, [examId, loadStudents, review]);
@@ -994,6 +995,14 @@ export function App() {
       .catch(() => { if (!cancelled) setExamLoadError("Could not load open exams. Practice capture remains available."); });
     return () => { cancelled = true; };
   }, [auth]);
+  useEffect(() => {
+    const syncExam = (event: Event) => {
+      const id = (event as CustomEvent<number | null>).detail;
+      setActiveExamId(typeof id === "number" && Number.isInteger(id) && id > 0 ? id : null);
+    };
+    window.addEventListener("k9:exam-selected", syncExam);
+    return () => window.removeEventListener("k9:exam-selected", syncExam);
+  }, []);
   const chooseExam = (value: string) => {
     const id = value ? Number(value) : null;
     setActiveExamId(id);
