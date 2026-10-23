@@ -1160,13 +1160,13 @@ export function App() {
   //
   // The camera is whichever one the teacher selected. Glasses that fail to
   // return a photo throw — they are never replaced by the phone camera.
-  const uploadFrame = useCallback(async (waitMs = 0): Promise<LensUpload | null> => {
+  const uploadFrame = useCallback(async (waitMs = 0, shouldStore: () => boolean = () => true): Promise<LensUpload | null> => {
     if (!auth) return null;
     const owner = ownerKey(auth);
     await assertRoom(owner);
     const blob = glassesSource ? await captureGlasses(glassesSource) : await captureBlob(mode === "mark" ? 1600 : 1280);
     if (authRef.current !== auth) throw new Error("Session ended — sign in again");
-    if (!blob) return null;
+    if (!blob || !shouldStore()) return null;
     const frame = await enqueueFrame(owner, { blob, mode, examId: mode === "mark" ? activeExamId : null });
     setCaptureProblem(null);
     const sent = waitMs > 0 ? await settled(frame.id, owner, waitMs) : null;
@@ -1179,22 +1179,23 @@ export function App() {
     // No session is needed to photograph: frames are stored on the phone and
     // wait there, so marking can start before the school server is reachable.
     if (mode !== "mark" || !autoCapture || !auth || workspaceOpen || connectionsOpen || markOpen) return;
+    let active = true;
     const tick = async () => {
-      if (markUploadInFlight.current) return;
+      if (!active || markUploadInFlight.current) return;
       markUploadInFlight.current = true;
       try {
-        await uploadFrame();
+        await uploadFrame(0, () => active);
       } catch (error) {
         // A missed frame during marking is a gap in the exam record, so it is
         // shown until the next frame succeeds rather than flashed as a toast.
-        if (authRef.current === auth) setCaptureProblem(errorDetail(error));
+        if (active && authRef.current === auth) setCaptureProblem(errorDetail(error));
       } finally {
         markUploadInFlight.current = false;
       }
     };
     tick();
     const timer = window.setInterval(tick, 2500);
-    return () => window.clearInterval(timer);
+    return () => { active = false; window.clearInterval(timer); };
   }, [auth, autoCapture, mode, uploadFrame, workspaceOpen, connectionsOpen, markOpen]);
 
   const runLookup = useCallback(
