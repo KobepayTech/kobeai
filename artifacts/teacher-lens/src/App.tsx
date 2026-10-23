@@ -15,7 +15,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 //                 ("Asha. Last Biology: 92 percent. Weak in Newton's laws.")
 //   Mark paper  — teacher grades a paper. On shutter, a sheet slides up
 //                 with an editable list of items (question → student
-//                 answer → correct/wrong). "Send to KobeAI" submits.
+//                 answer → correct/wrong). "Send to K9" submits.
 //
 // The camera streams via getUserMedia. Actual face-recognition / OCR
 // happens server-side on the K9 GPU box; this client just captures a
@@ -136,22 +136,23 @@ function Setup({ onReady, initialServer }: { onReady: (a: StoredAuth) => void; i
 
   return (
     <div className="setup">
-      <h1>
-        <span style={{ color: "var(--brand-green)" }}>KobeAI</span> Lens
-      </h1>
-      <p style={{ color: "var(--brand-muted)", marginTop: -6, marginBottom: 20 }}>
-        Step 1: connect to your school server. Join the school Wi-Fi and enter the HTTPS address supplied by your administrator. Sign in with your school teacher account, then connect Rokid from Connections.
-      </p>
-      <label htmlFor="school-server">School server URL</label>
-      <input id="school-server" value={apiBase} onChange={(e) => setApiBase(e.target.value)} placeholder="https://school.local" />
-      <label htmlFor="teacher-email">Email</label>
-      <input id="teacher-email" value={email} onChange={(e) => setEmail(e.target.value)} />
-      <label htmlFor="teacher-password">Password</label>
-      <input id="teacher-password" value={password} onChange={(e) => setPassword(e.target.value)} type="password" />
-      <button className="setup-btn" onClick={login} disabled={busy}>
-        {busy ? "Signing in…" : "Sign in"}
-      </button>
-      {err && <p style={{ color: "var(--brand-danger)", marginTop: 14 }}>{err}</p>}
+      <div className="setup-brand"><span className="setup-logo">K9</span><span>K9 <small>FOR TEACHERS</small></span></div>
+      <div className="setup-welcome">
+        <span className="setup-eyebrow">WELCOME BACK</span>
+        <h1>Make every lesson count.</h1>
+        <p>Sign in to your school to capture papers, review results and support your students.</p>
+      </div>
+      <div className="setup-form">
+        <label htmlFor="school-server">School server</label>
+        <input id="school-server" value={apiBase} onChange={(e) => setApiBase(e.target.value)} placeholder="https://your-school.example" autoComplete="url" />
+        <label htmlFor="teacher-email">Email address</label>
+        <input id="teacher-email" value={email} onChange={(e) => setEmail(e.target.value)} type="email" autoComplete="username" placeholder="teacher@school.ac.tz" />
+        <label htmlFor="teacher-password">Password</label>
+        <input id="teacher-password" value={password} onChange={(e) => setPassword(e.target.value)} type="password" autoComplete="current-password" placeholder="Your password" />
+        {err && <p role="alert" className="setup-error">{err}</p>}
+        <button className="setup-btn" onClick={login} disabled={busy}>{busy ? "Signing in…" : "Continue to K9 →"}</button>
+      </div>
+      <p className="setup-footer">Your school information stays on your school server.</p>
     </div>
   );
 }
@@ -180,7 +181,7 @@ function useWakeWord({ enabled, onFire }: WakeWordOptions) {
       for (let i = ev.resultIndex; i < ev.results.length; i += 1) {
         const t = (ev.results[i]?.[0]?.transcript ?? "").toLowerCase().trim();
         if (!t) continue;
-        if (/\bkobe\b/.test(t) || /\bcoby\b/.test(t) || /\bkobey\b/.test(t)) {
+        if (/\bk9\b/.test(t) || /\bkay nine\b/.test(t) || /\bk nine\b/.test(t) || /\bkobe\b/.test(t) || /\bcoby\b/.test(t) || /\bkobey\b/.test(t)) {
           onFire();
           break;
         }
@@ -371,11 +372,11 @@ function LookupPanel({
                 });
                 if (r?.answer) speak(r.answer);
               } catch {
-                speak("Kobe is offline right now.");
+                speak("K9 is offline right now.");
               }
             }}
           >
-            Ask Kobe
+            Ask K9
           </button>
         </div>
       </div>
@@ -570,6 +571,7 @@ function MarkPanel({
     } catch {
       // storage unavailable — the picker still works for this sheet
     }
+    if (!review) window.dispatchEvent(new CustomEvent("k9:exam-selected", { detail: examId }));
     setStudents([]);
     if (examId) loadStudents(examId);
   }, [examId, loadStudents, review]);
@@ -593,7 +595,7 @@ function MarkPanel({
         const found = result.status === "completed" ? (result.response?.items ?? []) : [];
         if (found.length === 0) {
           setReadState("failed");
-          setReadNote(`Kobe couldn't read the paper: ${result.response?.note ?? "no answers found"}`);
+          setReadNote(`K9 couldn't read the paper: ${result.response?.note ?? "no answers found"}`);
           return;
         }
         setItems((prev) =>
@@ -618,14 +620,14 @@ function MarkPanel({
         if (total != null) setMarksObtained((marks) => marks || String(total));
         setReadState("read");
         setReadNote(
-          `Kobe read ${found.length} answer${found.length === 1 ? "" : "s"}` +
+          `K9 read ${found.length} answer${found.length === 1 ? "" : "s"}` +
             " — check them against the paper before saving.",
         );
         return;
       }
       if (!cancelled) {
         setReadState("failed");
-        setReadNote("Kobe is taking too long — enter the marks by hand.");
+        setReadNote("K9 is taking too long — enter the marks by hand.");
       }
     })();
     return () => {
@@ -787,7 +789,7 @@ function MarkPanel({
         {error && <div className="mark-error">{error}</div>}
         {readState !== "none" && (
           <div className={readState === "failed" ? "mark-error" : "mark-result"}>
-            {readState === "reading" ? "📄 Kobe is reading the paper… you can start filling in meanwhile." : readNote}
+            {readState === "reading" ? "📄 K9 is reading the paper… you can start filling in meanwhile." : readNote}
           </div>
         )}
 
@@ -831,7 +833,7 @@ function MarkPanel({
               />
               <span className="mark-outof">out of {exam.total_marks}</span>
             </div>
-            <p className="mark-hint">Enter the paper total, or mark questions below and KobeAI works the total out.</p>
+            <p className="mark-hint">Enter the paper total, or mark questions below and K9 calculates the total.</p>
           </>
         ) : (
           <div className="mark-row">
@@ -909,7 +911,7 @@ function MarkPanel({
         )}
         <div className="mark-actions">
           <button className="mark-primary" onClick={submit} disabled={busy || !studentCode.trim() || (!!review && !checked)}>
-            {busy ? "Sending…" : review ? "Confirm student and save result" : exam ? "Record result" : "Send to KobeAI"}
+            {busy ? "Sending…" : review ? "Confirm student and save result" : exam ? "Record result" : "Send to K9"}
           </button>
           {review && onReviewed && (
             <button
@@ -953,7 +955,7 @@ function UploadSummary({ queue, onOpen }: { queue: ReturnType<typeof useUploadQu
   return (
     <button className="lens-upload-summary" role="status" onClick={onOpen}>
       {parts.join(" · ")}
-      {queue.status.needsSignIn ? " · sign in again to send them" : ""} · Review in Activity
+      {queue.status.needsSignIn ? " · sign in again to send them" : ""} · Open saved photos
     </button>
   );
 }
@@ -969,6 +971,7 @@ export function App() {
   const [connectionsOpen, setConnectionsOpen] = useState(false);
   const [initialServer, setInitialServer] = useState("");
   const [workspaceOpen, setWorkspaceOpen] = useState(true);
+  const [workspaceInitialTab, setWorkspaceInitialTab] = useState<"Home" | "Papers">("Home");
   const queue = useUploadQueue(auth);
   // Why the last capture produced no photo. Stays up until a capture succeeds.
   const [captureProblem, setCaptureProblem] = useState<string | null>(null);
@@ -977,6 +980,37 @@ export function App() {
   const [glassesSource, setGlassesSource] = useState<string | null>(null);
   const shutterBusy = useRef(false);
   const [mode, setMode] = useState<Mode>("lookup");
+  const [activeExamId, setActiveExamId] = useState<number | null>(storedExamId);
+  const [activeExams, setActiveExams] = useState<LensExam[]>([]);
+  const [examLoadError, setExamLoadError] = useState("");
+  useEffect(() => {
+    if (!auth) return;
+    let cancelled = false;
+    apiGet<{ exams: LensExam[] }>(auth, "/v1/results/exams?status=open")
+      .then((data) => {
+        if (cancelled) return;
+        setActiveExams(data?.exams ?? []);
+        setExamLoadError("");
+      })
+      .catch(() => { if (!cancelled) setExamLoadError("Could not load open exams. Practice capture remains available."); });
+    return () => { cancelled = true; };
+  }, [auth]);
+  useEffect(() => {
+    const syncExam = (event: Event) => {
+      const id = (event as CustomEvent<number | null>).detail;
+      setActiveExamId(typeof id === "number" && Number.isInteger(id) && id > 0 ? id : null);
+    };
+    window.addEventListener("k9:exam-selected", syncExam);
+    return () => window.removeEventListener("k9:exam-selected", syncExam);
+  }, []);
+  const chooseExam = (value: string) => {
+    const id = value ? Number(value) : null;
+    setActiveExamId(id);
+    try {
+      if (id) localStorage.setItem(EXAM_STORAGE_KEY, String(id));
+      else localStorage.removeItem(EXAM_STORAGE_KEY);
+    } catch { /* storage unavailable */ }
+  };
   const [sessionId, setSessionId] = useState<number | null>(null);
   const [lookupBrief, setLookupBrief] = useState<StudentBrief | null>(null);
   const [markOpen, setMarkOpen] = useState<null | { requestId: number | null; imageKey: string | null; review?: PaperReview }>(null);
@@ -1135,42 +1169,43 @@ export function App() {
   //
   // The camera is whichever one the teacher selected. Glasses that fail to
   // return a photo throw — they are never replaced by the phone camera.
-  const uploadFrame = useCallback(async (waitMs = 0): Promise<LensUpload | null> => {
+  const uploadFrame = useCallback(async (waitMs = 0, shouldStore: () => boolean = () => true): Promise<LensUpload | null> => {
     if (!auth) return null;
     const owner = ownerKey(auth);
     await assertRoom(owner);
     const blob = glassesSource ? await captureGlasses(glassesSource) : await captureBlob(mode === "mark" ? 1600 : 1280);
     if (authRef.current !== auth) throw new Error("Session ended — sign in again");
-    if (!blob) return null;
-    const frame = await enqueueFrame(owner, { blob, mode, examId: mode === "mark" ? storedExamId() : null });
+    if (!blob || !shouldStore()) return null;
+    const frame = await enqueueFrame(owner, { blob, mode, examId: mode === "mark" ? activeExamId : null });
     setCaptureProblem(null);
     const sent = waitMs > 0 ? await settled(frame.id, owner, waitMs) : null;
     return { request_id: sent?.requestId ?? null, image_key: sent?.imageKey ?? null, waiting: sent?.state !== "done" };
-  }, [auth, captureBlob, glassesSource, mode]);
+  }, [auth, activeExamId, captureBlob, glassesSource, mode]);
 
   // Camera-first exam marking: no shutter and no teacher narration are required.
   // K9 samples the teacher's view while they mark normally.
   useEffect(() => {
     // No session is needed to photograph: frames are stored on the phone and
     // wait there, so marking can start before the school server is reachable.
-    if (mode !== "mark" || !autoCapture || !auth) return;
+    if (mode !== "mark" || !autoCapture || !auth || workspaceOpen || connectionsOpen || markOpen) return;
+    let active = true;
     const tick = async () => {
-      if (markUploadInFlight.current) return;
+      if (!active || markUploadInFlight.current) return;
       markUploadInFlight.current = true;
       try {
-        await uploadFrame();
+        await uploadFrame(0, () => active);
       } catch (error) {
         // A missed frame during marking is a gap in the exam record, so it is
         // shown until the next frame succeeds rather than flashed as a toast.
-        if (authRef.current === auth) setCaptureProblem(errorDetail(error));
+        if (active && authRef.current === auth) setCaptureProblem(errorDetail(error));
       } finally {
         markUploadInFlight.current = false;
       }
     };
     tick();
     const timer = window.setInterval(tick, 2500);
-    return () => window.clearInterval(timer);
-  }, [auth, autoCapture, mode, uploadFrame]);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [auth, autoCapture, mode, uploadFrame, workspaceOpen, connectionsOpen, markOpen]);
 
   const runLookup = useCallback(
     async (studentCode: string, quiet = false) => {
@@ -1308,23 +1343,23 @@ export function App() {
       <header className="lens-header">
         <div>
           <div className="lens-brand">
-            <span className="k">Kobe</span>AI Lens
+            <span className="k">K9</span><span className="lens-brand-sub"> CAMERA</span>
           </div>
           <div className="lens-mode">
             <span className={"lens-status-dot " + ((camReady || glassesConnected) ? "ok" : "bad")} />
-            {mode === "lookup" ? "Lookup" : "Mark paper"} · {uptimeLabel}
+            {mode === "lookup" ? "Student lookup" : "Paper marking"} · {uptimeLabel}
           </div>
         </div>
         <button
           className="lens-secondary"
-          style={{ padding: "8px 12px", fontSize: 12 }}
+          style={{ padding: "10px 14px" }}
           onClick={signOut}
         >
           Sign out
         </button>
       </header>
 
-      <button className="lens-secondary" onClick={() => setWorkspaceOpen(true)}>Teacher workspace</button>
+      <button className="lens-back" onClick={() => { setWorkspaceInitialTab("Home"); setWorkspaceOpen(true); }}>← Back to K9 home</button>
       <Connections auth={auth} open={connectionsOpen} onClose={() => setConnectionsOpen(false)} onChangeServer={() => { setInitialServer(auth.api_base); signOut(); }}>
         <GlassesControl onSource={selectGlassesSource} />
       </Connections>
@@ -1338,22 +1373,21 @@ export function App() {
         )}
         {!glassesSource && camErr && (
           <div className="frame-cover">
-            Camera unavailable: {camErr}. Lens still works — the shutter runs the
-            same server call, just without a captured frame.
+            Camera unavailable: {camErr}. Open Settings to choose another camera.
           </div>
         )}
         <div className="lens-overlay">
-          <div className="headline">{mode === "lookup" ? "Point at a student" : "Point at a marked paper"}</div>
+          <div className="headline">{mode === "lookup" ? "Identify a student" : "Capture an exam paper"}</div>
           <div className="sub">
             {mode === "mark" && !autoCapture
               ? "Automatic capture is off. Tap the shutter to photograph a paper."
-              : "K9 continuously reads the marked paper through the camera. The teacher does not read questions or answers aloud."}
+              : mode === "mark" ? "K9 captures marked papers automatically. Review the result before saving marks." : "Position the student in the camera and take a photo."}
           </div>
         </div>
       </div>
 
       {captureProblem && <div role="alert" className="mark-error lens-capture-problem">{captureProblem}</div>}
-      <UploadSummary queue={queue} onOpen={() => setWorkspaceOpen(true)} />
+      <UploadSummary queue={queue} onOpen={() => { setWorkspaceInitialTab("Papers"); setWorkspaceOpen(true); }} />
 
       <div className="lens-tabs">
         <button className={mode === "lookup" ? "active" : ""} onClick={() => setMode("lookup")}>
@@ -1363,20 +1397,34 @@ export function App() {
           Mark paper
         </button>
       </div>
-      <button className="lens-secondary lens-auto-capture" aria-pressed={autoCapture} onClick={toggleAutoCapture}>
-        Automatic capture while marking: {autoCapture ? "on" : "off"}
-      </button>
+      {mode === "mark" && (
+        <div className="lens-exam-picker">
+          <label htmlFor="lens-active-exam">Marking for</label>
+          <select id="lens-active-exam" value={activeExamId ?? ""} onChange={(event) => chooseExam(event.target.value)}>
+            <option value="">Practice — don't record an exam result</option>
+            {activeExams.map((exam) => <option key={exam.id} value={exam.id}>
+              {exam.class_name ? `${exam.class_name} · ` : ""}{exam.subject} · {exam.title} / {exam.total_marks}
+            </option>)}
+          </select>
+          {examLoadError && <p role="status">{examLoadError}</p>}
+          {activeExamId && !activeExams.some((exam) => exam.id === activeExamId) && !examLoadError &&
+            <p role="status">Saved exam not in the current open list. Select an open exam before recording results.</p>}
+        </div>
+      )}
+      {mode === "mark" && <button className="lens-secondary lens-auto-capture" aria-pressed={autoCapture} onClick={toggleAutoCapture}>
+        Auto-capture: {autoCapture ? "On ✓" : "Off"}
+      </button>}
 
       <div className="lens-actions">
         <button
           className={"lens-secondary" + (wakeWordOn ? " lens-wake-on" : "")}
           onClick={() => {
             setWakeWordOn((v) => !v);
-            speak(!wakeWordOn ? "Listening for Kobe." : "Wake-word off.");
+            speak(!wakeWordOn ? "Listening for K9." : "Wake-word off.");
           }}
           aria-label="Wake word"
         >
-          {wakeWordOn ? "🎙️ Kobe on" : "🎙️ Kobe off"}
+          {wakeWordOn ? "🎙️ K9 on" : "🎙️ K9 off"}
         </button>
         <button className="lens-shutter" onClick={onShutter} aria-label="Capture / check frame" />
         <button
@@ -1392,19 +1440,19 @@ export function App() {
         </button>
       </div>
 
-      {workspaceOpen && <TeacherWorkspace serverStatus={serverStatus} auth={auth} connected={glassesConnected} source={glassesSource} queue={queue} reviews={reviews}
+      {workspaceOpen && <TeacherWorkspace initialTab={workspaceInitialTab} serverStatus={serverStatus} auth={auth} connected={glassesConnected} source={glassesSource} queue={queue} reviews={reviews}
         onReview={(review) => { setWorkspaceOpen(false); setMarkOpen({ requestId: review.request_id, imageKey: null, review }); }}
         onRetry={(id) => void retryFrames(ownerKey(auth), id)} onRetryNow={retryNow} onDiscard={(id) => void discardFrame(id)}
-        onConnections={() => setConnectionsOpen(true)} onClose={() => setWorkspaceOpen(false)} onCapture={next => { setMode(next); setWorkspaceOpen(false); }} onSpeak={speak} />}
+        onConnections={() => setConnectionsOpen(true)} onSignOut={signOut} onClose={() => setWorkspaceOpen(false)} onCapture={next => { setMode(next); setWorkspaceOpen(false); }} onSpeak={speak} />}
       {toast && <div className="lens-toast">{toast}</div>}
 
       {studentPicker && (
         <div className="lens-sheet" onClick={() => setStudentPicker(null)}>
           <div className="lens-sheet-body" onClick={(e) => e.stopPropagation()}>
-            <h2>Who are you looking at?</h2>
+            <h2>Confirm student</h2>
             <p>
               {studentPicker.recognising
-                ? "Kobe is recognising the face… or pick the student now."
+                ? "K9 is checking the photo. You can also choose the student."
                 : studentPicker.imageKey
                   ? (studentPicker.hint ?? "Pick the student.")
                   : studentPicker.waiting
@@ -1414,7 +1462,7 @@ export function App() {
             {studentPicker.imageKey && (
               <label className="mark-check">
                 <input type="checkbox" checked={rememberFace} onChange={(e) => setRememberFace(e.target.checked)} />
-                Remember this face so Kobe recognises them next time
+                Remember this face for future student recognition
               </label>
             )}
             <ul style={{ listStyle: "none", padding: 0, margin: 0, maxHeight: "50vh", overflowY: "auto" }}>

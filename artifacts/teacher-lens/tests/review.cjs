@@ -123,7 +123,7 @@ function school() {
     await page.route("**/api/**", server.route);
     try {
       await page.goto(BASE);
-      await page.getByRole("tab", { name: "Activity", exact: true }).click();
+      await page.getByRole("tab", { name: "Papers", exact: true }).click();
       await run(page, server);
       assert.deepEqual(errors, [], "no uncaught page errors");
       passed.push(name);
@@ -140,7 +140,7 @@ function school() {
     await page.getByRole("button", { name: "Review", exact: true }).click();
     await page.getByRole("heading", { name: "Review paper" }).waitFor();
     // Wait for K9's reading to be on the sheet before judging what it did with it.
-    await page.getByText(/Kobe read 2 answers/).waitFor({ timeout: 15_000 });
+    await page.getByText(/K9 read 2 answers/).waitFor({ timeout: 15_000 });
   };
   const save = (page) => page.getByRole("button", { name: "Confirm student and save result" });
   const studentPicker = (page) => page.locator("select.mark-input").nth(1);
@@ -183,8 +183,8 @@ function school() {
     assert.equal(sent.items[1].metadata.ai_is_correct, false);
     assert.equal(await page.evaluate(() => localStorage.getItem("k9-lens.exam")), "5", "the exam for new captures is untouched");
 
-    await page.getByRole("tab", { name: "Activity", exact: true }).click();
-    await page.getByText(/No captures sent yet/).waitFor();
+    await page.getByRole("tab", { name: "Papers", exact: true }).click();
+    await page.getByText(/No papers yet/).waitFor();
     assert.equal(await page.getByText(/to review/).count(), 0, "the paper has left the review list");
   });
 

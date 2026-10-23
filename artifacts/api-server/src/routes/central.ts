@@ -1,3 +1,6 @@
+import { pool } from "@workspace/db";
+import { createSubscriptionPayment, ensurePalmPayments, subscriptionQuote } from "../lib/subscription-payments";
+import { palmCallback } from "./palmpesa-callback";
 import { Router, type Request, type Response, type NextFunction } from "express";
 import {
   db,
@@ -142,6 +145,12 @@ router.post("/central/v1/admin/tenants/:id/subscriptions", async (req, res) => {
       ),
     );
   const expiresDate = expires_at ? new Date(expires_at) : null;
+  const billing_period = req.body.billing_period ?? existing[0]?.billing_period ?? "month";
+  const period_price_tsh = req.body.period_price_tsh ?? (existing[0]?.period_price_tsh || monthly_price_tsh || 5000);
+  if (!["month","year"].includes(billing_period) || !Number.isSafeInteger(period_price_tsh) || period_price_tsh < 100 || period_price_tsh > 100000000) {
+    res.status(400).json({error:"Set a monthly or annual billing period and price in whole TZS"});return;
+  }
+  const normalizedMonthly = billing_period === "year" ? Math.round(period_price_tsh/12) : period_price_tsh;
   if (existing.length > 0) {
     const [updated] = await db
       .update(studentSubscriptionsTable)
@@ -149,7 +158,7 @@ router.post("/central/v1/admin/tenants/:id/subscriptions", async (req, res) => {
         student_name,
         plan: plan ?? existing[0].plan,
         status: status ?? existing[0].status,
-        monthly_price_tsh: monthly_price_tsh ?? existing[0].monthly_price_tsh,
+        billing_period, period_price_tsh, monthly_price_tsh: normalizedMonthly,
         parent_phone: parent_phone ?? existing[0].parent_phone,
         expires_at: expiresDate ?? existing[0].expires_at,
         last_payment_at: status === "active" ? new Date() : existing[0].last_payment_at,
@@ -168,7 +177,7 @@ router.post("/central/v1/admin/tenants/:id/subscriptions", async (req, res) => {
       student_name,
       plan: plan ?? "basic",
       status: status ?? "active",
-      monthly_price_tsh: monthly_price_tsh ?? 5000,
+      billing_period, period_price_tsh, monthly_price_tsh: normalizedMonthly,
       parent_phone: parent_phone ?? null,
       expires_at: expiresDate,
       last_payment_at: status === "active" ? new Date() : null,
@@ -450,221 +459,48 @@ router.post("/central/v1/sync", authenticateTenant, async (req, res) => {
 
 // ---------------------------------------------------------------------------
 // PAYMENT / STK PUSH ROUTES — parent app initiates via local school server,
-// which proxies to here. License-key authed (school <-> central). After demo
-// confirmation, we extend the student's subscription and notify the bursar
+// which proxies to here. License-key authed (school <-> central). After verified
+// PalmPesa confirmation, we extend the subscription and notify the bursar
 // via the subscription_payments rows they read from /admin endpoints below.
 // ---------------------------------------------------------------------------
 
-/** Demo-only: simulate the M-Pesa STK callback by auto-completing in N ms. */
-const DEMO_STK_DELAY_MS = Number(process.env["DEMO_STK_DELAY_MS"] ?? 4000);
+router.post("/central/v1/payments/palmpesa/callback", palmCallback);
 
-async function completePayment(paymentId: number): Promise<void> {
-  const [payment] = await db
-    .select()
-    .from(subscriptionPaymentsTable)
-    .where(eq(subscriptionPaymentsTable.id, paymentId));
-  if (!payment || payment.status !== "pending") return;
-
-  // Demo: ~92% success rate so the failure path is also visible occasionally.
-  const failed = Math.random() < 0.08;
-  if (failed) {
-    // Idempotent: only flip if still pending (concurrent timer + manual
-    // callback could otherwise race and we'd "fail" an already-succeeded row).
-    await db
-      .update(subscriptionPaymentsTable)
-      .set({
-        status: "failed",
-        failure_reason: "Request cancelled by user",
-        completed_at: new Date(),
-      })
-      .where(and(eq(subscriptionPaymentsTable.id, paymentId), eq(subscriptionPaymentsTable.status, "pending")));
-    logger.info({ paymentId }, "subscription payment FAILED (demo)");
-    return;
-  }
-
-  const receipt = `M${crypto.randomBytes(5).toString("hex").toUpperCase()}`;
-  const newExpiry = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-
-  await db.transaction(async (tx) => {
-    // Conditional update + RETURNING claims the row exactly once. If a
-    // concurrent caller already settled this payment, the update returns
-    // zero rows and we skip the subscription renewal so we don't double-extend.
-    const claimed = await tx
-      .update(subscriptionPaymentsTable)
-      .set({
-        status: "success",
-        mpesa_receipt: receipt,
-        completed_at: new Date(),
-      })
-      .where(and(eq(subscriptionPaymentsTable.id, paymentId), eq(subscriptionPaymentsTable.status, "pending")))
-      .returning();
-    if (claimed.length === 0) {
-      logger.info({ paymentId }, "subscription payment already settled, skipping");
-      return;
-    }
-
-    // Renew the subscription on the source-of-truth table. Verify it touched
-    // exactly one row — if the subscription was deleted between initiate and
-    // complete, we surface that via logs instead of silently swallowing it.
-    const renewed = await tx
-      .update(studentSubscriptionsTable)
-      .set({
-        status: "active",
-        plan: payment.plan,
-        last_payment_at: new Date(),
-        expires_at: newExpiry,
-        updated_at: new Date(),
-      })
-      .where(
-        and(
-          eq(studentSubscriptionsTable.tenant_id, payment.tenant_id),
-          eq(studentSubscriptionsTable.student_code, payment.student_code),
-        ),
-      )
-      .returning({ id: studentSubscriptionsTable.id });
-    if (renewed.length === 0) {
-      logger.warn(
-        { paymentId, tenant_id: payment.tenant_id, student_code: payment.student_code },
-        "payment succeeded but subscription row missing — bursar should refund or recreate",
-      );
-    }
-
-    // Membership KP grant: every successful subscription payment also tops
-    // up the student's KP balance so the question-market is funded and the
-    // child has something to spend on locks. Conservation invariant
-    // (sum(kp_ledger.delta) == student_kp.balance) is preserved by doing
-    // both writes in this same transaction.
-    const grant = Number(process.env["MEMBERSHIP_KP_GRANT"] ?? 100);
-    if (grant > 0) {
-      const [student] = await tx
-        .select({ id: usersTable.id })
-        .from(usersTable)
-        .where(eq(usersTable.student_code, payment.student_code))
-        .limit(1);
-      if (student) {
-        const [bal] = await tx
-          .select({ balance: studentKpTable.balance })
-          .from(studentKpTable)
-          .where(eq(studentKpTable.user_id, student.id))
-          .for("update")
-          .limit(1);
-        const newBalance = (bal?.balance ?? 0) + grant;
-        await tx
-          .insert(studentKpTable)
-          .values({ user_id: student.id, balance: newBalance })
-          .onConflictDoUpdate({
-            target: studentKpTable.user_id,
-            set: { balance: newBalance, updated_at: new Date() },
-          });
-        await tx.insert(kpLedgerTable).values({
-          user_id: student.id,
-          delta: grant,
-          reason: "membership_grant",
-          balance_after: newBalance,
-        });
-        logger.info(
-          { paymentId, student_id: student.id, grant, newBalance },
-          "membership KP grant credited",
-        );
-      } else {
-        // No `users` row yet for this student_code (the per-school student
-        // hasn't been provisioned in this DB). Park the grant in
-        // `kp_pending_grants` so it isn't lost — it will be drained the
-        // first time that student calls a KP-aware endpoint.
-        await tx.insert(kpPendingGrantsTable).values({
-          student_code: payment.student_code,
-          delta: grant,
-          reason: "membership_grant",
-        });
-        logger.info(
-          { paymentId, student_code: payment.student_code, grant },
-          "no users row yet — KP grant parked in kp_pending_grants",
-        );
-      }
-    }
-  });
-  logger.info({ paymentId, receipt }, "subscription payment SUCCESS");
-}
-
-router.post("/central/v1/payments/initiate", authenticateTenant, async (req, res) => {
-  const tenant = (req as Request & { tenant?: { id: number } }).tenant!;
-  const { student_code, phone, amount_tsh } = req.body ?? {};
-  if (!student_code || !phone || !amount_tsh) {
-    res.status(400).json({ error: "student_code, phone, amount_tsh required" });
-    return;
-  }
-  // Verify the student belongs to this tenant — never let one school's license
-  // key initiate a payment against another school's student.
-  const [sub] = await db
-    .select()
-    .from(studentSubscriptionsTable)
-    .where(
-      and(
-        eq(studentSubscriptionsTable.tenant_id, tenant.id),
-        eq(studentSubscriptionsTable.student_code, student_code),
-      ),
-    );
-  if (!sub) {
-    res.status(404).json({ error: "Subscription not found for student" });
-    return;
-  }
-  const checkoutId = `ws_CO_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
-  const [created] = await db
-    .insert(subscriptionPaymentsTable)
-    .values({
-      tenant_id: tenant.id,
-      student_code,
-      student_name: sub.student_name,
-      plan: sub.plan,
-      amount_tsh: Number(amount_tsh),
-      phone: String(phone),
-      status: "pending",
-      checkout_request_id: checkoutId,
-    })
-    .returning();
-
-  // DEMO: schedule auto-completion. In production this is replaced by the
-  // /mpesa/callback webhook from Safaricom Daraja / Selcom / Azampay.
-  setTimeout(() => {
-    void completePayment(created.id).catch((err) =>
-      logger.warn({ err, paymentId: created.id }, "payment completion failed"),
-    );
-  }, DEMO_STK_DELAY_MS);
-
-  res.status(201).json({
-    payment_id: created.id,
-    checkout_request_id: created.checkout_request_id,
-    status: created.status,
-    amount_tsh: created.amount_tsh,
-    phone: created.phone,
-    message: `STK push sent to ${phone}. Enter your M-Pesa PIN to confirm.`,
-  });
+router.get("/central/v1/admin/palmpesa", async (_req,res) => {
+  await ensurePalmPayments();
+  const rows=await pool.query(`SELECT p.id,p.tenant_id,p.student_code,p.student_name,p.amount_tsh,p.status,p.mpesa_receipt,p.initiated_at,
+    o.provider_status,o.order_id,o.last_error,o.months,o.applied_at FROM subscription_payments p JOIN palmpesa_orders o ON o.payment_id=p.id ORDER BY p.id DESC LIMIT 500`);
+  res.json({payments:rows.rows});
+});
+router.post("/central/v1/admin/palmpesa/:id/recheck", async(req,res)=>{
+  await ensurePalmPayments();
+  const id=Number(req.params.id);if(!Number.isSafeInteger(id)||id<1){res.status(400).json({error:"Invalid payment"});return;}
+  await pool.query("UPDATE palmpesa_orders SET next_check_at=NOW() WHERE payment_id=$1 AND applied_at IS NULL",[id]);
+  res.json({queued:true});
 });
 
-router.get("/central/v1/payments/:id", authenticateTenant, async (req, res) => {
-  const tenant = (req as Request & { tenant?: { id: number } }).tenant!;
-  const id = Number(req.params.id);
-  const [payment] = await db
-    .select()
-    .from(subscriptionPaymentsTable)
-    .where(
-      and(
-        eq(subscriptionPaymentsTable.id, id),
-        eq(subscriptionPaymentsTable.tenant_id, tenant.id),
-      ),
-    );
-  if (!payment) {
-    res.status(404).json({ error: "Payment not found" });
-    return;
-  }
-  // Surface the KP bonus the parent app shows on the success screen. Only
-  // populated when the payment actually settled — failed/pending payments
-  // never trigger the grant transaction in completePayment.
-  const kp_granted =
-    payment.status === "success"
-      ? Number(process.env["MEMBERSHIP_KP_GRANT"] ?? 100)
-      : 0;
-  res.json({ payment: { ...payment, kp_granted } });
+router.get("/central/v1/payments/quote/:studentCode", authenticateTenant, async (req,res) => {
+  const tenant=(req as Request & {tenant:{id:number}}).tenant;
+  try { res.json(await subscriptionQuote(tenant.id,String(req.params.studentCode))); }
+  catch(e) { res.status(409).json({error:e instanceof Error?e.message:"Quote unavailable"}); }
+});
+router.post("/central/v1/payments/initiate", authenticateTenant, async(req,res) => {
+  const tenant=(req as Request & {tenant:{id:number}}).tenant;
+  try {
+    const payment=await createSubscriptionPayment(tenant.id,req.body??{});
+    res.status(202).json({...payment,status:"pending",message:"Payment request saved. Approve the mobile-money prompt on your phone when it arrives. Do not share your PIN."});
+  } catch(e) { res.status(409).json({error:e instanceof Error?e.message:"Payment unavailable"}); }
+});
+router.get("/central/v1/payments/:id", authenticateTenant, async(req,res) => {
+  await ensurePalmPayments();
+  const tenant=(req as Request & {tenant:{id:number}}).tenant;
+  const id=Number(req.params.id);
+  if(!Number.isSafeInteger(id)||id<=0){res.status(400).json({error:"Invalid payment id"});return;}
+  const {rows:[payment]}=await pool.query(`SELECT p.*,o.provider_status,o.order_id,o.months,o.applied_at,
+    o.applied_at IS NOT NULL AS subscription_activated FROM subscription_payments p
+    JOIN palmpesa_orders o ON o.payment_id=p.id WHERE p.id=$1 AND p.tenant_id=$2`,[id,tenant.id]);
+  if(!payment){res.status(404).json({error:"Payment not found"});return;}
+  res.json({payment:{...payment,receipt:payment.mpesa_receipt,kp_granted:0}});
 });
 
 router.get("/central/v1/payments", authenticateTenant, async (req, res) => {

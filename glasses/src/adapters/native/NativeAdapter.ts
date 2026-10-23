@@ -18,7 +18,7 @@ import type {
   GlassesConnectionState,
 } from "../../core/KobeGlasses";
 
-export type NativeProvider = "rokid" | "heycyan" | "rayneo";
+export type NativeProvider = "moyoung" | "rayneo";
 export type NativeHost = { postMessage(message: string): void };
 export type NativeReply = { id: string; result?: unknown; error?: string };
 
@@ -47,7 +47,7 @@ export class NativeTransport {
   /**
    * `timeoutMs` overrides the default budget for one call. A machine-to-machine
    * call should be given the default; a call that waits on the teacher — the
-   * first Rokid pairing puts a password dialog and Android's document picker in
+   * first MoYoung pairing puts device selection and permission dialogs in
    * front of them — needs far longer, and must outlast the native side's own
    * budget so the reply that arrives is the native error, not a bare timeout.
    */
@@ -117,14 +117,13 @@ export class NativeAdapter implements GlassesAdapter {
       id: provider,
       vendor: this.vendor,
       model: {
-        rokid: "Rokid Glasses",
-        heycyan: "HeyCyan-compatible glasses (development)",
+        moyoung: "MoYoung Glasses",
         rayneo: "RayNeo on-glasses",
       }[provider],
     }));
   }
   async open(device: GlassesDescriptor): Promise<NativeGlasses> {
-    if (!["rokid", "heycyan", "rayneo"].includes(device.id))
+    if (!["moyoung", "rayneo"].includes(device.id))
       throw new Error("Unknown native glasses provider");
     return new NativeGlasses(device, this.transport);
   }
@@ -162,6 +161,7 @@ export class NativeGlasses implements KobeGlasses {
       );
       this.caps = capabilities({
         camera: result.capabilities.camera === true,
+        battery: result.capabilities.battery === true,
         display: result.capabilities.display === true,
         speaker: result.capabilities.speaker === true,
         speechSynthesis: result.capabilities.speechSynthesis === true,

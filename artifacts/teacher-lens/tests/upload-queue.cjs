@@ -66,6 +66,7 @@ function school() {
       if (server.mode === "down") return route.abort("connectionfailed");
       return route.fulfill({ json: { session: { id: 10 } } });
     }
+    if (path.endsWith("/results/exams")) return route.fulfill({ json: { exams: [{ id: 42, class_name: "Form Four", subject: "Biology", title: "Mock Exam", kind: "terminal", total_marks: 100 }] } });
     if (path.endsWith("/teacher/students")) return route.fulfill({ json: { students: [{ student_id: "K9-001", name: "Neema" }] } });
     return route.fulfill({ json: { current_period: null, upcoming_periods: [] } });
   };
@@ -82,15 +83,17 @@ const signedIn = (page, bearer) =>
 
 /** Open the lens; on the phone-camera path, wait until the camera has a picture. */
 const openLens = async (page, phoneCamera = true) => {
+  if (await page.getByRole("tab", { name: "Home", exact: true }).isVisible())
+    await page.getByRole("tab", { name: "Home", exact: true }).click();
   await page.getByRole("button", { name: /Student insights/ }).click();
   if (phoneCamera) await page.waitForFunction(() => document.querySelector("video")?.videoWidth > 0);
 };
 const shutter = (page) => page.getByRole("button", { name: "Capture / check frame" }).click();
 const closeSheet = (page) => page.getByRole("button", { name: "Cancel", exact: true }).click();
 const openActivity = async (page) => {
-  if (!(await page.getByRole("tab", { name: "Activity", exact: true }).isVisible()))
-    await page.getByRole("button", { name: "Teacher workspace" }).click();
-  await page.getByRole("tab", { name: "Activity", exact: true }).click();
+  if (!(await page.getByRole("tab", { name: "Papers", exact: true }).isVisible()))
+    await page.getByRole("button", { name: "← Back to K9 home" }).click();
+  await page.getByRole("tab", { name: "Papers", exact: true }).click();
 };
 const stored = (page) =>
   page.evaluate(
@@ -210,7 +213,7 @@ async function captureWhileDown(page, server) {
     // know it arrived and has to send it again.
     server.mode = "lose-reply";
     await shutter(page);
-    await page.getByText(/Kobe is recognising the face|Pick the student/).waitFor({ timeout: 15_000 });
+    await page.getByText(/K9 is checking the photo|Pick the student/).waitFor({ timeout: 15_000 });
     await closeSheet(page);
     await openActivity(page);
     await page.getByText(/#501/).waitFor();
@@ -322,21 +325,47 @@ async function captureWhileDown(page, server) {
     await signedIn(page, ASHA);
     await page.goto(BASE);
     await openLens(page);
-    await page.getByRole("button", { name: "Automatic capture while marking: on" }).click();
-    await page.getByRole("button", { name: "Automatic capture while marking: off" }).waitFor();
     await page.getByRole("button", { name: "Mark paper", exact: true }).click();
+    await page.getByRole("button", { name: "Auto-capture: On ✓" }).click();
+    await page.getByRole("button", { name: "Auto-capture: Off" }).waitFor();
     await page.getByText(/Automatic capture is off\. Tap the shutter/).waitFor();
+    // A frame already committed before the toggle may still finish uploading.
+    // Let that in-flight upload settle before checking the disabled state.
+    await sleep(2500);
+    const attemptsWhenDisabled = server.attempts.length;
     await sleep(6000);
-    assert.equal(server.attempts.length, 0, "no photograph is taken on a timer");
+    assert.equal(server.attempts.length, attemptsWhenDisabled, "no additional photographs after automatic capture is turned off");
+    const processedBeforeShutter = server.processed.size;
+    const attemptsBeforeShutter = server.attempts.length;
     await shutter(page);
     await page.getByText(/K9 is reading the marked paper/).waitFor({ timeout: 15_000 });
     await sleep(4000);
-    assert.equal(server.processed.size, 1, "one tap, one photograph");
-    assert.equal(server.attempts[0].mode, "mark");
+    assert.equal(server.processed.size - processedBeforeShutter, 1, "one tap, one additional photograph");
+    assert.equal(server.attempts.length - attemptsBeforeShutter, 1, "shutter produces one new upload");
+    assert.equal(server.attempts.at(-1).mode, "mark");
     // The choice survives the app being closed.
     await page.reload();
     await openLens(page);
-    await page.getByRole("button", { name: "Automatic capture while marking: off" }).waitFor();
+    await page.getByRole("button", { name: "Mark paper", exact: true }).click();
+    await page.getByRole("button", { name: "Auto-capture: Off" }).waitFor();
+  });
+
+  await scenario("exam selection is attached to offline-safe camera uploads", async (page, server) => {
+    await signedIn(page, ASHA);
+    await page.addInitScript(() => localStorage.setItem("k9-lens.auto-capture", "off"));
+    await page.goto(BASE);
+    await openLens(page);
+    await page.getByRole("button", { name: "Mark paper", exact: true }).click();
+    await page.getByLabel("Marking for").selectOption("42");
+    await shutter(page);
+    await page.getByText(/K9 is reading the marked paper/).waitFor({ timeout: 15_000 });
+    await sleep(3000);
+    assert.equal(server.detail.at(-1)?.examId, "42", "capture is tied to the teacher's selected exam");
+    assert.equal(server.attempts.at(-1)?.mode, "mark");
+    await page.reload();
+    await openLens(page);
+    await page.getByRole("button", { name: "Mark paper", exact: true }).click();
+    assert.equal(await page.getByLabel("Marking for").inputValue(), "42", "selected exam survives restart");
   });
 
   await scenario("account switching", async (page, server) => {
@@ -348,8 +377,8 @@ async function captureWhileDown(page, server) {
     const signIn = async (email) => {
       await page.getByLabel("Email").fill(email);
       await page.getByLabel("Password").fill("irrelevant");
-      await page.getByRole("button", { name: "Sign in", exact: true }).click();
-      await page.getByRole("tab", { name: "Activity", exact: true }).waitFor();
+      await page.getByRole("button", { name: "Continue to K9 →", exact: true }).click();
+      await page.getByRole("tab", { name: "Papers", exact: true }).waitFor();
     };
 
     // Another teacher signs in on the same phone, on a working server.
@@ -366,10 +395,10 @@ async function captureWhileDown(page, server) {
     assert.equal((await stored(page))[0].state, "pending", "and it is still stored");
 
     // Baraka's own capture goes up as Baraka.
-    await page.getByRole("tab", { name: "Today", exact: true }).click();
+    await page.getByRole("tab", { name: "Home", exact: true }).click();
     await openLens(page);
     await shutter(page);
-    await page.getByText(/Kobe is recognising the face|Pick the student/).waitFor({ timeout: 15_000 });
+    await page.getByText(/K9 is checking the photo|Pick the student/).waitFor({ timeout: 15_000 });
     await closeSheet(page);
     assert.deepEqual(server.attempts.map((a) => a.auth), [`Bearer ${BARAKA}`]);
     assert.notEqual(server.attempts[0].captureId, ashasFrame.id);
@@ -455,11 +484,11 @@ async function captureWhileDown(page, server) {
           const call = JSON.parse(raw);
           window.nativeCalls.push(call.method);
           const reply = { id: call.id, result: null };
-          if (call.method === "info") reply.result = { version: 1, providers: ["rokid"], automaticRokid: enabled, connected, provider };
+          if (call.method === "info") reply.result = { version: 1, providers: ["moyoung"], automaticMoYoung: enabled, connected, provider };
           if (call.method === "connect") {
             if (opts.connects) {
               connected = true;
-              provider = "rokid";
+              provider = "moyoung";
               reply.result = { capabilities: { camera: true, display: true, speaker: true, speechSynthesis: true } };
             } else {
               delete reply.result;
@@ -489,12 +518,12 @@ async function captureWhileDown(page, server) {
     await signedIn(page, ASHA);
     await nativeHost(page, { connects: true });
     await page.goto(BASE);
-    await page.getByText("Rokid Glasses connected", { exact: true }).waitFor();
+    await page.getByText("MoYoung Glasses connected", { exact: true }).waitFor();
     await openLens(page, false);
     await shutter(page);
     await page
       .getByRole("alert")
-      .filter({ hasText: /Rokid Glasses did not return a photo, and the phone camera was not used in their place\..*Reconnect glasses and try again/ })
+      .filter({ hasText: /MoYoung Glasses did not return a photo, and the phone camera was not used in their place\..*Reconnect glasses and try again/ })
       .waitFor();
     assert.equal(await page.evaluate(() => window.cameraCalls), 0, "the phone camera was never opened");
     assert.deepEqual(server.attempts, [], "nothing was uploaded in the glasses' place");
@@ -506,15 +535,15 @@ async function captureWhileDown(page, server) {
     await nativeHost(page, { connects: false });
     await page.goto(BASE);
     await openLens(page, false);
-    await page.getByText(/Rokid Glasses are selected but not connected\. Open Connections/).first().waitFor();
+    await page.getByText(/MoYoung Glasses are selected but not connected\. Open Connections/).first().waitFor();
     await shutter(page);
     await page.getByRole("alert").filter({ hasText: /selected but not connected, so no photo was taken/ }).waitFor();
     assert.equal(await page.evaluate(() => window.cameraCalls), 0, "no silent fall back to the phone camera");
     assert.deepEqual(server.attempts, []);
 
     // Choosing the phone camera explicitly is still honoured.
-    await page.getByRole("button", { name: "Teacher workspace" }).click();
-    await page.getByRole("button", { name: "Connections: school server and Rokid glasses" }).click();
+    await page.getByRole("button", { name: "← Back to K9 home" }).click();
+    await page.getByRole("button", { name: "Open glasses settings" }).click();
     await page.getByLabel("Camera source").selectOption("");
     await page.getByRole("button", { name: "Connect", exact: true }).click();
     await page.getByText(/automatic glasses connection paused/).waitFor();
@@ -522,12 +551,12 @@ async function captureWhileDown(page, server) {
     await openLens(page);
     assert.ok((await page.evaluate(() => window.cameraCalls)) > 0);
     await shutter(page);
-    await page.getByText(/Kobe is recognising the face|Pick the student/).waitFor({ timeout: 15_000 });
+    await page.getByText(/K9 is checking the photo|Pick the student/).waitFor({ timeout: 15_000 });
     assert.equal(server.processed.size, 1, "the explicitly chosen phone camera captures and uploads");
 
     // The choice is remembered when the app is reopened.
     await page.reload();
-    await page.getByRole("button", { name: "Connections: school server and Rokid glasses" }).click();
+    await page.getByRole("button", { name: "Open glasses settings" }).click();
     await page.getByText("Phone camera", { exact: true }).last().waitFor();
     assert.equal(await page.getByLabel("Camera source").inputValue(), "", "still on the phone camera");
     await sleep(4000);

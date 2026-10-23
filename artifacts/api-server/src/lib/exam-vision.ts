@@ -2,7 +2,6 @@ import { pool } from "@workspace/db";
 import { ensureResultsTables, findClassStudent, getExam, recordExamResult } from "./results";
 import { generateCuratedNotesForPaper, generateRetestForPaper } from "./student-development";
 import { logger } from "./logger";
-import { generateExamSummary } from "./exam-summary";
 
 export type VisionMarkItem = {
   question_number?: number | string | null;
@@ -23,6 +22,7 @@ function clean(v: unknown, max = 1000): string | null {
 }
 
 function num(v: unknown): number | null {
+  if (v == null || v === "") return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 }
@@ -139,14 +139,14 @@ export async function recordCameraMarkedPaper(args: {
         : (awarded !== null && possible !== null ? awarded >= possible : false);
       const values = [paperId, qn, clean(item.question_text,800), clean(item.question_topic,200),
         clean(item.student_answer,1500), clean(item.expected_answer,1500), isCorrect, awarded, possible,
-        JSON.stringify({ source: "glasses_camera", marking_confidence: item.marking_confidence ?? null })];
+        JSON.stringify({ source: "glasses_camera", marking_confidence: item.marking_confidence ?? null, source_image_key: imageKey, expected_answer_source: "vision_unverified" })];
       if (existingItem.rows[0]) {
         await client.query(
           `UPDATE graded_paper_items
            SET question_text=$3, question_topic=$4, student_answer=$5, expected_answer=$6,
                is_correct=$7, marks_awarded=$8, marks_possible=$9, metadata=$10::jsonb
            WHERE id=$1 AND paper_id=$2`,
-          [existingItem.rows[0].id, ...values.slice(1)],
+          [existingItem.rows[0].id, paperId, ...values.slice(2)],
         );
       } else {
         await client.query(
@@ -197,6 +197,6 @@ export async function recordCameraMarkedPaper(args: {
   try { await generateCuratedNotesForPaper(paperId); } catch (e) { logger.warn({ err: e, paperId }, "camera curated notes failed"); }
   try { await generateRetestForPaper(paperId); } catch (e) { logger.warn({ err: e, paperId }, "camera retest generation failed"); }
 
-  await generateExamSummary(studentCode, exam.subject ?? "General", exam.id).catch((e) => logger.warn({ err: e, studentCode }, "exam summary generation failed"));
+  // Printable packs are generated once marking is closed, not on every frame.
   return { status: "recorded", paperId, studentCode };
 }

@@ -35,9 +35,9 @@ const jpeg = Uint8Array.from([255, 216, 255, 224, 1, 2, 255, 217]);
 
 test("native photo follows the authenticated K9 frame contract without a vendor cloud", async () => {
   const transport = fixture((method, params) => {
-    if (method === "info") return { version: 1, providers: ["rokid"] };
+    if (method === "info") return { version: 1, providers: ["moyoung"] };
     if (method === "connect") {
-      assert.equal(params.provider, "rokid");
+      assert.equal(params.provider, "moyoung");
       return { capabilities: { camera: true } };
     }
     if (method === "capture")
@@ -84,9 +84,9 @@ test("capture rejects invalid media and vendor errors; failed pairing stays disc
         : { jpeg: value },
     );
     const device = await new NativeAdapter(transport).open({
-      id: "rokid",
+      id: "moyoung",
       vendor: "native",
-      model: "Rokid",
+      model: "MoYoung",
     });
     await device.connect();
     await assert.rejects(device.camera.capture());
@@ -96,9 +96,9 @@ test("capture rejects invalid media and vendor errors; failed pairing stays disc
     throw new Error("Pairing denied");
   });
   const device = await new NativeAdapter(transport).open({
-    id: "rokid",
+    id: "moyoung",
     vendor: "native",
-    model: "Rokid",
+    model: "MoYoung",
   });
   await assert.rejects(device.connect(), /Pairing denied/);
   assert.equal(device.state, "disconnected");
@@ -128,15 +128,15 @@ test("bridge times out when native host does not reply", async () => {
 
 test("an interactive pairing outlasts the default budget, an automatic reconnect does not", async () => {
   // The Android host puts a password dialog and Android's document picker in
-  // front of the teacher during a first Rokid pairing, so a budget sized for a
+  // front of the teacher during a first MoYoung pairing, so a budget sized for a
   // machine-to-machine call expires while they are still reading. An automatic
   // reconnect has nobody in front of it and must still fail fast.
   const silent = new NativeTransport({ postMessage() {} }, 30);
   const adapter = new NativeAdapter(silent);
   const device = await adapter.open({
-    id: "rokid",
+    id: "moyoung",
     vendor: "native",
-    model: "Rokid Glasses",
+    model: "MoYoung Glasses",
   });
 
   await assert.rejects(
@@ -163,18 +163,12 @@ test("an interactive pairing outlasts the default budget, an automatic reconnect
   await interactive;
 });
 
-test("heycyan is selectable again, as a development provider", async () => {
-  // Restored for hardware evaluation on devices we own. The Android release
-  // build refuses to package its SDK; see app/build.gradle.kts.
-  const transport = fixture((method) =>
-    method === "info" ? { version: 1, providers: ["rokid", "heycyan"] } : null,
-  );
-  const adapter = new NativeAdapter(transport);
-  const devices = await adapter.discover();
-  const heycyan = devices.find((d) => d.id === "heycyan");
-  assert.ok(heycyan, "heycyan should be discoverable");
-  assert.match(heycyan!.model, /development/i, "its name should say what it is");
-  await assert.doesNotReject(adapter.open(heycyan!));
+test("retired providers cannot be opened", async () => {
+  const transport = new NativeTransport({ postMessage() {} });
+  for (const id of ["rokid", "heycyan"]) {
+    await assert.rejects(new NativeAdapter(transport).open({ id, vendor: "native", model: id }), /Unknown native/);
+  }
+  transport.dispose();
 });
 
 test("an unknown provider is still refused", async () => {
@@ -183,4 +177,26 @@ test("an unknown provider is still refused", async () => {
     new NativeAdapter(transport).open({ id: "mystery", vendor: "native", model: "?" }),
     /Unknown native glasses provider/,
   );
+});
+
+test("MoYoung exposes battery but not unimplemented streaming or glasses speech", async () => {
+  let transport: NativeTransport;
+  transport = new NativeTransport({ postMessage(raw) {
+    const request = JSON.parse(raw);
+    queueMicrotask(() => transport.receive({ id: request.id, result:
+      request.method === "connect" ? { capabilities: { camera: true, battery: true } } :
+      request.method === "battery" ? 73 : null }));
+  } });
+  const adapter = new NativeAdapter(transport);
+  const device = await adapter.open({ id: "moyoung", vendor: "native", model: "MoYoung" });
+  await device.connect();
+  assert.equal(await device.battery(), 73);
+  const caps = await device.getCapabilities();
+  for (const key of ["cameraStream", "microphone", "display", "speaker", "speechSynthesis"] as const)
+    assert.equal(caps[key], false);
+  await assert.rejects(device.microphone.start(), /microphone/);
+  await assert.rejects(device.speaker.speak("Hello"), /speechSynthesis/);
+  await device.disconnect();
+  await assert.rejects(device.camera.capture(), /disconnected/);
+  transport.dispose();
 });

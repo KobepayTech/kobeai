@@ -21,7 +21,7 @@ function BottomNav() {
     { name: "Wallet", href: "/wallet", icon: Wallet },
     { name: "K9", href: "/mini-k9", icon: Bot },
     { name: "Pay", href: "/subscription", icon: ShieldCheck },
-    { name: "Print", href: "/print", icon: Printer },
+    { name: "Services", href: "/school-services", icon: Printer },
     { name: "Activity", href: "/activity", icon: Activity },
   ];
 

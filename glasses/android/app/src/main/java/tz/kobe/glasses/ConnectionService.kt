@@ -9,26 +9,26 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.IBinder
 
-/** Keeps the current Activity-owned Rokid SDK session eligible while minimised.
- * The SDK requires an Activity: process death/task removal is not a headless boot flow.
+/** Keeps the current Activity-owned MoYoung SDK session eligible while minimised.
+ * This host currently owns the session in the Activity: process death/task removal is not a headless boot flow.
  */
 class ConnectionService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
     override fun onCreate() {
         super.onCreate()
         getSystemService(NotificationManager::class.java).createNotificationChannel(
-            NotificationChannel("rokid-connection", "Rokid connection", NotificationManager.IMPORTANCE_LOW))
+            NotificationChannel("moyoung-connection", "MoYoung connection", NotificationManager.IMPORTANCE_LOW))
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val stop = PendingIntent.getService(this, 1, Intent(this, ConnectionService::class.java).setAction("stop"), PendingIntent.FLAG_IMMUTABLE)
-        val notification = Notification.Builder(this, "rokid-connection")
-            .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth).setContentTitle("KobeAI · Rokid connection")
+        val notification = Notification.Builder(this, "moyoung-connection")
+            .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth).setContentTitle("KobeAI · MoYoung connection")
             .setContentText("Connection active; retries automatically if interrupted. No background capture.")
             .setContentIntent(open).setOngoing(true).addAction(android.R.drawable.ic_media_pause, "Pause", stop).build()
         startForeground(9109, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == "stop") { RokidCredentials.enable(this, false); stopSelf() }
+        if (intent?.action == "stop") { MoYoungPairing.enable(this, false); stopSelf() }
         return START_NOT_STICKY
     }
     override fun onTaskRemoved(rootIntent: Intent?) { stopSelf() }

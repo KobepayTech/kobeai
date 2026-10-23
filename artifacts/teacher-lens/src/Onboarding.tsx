@@ -191,7 +191,7 @@ export function Onboarding() {
         <Centered>
           <h1>All set, {teacherName.split(" ")[0]}</h1>
           <p className="onb-muted">
-            K9 knows your class, their faces and their subjects. Open the Lens whenever you want
+            K9 is ready to help you with papers, students and teaching. Open the camera whenever you want
             a briefing on a student or want to mark a paper.
           </p>
           <button
@@ -201,7 +201,7 @@ export function Onboarding() {
               window.location.reload();
             }}
           >
-            Open the Lens
+            Open K9 camera
           </button>
         </Centered>
       )}

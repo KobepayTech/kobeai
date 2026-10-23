@@ -67,7 +67,11 @@ app.use(
     cb(null, sameOrigin ? { ...corsOptions, origin: true } : corsOptions);
   }),
 );
-app.use(express.json());
+app.use(express.json({ verify: (req, _res, buf) => {
+  if (req.url?.split("?")[0] === "/api/central/v1/payments/palmpesa/callback") {
+    (req as typeof req & {rawBody?: Buffer}).rawBody = Buffer.from(buf);
+  }
+}}));
 app.use(express.urlencoded({ extended: true }));
 
 app.use("/api", router);

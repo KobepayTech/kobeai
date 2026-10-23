@@ -2,6 +2,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { Onboarding } from "./Onboarding";
 import "./styles.css";
+import "./k9-refresh.css";
 
 // The QR a teacher scans lands on `#/onboard/<token>`. That is a different
 // screen from the Lens itself — it has no session, no wake word and no
