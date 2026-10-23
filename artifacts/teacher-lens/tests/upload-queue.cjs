@@ -66,6 +66,7 @@ function school() {
       if (server.mode === "down") return route.abort("connectionfailed");
       return route.fulfill({ json: { session: { id: 10 } } });
     }
+    if (path.endsWith("/results/exams")) return route.fulfill({ json: { exams: [{ id: 42, class_name: "Form Four", subject: "Biology", title: "Mock Exam", kind: "terminal", total_marks: 100 }] } });
     if (path.endsWith("/teacher/students")) return route.fulfill({ json: { students: [{ student_id: "K9-001", name: "Neema" }] } });
     return route.fulfill({ json: { current_period: null, upcoming_periods: [] } });
   };
@@ -347,6 +348,24 @@ async function captureWhileDown(page, server) {
     await openLens(page);
     await page.getByRole("button", { name: "Mark paper", exact: true }).click();
     await page.getByRole("button", { name: "Auto-capture: Off" }).waitFor();
+  });
+
+  await scenario("exam selection is attached to offline-safe camera uploads", async (page, server) => {
+    await signedIn(page, ASHA);
+    await page.addInitScript(() => localStorage.setItem("k9-lens.auto-capture", "off"));
+    await page.goto(BASE);
+    await openLens(page);
+    await page.getByRole("button", { name: "Mark paper", exact: true }).click();
+    await page.getByLabel("Marking for").selectOption("42");
+    await shutter(page);
+    await page.getByText(/K9 is reading the marked paper/).waitFor({ timeout: 15_000 });
+    await sleep(3000);
+    assert.equal(server.detail.at(-1)?.examId, "42", "capture is tied to the teacher's selected exam");
+    assert.equal(server.attempts.at(-1)?.mode, "mark");
+    await page.reload();
+    await openLens(page);
+    await page.getByRole("button", { name: "Mark paper", exact: true }).click();
+    assert.equal(await page.getByLabel("Marking for").inputValue(), "42", "selected exam survives restart");
   });
 
   await scenario("account switching", async (page, server) => {
