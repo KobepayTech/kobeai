@@ -331,11 +331,14 @@ async function captureWhileDown(page, server) {
     const attemptsWhenDisabled = server.attempts.length;
     await sleep(6000);
     assert.equal(server.attempts.length, attemptsWhenDisabled, "no additional photographs after automatic capture is turned off");
+    const processedBeforeShutter = server.processed.size;
+    const attemptsBeforeShutter = server.attempts.length;
     await shutter(page);
     await page.getByText(/K9 is reading the marked paper/).waitFor({ timeout: 15_000 });
     await sleep(4000);
-    assert.equal(server.processed.size, 1, "one tap, one photograph");
-    assert.equal(server.attempts[0].mode, "mark");
+    assert.equal(server.processed.size - processedBeforeShutter, 1, "one tap, one additional photograph");
+    assert.equal(server.attempts.length - attemptsBeforeShutter, 1, "shutter produces one new upload");
+    assert.equal(server.attempts.at(-1).mode, "mark");
     // The choice survives the app being closed.
     await page.reload();
     await openLens(page);
