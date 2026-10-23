@@ -328,6 +328,9 @@ async function captureWhileDown(page, server) {
     await page.getByRole("button", { name: "Auto-capture: On ✓" }).click();
     await page.getByRole("button", { name: "Auto-capture: Off" }).waitFor();
     await page.getByText(/Automatic capture is off\. Tap the shutter/).waitFor();
+    // A frame already committed before the toggle may still finish uploading.
+    // Let that in-flight upload settle before checking the disabled state.
+    await sleep(2500);
     const attemptsWhenDisabled = server.attempts.length;
     await sleep(6000);
     assert.equal(server.attempts.length, attemptsWhenDisabled, "no additional photographs after automatic capture is turned off");
