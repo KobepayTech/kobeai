@@ -13,6 +13,36 @@ and the asynchronous intelligence path.
 > to users as **Camera Network Discovery**. Teachers should never need to
 > know model names like YOLO-Master, Youtu-VL, TitaNet, Whisper, or Qwen.
 
+
+## Product boundary: KobeOS commerce, K9 school + student intelligence
+
+K9 owns the combined **School OS + Student OS** experience. There is no
+separate School OS or Student OS deployment.
+
+**KobeOS owns Duka OS functionality.** Duka OS is not a K9 module; it is the
+KobeOS commerce layer for school shops, catalogs, inventory, checkout,
+merchant operations and settlement.
+
+The school pocket-money capability remains part of the Kobepay wallet
+architecture. K9 displays and uses wallet context for school/student policy,
+but the authoritative money balance and immutable transaction ledger remain
+with Kobepay.
+
+For a school purchase, the integration is:
+
+```
+Kobepay wallet/ledger -> KobeOS merchant checkout -> transaction event -> K9
+                                                               |
+                                                               +-> student activity
+                                                               +-> parent notification
+                                                               +-> learning/school context
+```
+
+K9 must not create a second monetary ledger. KobeOS must not own K9 learning
+profiles, attendance intelligence, exam analytics or student AI context.
+See `docs/KOBEOS_K9_PRODUCT_BOUNDARY.md` for the stable cross-repository
+contract.
+
 ## Model stack (K9 v1)
 
 | Layer | Model / technology | Job in K9 |
