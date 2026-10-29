@@ -33,8 +33,9 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     implementation("io.github.hkust-spark:xgglass-core:0.3.0")
-    "companionImplementation"(files("libs/moyoung_glasses_sdk_0.0.7_20260624.aar"))
-    "companionImplementation"(files("libs/jl_audio_decode_V2.1.0_20012-release.aar", "libs/jl_bt_ota_V1.10.0_10932-release.aar"))
+    // Official MoYoung 1.3.8 Android SDK 1.0.0_20260928, plus publisher AARs
+    // (including lib-awlicense). Fetched and verified by fetch_moyoung.py.
+    "companionImplementation"(fileTree("libs") { include("*.aar") })
     "companionImplementation"("com.google.protobuf:protobuf-java:4.29.3")
     "companionImplementation"("com.squareup.okhttp3:okhttp:4.12.0")
     "companionImplementation"("com.google.code.gson:gson:2.9.0")
@@ -57,7 +58,7 @@ tasks.register("verifyLensAssets") {
 tasks.matching { it.name == "preBuild" }.configureEach { dependsOn("verifyLensAssets") }
 tasks.matching { it.name == "preCompanionDebugBuild" || it.name == "preCompanionReleaseBuild" }.configureEach {
     doFirst {
-        listOf("moyoung_glasses_sdk_0.0.7_20260624.aar", "jl_audio_decode_V2.1.0_20012-release.aar", "jl_bt_ota_V1.10.0_10932-release.aar").forEach { name ->
+        listOf("moyoung_glasses_sdk_1.0.0_20260928.aar", "lib-awlicense-1.0.1-release.aar", "moyoung-verified.json").forEach { name ->
             check(file("libs/$name").isFile) { "Fetch the pinned MoYoung SDK: python3 ../scripts/fetch_moyoung.py" }
         }
     }
