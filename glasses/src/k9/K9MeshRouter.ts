@@ -75,6 +75,7 @@ export class K9MeshRouter {
   private readonly pending = new Map<string, Entry>();
   private readonly seen = new Map<string, number>();
   private readonly now: () => number;
+  private flushing = false;
   constructor(private readonly options: K9MeshOptions) {
     if (!ID.test(options.schoolId) || !ID.test(options.nodeId)) throw new Error("Invalid K9 mesh identity");
     this.now = options.now ?? Date.now;
@@ -107,26 +108,37 @@ export class K9MeshRouter {
     this.seen.set(packet.id, packet.expiresAt);
     const entry: Entry = { packet, sentTo: new Set(fromPeerId ? [fromPeerId] : []) };
     if (packet.remainingHops > 0) this.pending.set(packet.id, entry);
-    // Delivery happens only after authentication; no camera or exam payloads.
-    await this.options.deliver(packet);
+    // Roll back dedup on failed local delivery so a later authenticated retry
+    // can deliver the alert instead of silently losing it.
+    try {
+      await this.options.deliver(packet);
+    } catch (error) {
+      this.seen.delete(packet.id);
+      this.pending.delete(packet.id);
+      throw error;
+    }
     return "accepted";
   }
 
   /** Forward only already-verified packets; one attempt per peer until successful. */
   async flush(): Promise<{ forwarded: number; failed: number }> {
-    this.prune();
-    let forwarded = 0, failed = 0;
-    for (const entry of this.pending.values()) {
-      if (entry.packet.remainingHops <= 0) continue;
-      for (const peer of this.peers.values()) {
-        if (entry.sentTo.has(peer.id)) continue;
-        try {
-          await peer.send({ ...entry.packet, remainingHops: entry.packet.remainingHops - 1 });
-          entry.sentTo.add(peer.id);
-          forwarded++;
-        } catch { failed++; }
+    if (this.flushing) return { forwarded: 0, failed: 0 };
+    this.flushing = true;
+    try {
+      this.prune();
+      let forwarded = 0, failed = 0;
+      for (const entry of this.pending.values()) {
+        if (entry.packet.remainingHops <= 0) continue;
+        for (const peer of this.peers.values()) {
+          if (entry.sentTo.has(peer.id)) continue;
+          try {
+            await peer.send({ ...entry.packet, remainingHops: entry.packet.remainingHops - 1 });
+            entry.sentTo.add(peer.id);
+            forwarded++;
+          } catch { failed++; }
+        }
       }
-    }
-    return { forwarded, failed };
+      return { forwarded, failed };
+    } finally { this.flushing = false; }
   }
 }
