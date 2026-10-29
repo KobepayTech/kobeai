@@ -34,7 +34,7 @@ export function frameK9Packet(
   if (bytes.length > K9_BLE_MAX_PACKET_BYTES) throw new Error("K9 mesh packet too large for BLE");
   const capacity = mtuPayloadBytes - K9_BLE_FRAME_HEADER;
   const total = Math.max(1, Math.ceil(bytes.length / capacity));
-  if (total > 0xffff) throw new Error("Too many BLE frames");
+  if (total > 256) throw new Error("Too many BLE frames");
   const frames: Uint8Array[] = [];
   for (let index = 0; index < total; index++) {
     const part = bytes.subarray(index * capacity, (index + 1) * capacity);
