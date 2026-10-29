@@ -41,7 +41,7 @@ export function useServerConnection(auth: TeacherAuth | null) {
         delay = 60_000;
       } catch {
         if (stopped) return;
-        setStatus("School server unavailable · retrying");
+        setStatus(navigator.onLine ? "School server unavailable · photos saved locally" : "Device offline · photos saved locally");
         delay = Math.min(delay * 2, 60_000);
       } finally {
         inFlight = false;
