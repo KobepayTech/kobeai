@@ -53,7 +53,7 @@ def main() -> None:
             if not name.startswith("android/libs/") or not name.endswith(".aar"):
                 continue
             filename = Path(name).name
-            if filename != name.split("/")[-1] or not re.fullmatch(r"[A-Za-z0-9_.-]+\\.aar", filename):
+            if filename != name.split("/")[-1] or not re.fullmatch(r"[A-Za-z0-9_.-]+\.aar", filename):
                 raise RuntimeError("Unexpected AAR filename")
             stream = tar.extractfile(member)
             if stream is None or member.size > MAX_AAR:
