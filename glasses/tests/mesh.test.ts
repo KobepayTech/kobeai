@@ -95,3 +95,26 @@ test("peer cannot bypass signature verification using a matching message ID", as
   assert.equal(await router.ingest(base({ signature: "untrusted-pretend-signature" })), "rejected");
   assert.equal(await router.ingest(base()), "accepted");
 });
+
+test("local delivery failure can be retried rather than deduplicated away", async () => {
+  let calls = 0;
+  const router = make([], {
+    deliver: async () => {
+      if (++calls === 1) throw new Error("gateway local queue busy");
+    },
+  });
+  await assert.rejects(router.ingest(base()), /local queue busy/);
+  assert.equal(router.pendingCount, 0);
+  assert.equal(await router.ingest(base()), "accepted");
+});
+test("simultaneous flushes cannot transmit the same packet twice", async () => {
+  const router = make();
+  let sent = 0;
+  router.addPeer({ id: "gateway_three", send: async () => {
+    sent++;
+    await Promise.resolve();
+  } });
+  await router.ingest(base());
+  await Promise.all([router.flush(), router.flush()]);
+  assert.equal(sent, 1);
+});
