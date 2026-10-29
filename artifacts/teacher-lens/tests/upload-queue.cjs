@@ -409,7 +409,7 @@ async function captureWhileDown(page, server) {
     await signIn("baraka@school.tz");
     await openActivity(page);
     await page.getByText(/1 photo from a different sign-in is stored on this phone/).waitFor();
-    await page.getByText(/No captures sent yet/).waitFor();
+    await page.getByText(/No papers yet|No papers recorded/).first().waitFor();
     assert.equal(await page.getByText(/waiting to upload/).count(), 0, "another teacher's queue is not shown");
     await sleep(4000);
     assert.deepEqual(server.attempts, [], "nothing of Asha's was uploaded under Baraka's sign-in");
