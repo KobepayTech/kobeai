@@ -16,6 +16,15 @@ self.addEventListener("install", (event) => {
       // A first successful online visit installs the app shell for offline restart.
       const response = await fetch(shell, { cache: "no-store" });
       if (!response.ok) throw new Error("K9 shell not available for offline installation");
+      const html = await response.clone().text();
+      const urls = Array.from(html.matchAll(/(?:src|href)=["']([^"']+)["']/g), (match) => match[1])
+        .map((asset) => new URL(asset, shell))
+        .filter(staticAsset);
+      await Promise.all(urls.map(async (asset) => {
+        const file = await fetch(asset.href, { cache: "no-store" });
+        if (!file.ok) throw new Error("K9 asset unavailable: " + asset.pathname);
+        await cache.put(asset.href, file);
+      }));
       await cache.put(shell, response);
     }).then(() => self.skipWaiting()),
   );
