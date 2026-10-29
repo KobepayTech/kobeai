@@ -70,6 +70,24 @@ class K9GatewayGattLink(
         }
     }
     private val serverCallback = object : BluetoothGattServerCallback() {
+        override fun onServiceAdded(status: Int, service: BluetoothGattService) {
+            if (status != BluetoothGatt.GATT_SUCCESS || service.uuid != SERVICE_UUID) {
+                Log.e(TAG, "Gateway GATT service registration failed: $status")
+                return
+            }
+            val advertiser = adapter.bluetoothLeAdvertiser ?: run {
+                Log.e(TAG, "BLE advertiser unavailable")
+                return
+            }
+            val settings = AdvertiseSettings.Builder()
+                .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
+                .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM)
+                .setConnectable(true).build()
+            val data = AdvertiseData.Builder().addServiceUuid(ParcelUuid(SERVICE_UUID))
+                .setIncludeDeviceName(false).build()
+            advertiser.startAdvertising(settings, data, advertiserCallback)
+            advertising = true
+        }
         override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
             val connected = status == BluetoothGatt.GATT_SUCCESS &&
                 newState == BluetoothProfile.STATE_CONNECTED
@@ -123,7 +141,7 @@ class K9GatewayGattLink(
     private val clientCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             if (status == BluetoothGatt.GATT_SUCCESS && newState == BluetoothProfile.STATE_CONNECTED) {
-                gatt.requestMtu(247)
+                if (!gatt.requestMtu(247)) gatt.discoverServices()
                 onConnection(gatt.device.address, true)
             } else {
                 clients.remove(gatt.device.address)
@@ -202,15 +220,7 @@ class K9GatewayGattLink(
         server = manager.openGattServer(context, serverCallback)
             ?: error("Cannot open K9 BLE GATT server")
         check(server!!.addService(service)) { "Cannot register K9 BLE service" }
-        val advertiser = adapter.bluetoothLeAdvertiser ?: error("BLE advertiser unavailable")
-        val settings = AdvertiseSettings.Builder()
-            .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
-            .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM)
-            .setConnectable(true).build()
-        val data = AdvertiseData.Builder().addServiceUuid(ParcelUuid(SERVICE_UUID))
-            .setIncludeDeviceName(false).build()
-        advertiser.startAdvertising(settings, data, advertiserCallback)
-        advertising = true
+        // Advertising starts only after onServiceAdded confirms GATT registration.
     }
     fun connectBondedPeer(device: BluetoothDevice) {
         check(allowedAddresses.contains(device.address)) { "Peer not provisioned" }
