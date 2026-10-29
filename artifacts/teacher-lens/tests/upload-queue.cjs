@@ -142,6 +142,27 @@ async function captureWhileDown(page, server) {
     }
   }
 
+  await scenario("offline PWA shell loads without internet and never caches student APIs", async (page) => {
+    await signedIn(page, ASHA);
+    await page.goto(BASE);
+    await page.evaluate(async () => {
+      await navigator.serviceWorker.ready;
+      const names = await caches.keys();
+      if (!names.some((name) => name.startsWith("k9-teacher-static-"))) throw new Error("offline app cache was not installed");
+      const entries = (await Promise.all(names.filter((name) => name.startsWith("k9-teacher-static-"))
+        .map(async (name) => (await caches.open(name)).keys()))).flat();
+      if (entries.some((entry) => new URL(entry.url).pathname.includes("/api/")))
+        throw new Error("student API data leaked into offline shell cache");
+    });
+    await page.context().setOffline(true);
+    try {
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.getByRole("tab", { name: "Home", exact: true }).waitFor({ timeout: 10_000 });
+    } finally {
+      await page.context().setOffline(false);
+    }
+  });
+
   await scenario("outage recovery", async (page, server) => {
     await signedIn(page, ASHA);
     await page.goto(BASE);
