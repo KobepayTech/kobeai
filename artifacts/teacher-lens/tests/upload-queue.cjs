@@ -566,7 +566,7 @@ async function captureWhileDown(page, server) {
     await page.getByRole("button", { name: "← Back to K9 home" }).click();
     await page.getByRole("button", { name: "Open glasses settings" }).click();
     await page.getByLabel("Camera source").selectOption("");
-    await page.getByRole("button", { name: "Connect", exact: true }).click();
+    await page.getByRole("button", { name: "Use phone camera", exact: true }).click();
     await page.getByText(/automatic glasses connection paused/).waitFor();
     await page.getByRole("button", { name: "Done", exact: true }).click();
     await openLens(page);
