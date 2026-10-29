@@ -96,7 +96,7 @@ export async function benchmarkGlasses(shots = 10): Promise<SessionReport | null
 export function speakThroughGlasses(text: string): boolean {
   const bridge = native();
   if (!bridge) return false;
-  // Rokid speaks through its own SDK TTS; the phone's engine is the fallback
+  // MoYoung uses the phone speech engine; providers with SDK TTS may use it.
   // when no glasses are connected. Errors are visible rather than discarded.
   const speech =
     active?.state === "connected"
@@ -166,8 +166,8 @@ export function GlassesControl({
       glasses.on("disconnected", () => {
         if (!mounted.current || active !== glasses) return;
         setStatus(
-          provider === "rokid"
-            ? "Rokid reconnecting automatically…"
+          provider === "moyoung"
+            ? "Glasses reconnecting automatically…"
             : "Glasses disconnected",
         );
         onSource(device.model, false);
@@ -175,7 +175,7 @@ export function GlassesControl({
       setSelected(provider);
       onSource(device.model, true);
       setStatus(
-        `${device.model} connected${provider === "rokid" ? " · reconnects automatically" : ""}`,
+        `${device.model} connected${provider === "moyoung" ? " · reconnects automatically" : ""}`,
       );
       backoff.current = 3000;
       nextAttempt.current = 0;
@@ -183,7 +183,7 @@ export function GlassesControl({
       if (!mounted.current) return;
       setStatus(
         automatic
-          ? "Waiting for Rokid · retrying automatically"
+          ? "Waiting for glasses · retrying automatically"
           : "Connection needs attention",
       );
       if (!automatic) setError(String(e));
@@ -210,7 +210,7 @@ export function GlassesControl({
       checking = true;
       try {
         const info = await bridge!.request<{
-          automaticRokid?: boolean;
+          automaticMoYoung?: boolean;
           connected?: boolean;
           provider?: string;
         }>("info");
@@ -219,16 +219,16 @@ export function GlassesControl({
           active.connectionLost("Connection interrupted");
         if (
           info.connected &&
-          info.provider === "rokid" &&
+          info.provider === "moyoung" &&
           active?.state !== "connected"
         ) {
-          await runConnect("rokid", true);
+          await runConnect("moyoung", true);
         } else if (
-          info.automaticRokid &&
+          info.automaticMoYoung &&
           !info.provider &&
           Date.now() >= nextAttempt.current
         ) {
-          await runConnect("rokid", true);
+          await runConnect("moyoung", true);
         }
       } catch {
         /* bounded request; next status check retries */
@@ -244,9 +244,9 @@ export function GlassesControl({
         setDevices(found);
         // A teacher who chose the phone camera keeps that choice when the app
         // is reopened; it is cleared by connecting glasses or forgetting them.
-        const preferred = phoneCameraChosen() ? undefined : found.find((d) => d.id === "rokid");
+        const preferred = phoneCameraChosen() ? undefined : found.find((d) => d.id === "moyoung");
         setSelected(preferred?.id ?? "");
-        // Otherwise Rokid is preselected in this app, so it is the capture
+        // Otherwise MoYoung is preselected in this app, so it is the capture
         // source from the start. Until it connects, captures fail with a
         // message; they do not fall back to the phone camera, which only an
         // explicit choice of "Phone camera" below turns on.
@@ -278,8 +278,8 @@ export function GlassesControl({
   if (!window.KobeNative)
     return (
       <div className="glasses-hint">
-        Rokid reconnects automatically in the Android app after its first setup.
-        Phone camera works here.
+        Glasses pairing is available in the installed K9 Android app.
+        You can use the phone camera in this preview.
       </div>
     );
   const connect = () => runConnect(selected);
@@ -292,7 +292,7 @@ export function GlassesControl({
       active = null;
       rememberPhoneCamera(false);
       onSource(null);
-      setStatus("Pairing removed. Connect Rokid to set up again.");
+      setStatus("Pairing removed. Choose glasses to connect again.");
       setError("");
     } catch {
       setError("Could not remove pairing. Try again.");
@@ -323,11 +323,7 @@ export function GlassesControl({
           onClick={() => void connect()}
           disabled={busy}
         >
-          {busy
-            ? "Connecting…"
-            : selected === "rokid"
-              ? "Connect Rokid"
-              : "Connect"}
+          {busy ? "Connecting…" : selected ? `Connect ${devices.find((d) => d.id === selected)?.model ?? "glasses"}` : "Use phone camera"}
         </button>
       </div>
       <div role="status" className="glasses-status">

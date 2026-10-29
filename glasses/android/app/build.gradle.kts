@@ -5,7 +5,7 @@ android {
     compileSdk = 36
     defaultConfig {
         applicationId = "tz.kobe.glasses"
-        resValue("string", "app_name", "KobeAI Teacher")
+        resValue("string", "app_name", "K9")
         minSdk = 29
         targetSdk = 36
         versionCode = 1
@@ -17,24 +17,7 @@ android {
         create("rayneo") { dimension = "hardware"; applicationIdSuffix = ".rayneo" }
     }
 
-    // HeyCyan is optional and its SDK is not in the repository. When the AAR is
-    // absent the real provider is not compiled and a stub stands in, so the
-    // project opens in Android Studio and builds Rokid without anyone having to
-    // obtain a proprietary binary first: a missing optional SDK should cost a
-    // feature, not the build.
-    val heycyan = file("libs/heycyan-sdk.aar").isFile
-    val heycyanSources = if (heycyan) "src/heycyan/java" else "src/noheycyan/java"
-    // Both sets, deliberately. AGP 9 keeps a `kotlin` source directory set that
-    // is distinct from `java` and is seeded with src/<flavour>/{java,kotlin}
-    // rather than following it, so adding the directory to `java` alone left
-    // compileCompanionDebugKotlin unable to see a .kt file sitting in it. That
-    // failed as an unresolved reference at the call site, which reads like a
-    // missing declaration rather than a source set that was never handed over.
-    sourceSets.getByName("companion").kotlin.directories.add(heycyanSources)
-    sourceSets.getByName("companion").java.directories.add(heycyanSources)
-    // AGP 9 requires both features to be asked for explicitly.
     buildFeatures { buildConfig = true; resValues = true }
-    defaultConfig { buildConfigField("boolean", "HAS_HEYCYAN", heycyan.toString()) }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -50,36 +33,21 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     implementation("io.github.hkust-spark:xgglass-core:0.3.0")
-    "companionImplementation"("io.github.hkust-spark:xgglass-device-rokid:0.3.0")
-    // HeyCyan, development only. Supply the AAR yourself at
-    // app/libs/heycyan-sdk.aar; nothing in this repository fetches it, and the
-    // release guard below refuses to build a distributable APK with it present.
-    // These transitive dependencies are only pulled in when it is there.
-    if (file("libs/heycyan-sdk.aar").isFile) {
-        "companionImplementation"(files("libs/heycyan-sdk.aar"))
-        "companionImplementation"("androidx.localbroadcastmanager:localbroadcastmanager:1.1.0")
-        "companionImplementation"("com.google.code.gson:gson:2.14.0")
-        "companionImplementation"("org.greenrobot:eventbus:3.2.0")
-    }
+    // Official MoYoung 1.3.8 Android SDK 1.0.0_20260928, plus publisher AARs
+    // (including lib-awlicense). Fetched and verified by fetch_moyoung.py.
+    "companionImplementation"(fileTree("libs") { include("*.aar") })
+    "companionImplementation"("com.google.protobuf:protobuf-java:4.29.3")
+    "companionImplementation"("com.squareup.okhttp3:okhttp:4.12.0")
+    "companionImplementation"("com.google.code.gson:gson:2.9.0")
+    "companionImplementation"("io.reactivex.rxjava3:rxjava:3.1.8")
+    "companionImplementation"("io.reactivex.rxjava3:rxandroid:3.0.2")
+    "companionImplementation"("org.nanohttpd:nanohttpd:2.3.1")
     "rayneoImplementation"("io.github.hkust-spark:xgglass-device-rayneo-runtime:0.3.0")
 }
 
-// A release APK must not carry the unlicensed HeyCyan SDK.
-//
-// "We'll deal with the licence once it works" is a reasonable way to develop,
-// and it only stays reasonable if shipping it is hard rather than easy. A debug
-// build evaluates the hardware; a release build fails while the AAR is there,
-// and says what to do about it. This is a control, not a comment — the last
-// time this binary was in the tree, the only guard was a comment in CI and it
-// was compiled into every Rokid build.
+// Vendor source/redistribution terms must be established before release packaging.
 tasks.matching { it.name == "preCompanionReleaseBuild" }.configureEach {
-    doFirst {
-        check(!file("libs/heycyan-sdk.aar").isFile) {
-            "app/libs/heycyan-sdk.aar is present: HeyCyan is a development-only " +
-                "provider and must not be distributed. Remove the AAR to build a " +
-                "release, or obtain a distribution licence from HeyCyan first."
-        }
-    }
+    doFirst { error("MoYoung release distribution is not cleared. See glasses/android/MOYOUNG.md.") }
 }
 
 tasks.register("verifyLensAssets") {
@@ -88,3 +56,10 @@ tasks.register("verifyLensAssets") {
     } }
 }
 tasks.matching { it.name == "preBuild" }.configureEach { dependsOn("verifyLensAssets") }
+tasks.matching { it.name == "preCompanionDebugBuild" || it.name == "preCompanionReleaseBuild" }.configureEach {
+    doFirst {
+        listOf("moyoung_glasses_sdk_1.0.0_20260928.aar", "lib-awlicense-1.0.1-release.aar", "moyoung-verified.json").forEach { name ->
+            check(file("libs/$name").isFile) { "Fetch the pinned MoYoung SDK: python3 ../scripts/fetch_moyoung.py" }
+        }
+    }
+}

@@ -1,3 +1,5 @@
+> Current phone companion: **MoYoung / DA ECHO**. See [Android setup](android/ANDROID_STUDIO.md) and `android/MOYOUNG.md`. Earlier Rokid/HeyCyan details below describe historical integrations.
+
 # Kobe Glasses SDK
 
 One interface for every pair of glasses K9 supports, so nothing above the

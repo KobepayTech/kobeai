@@ -35,6 +35,11 @@ export default function Dashboard() {
 
       <div className="px-6 -mt-8 relative z-20 space-y-6">
         <RenewalBanner />
+        <a href={`${import.meta.env.BASE_URL}kobepay-design.html`} className="block bg-emerald-950 text-white rounded-2xl p-5">
+          <span className="text-xs uppercase tracking-widest text-lime-200">Kobepay · Interactive design</span>
+          <h3 className="text-lg font-bold mt-2">School &amp; beyond →</h3>
+          <p className="text-sm text-emerald-100 mt-1">Explore student wallets, school hubs and authorized shops. Demo data only.</p>
+        </a>
         <AdBanner placement="parent_app_home" />
         <div className="grid grid-cols-2 gap-3">
           <button
@@ -98,7 +103,7 @@ export default function Dashboard() {
               <div className="mt-6 flex justify-between items-center bg-gray-50 rounded-2xl p-4">
                 <div>
                   <p className="text-sm text-gray-500">Wallet Balance</p>
-                  <p className="text-lg font-bold text-gray-900">TSh {child.balance.toLocaleString()}</p>
+                  <p className="text-lg font-bold text-gray-900">Kobepay not connected</p>
                 </div>
                 <button
                   onClick={() => setLocation('/wallet')}

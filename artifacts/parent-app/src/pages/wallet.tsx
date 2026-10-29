@@ -22,7 +22,7 @@ export default function Wallet() {
     if (!token) setLocation("/login");
   }, [token, setLocation]);
 
-  const { data, isLoading } = useGetParentWallet({
+  const { data, isLoading, isError } = useGetParentWallet({
     request: { headers: { Authorization: `Bearer ${token}` } }
   });
 
@@ -51,6 +51,7 @@ export default function Wallet() {
   };
 
   if (!token) return null;
+  if (isError) return <Layout><div className="p-6 space-y-4"><h1 className="text-2xl font-bold">Pocket-money wallet</h1><p>The Kobepay wallet is not connected to this school server yet. No balance or deposit is being simulated.</p><Button onClick={()=>setLocation("/subscription")}>Pay a K9 subscription with PalmPesa</Button><Button variant="outline" onClick={()=>setLocation("/school-services")}>Printing funds & learning packs</Button></div></Layout>;
 
   return (
     <Layout>

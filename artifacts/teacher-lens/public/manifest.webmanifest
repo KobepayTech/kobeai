@@ -1,11 +1,11 @@
 {
-  "name": "KobeAI Lens",
-  "short_name": "K9 Lens",
+  "name": "K9 Classroom",
+  "short_name": "K9",
   "description": "Teacher-worn K9 lens. See student progress at a glance, mark papers, hear whispers through the earbud.",
   "start_url": "/",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#0e0e14",
-  "theme_color": "#00A86B",
+  "background_color": "#f5f8f7",
+  "theme_color": "#137c6b",
   "icons": []
 }

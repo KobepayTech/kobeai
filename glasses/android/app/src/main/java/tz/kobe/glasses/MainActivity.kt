@@ -44,22 +44,12 @@ class MainActivity : AppCompatActivity() {
     private var reconnectJob: Job? = null
     private var visible = false
     private var permissionResult: CompletableDeferred<Map<String, Boolean>>? = null
-    private var fileResult: CompletableDeferred<ByteArray>? = null
     private val gate = Mutex()
     private val permissionGate = Mutex()
     private val speechReady = CompletableDeferred<Unit>()
     private lateinit var tts: TextToSpeech
     private val permissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
         permissionResult?.complete(result); permissionResult = null
-    }
-    private val filePicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        try {
-            check(uri != null) { "Licence selection cancelled" }
-            val bytes = contentResolver.openInputStream(uri)!!.use { it.readBytesBounded(65536) }
-            check(bytes.isNotEmpty()) { "Empty licence file" }
-            fileResult?.complete(bytes)
-        } catch (e: Exception) { fileResult?.completeExceptionally(e) }
-        fileResult = null
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -118,7 +108,7 @@ class MainActivity : AppCompatActivity() {
                 } catch (e: Exception) {
                     // Never include user credentials or raw vendor exceptions in a JS/log response.
                     response.put("error", when (request.optString("method")) {
-                        "connect" -> "Connection failed or cancelled. Check permissions, Bluetooth and the vendor licence."
+                        "connect" -> "Connection failed or cancelled. Check permissions, Bluetooth and the selected glasses."
                         "capture" -> "Photo capture failed. Reconnect glasses and try again."
                         else -> "Glasses operation failed: ${request.optString("method")}."
                     })
@@ -129,15 +119,7 @@ class MainActivity : AppCompatActivity() {
         web.loadUrl("$ORIGIN/index.html")
     }
 
-    /**
-     * A first Rokid pairing is a conversation with the teacher: a dialog to type
-     * the developer client secret into, then Android's document picker to find
-     * the device's .lc licence file, and only then the SDK handshake. The flat
-     * 75s budget was fine for every machine-to-machine call and wrong for this
-     * one — it expired while the picker was still open and told the teacher the
-     * connection had failed. Interactive setup gets its own budget; the rest are
-     * unchanged, so a wedged capture still gives up quickly.
-     */
+    /** Give the teacher time to select glasses and answer permission dialogs. */
     private fun budgetFor(request: JSONObject): Long {
         val interactive = request.optString("method") == "connect" &&
             request.optJSONObject("params")?.optBoolean("automatic") != true
@@ -148,7 +130,7 @@ class MainActivity : AppCompatActivity() {
         val params = request.optJSONObject("params") ?: JSONObject()
         return when (request.getString("method")) {
             "info" -> JSONObject().put("version", 1).put("providers", JSONArray(ProviderFactory.providers))
-                .put("automaticRokid", RokidCredentials.automatic(this)).put("connected", hardwareConnected)
+                .put("automaticMoYoung", MoYoungPairing.automatic(this)).put("connected", hardwareConnected)
                 .put("provider", hardwareProvider ?: JSONObject.NULL)
             "connect" -> {
                 val provider = params.getString("provider")
@@ -158,7 +140,7 @@ class MainActivity : AppCompatActivity() {
                 val candidate = ProviderFactory.create(this, provider, lifecycleScope, params.optBoolean("automatic")) { lost() }
                 try {
                     candidate.connect(); hardware = candidate; hardwareProvider = provider; hardwareConnected = true
-                    if (provider == "rokid") {
+                    if (provider == "moyoung") {
                         ConnectionService.onStopped = { lifecycleScope.launch { gate.withLock { stopConnection(); sendConnectionEvent("disconnected") } } }
                         ContextCompat.startForegroundService(this, Intent(this, ConnectionService::class.java))
                     }
@@ -169,8 +151,9 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             "disconnect" -> { stopConnection(); null }
-            "pause" -> { RokidCredentials.enable(this, false); stopConnection(); null }
-            "forget" -> { stopConnection(); ProviderFactory.forgetProvisioning(this); null }
+            "pause" -> { MoYoungPairing.enable(this, false); stopConnection(); null }
+            "forget" -> { stopConnection(); MoYoungPairing.forget(this); null }
+            "battery" -> requireHardware().battery()
             "capture" -> {
                 val bytes = requireHardware().capture()
                 val jpeg = withContext(Dispatchers.Default) { normalizeJpeg(bytes) }
@@ -204,10 +187,10 @@ class MainActivity : AppCompatActivity() {
     private fun lost() { runOnUiThread {
         hardwareConnected = false
         sendConnectionEvent("disconnected")
-        if (hardwareProvider != "rokid" || reconnectJob?.isActive == true) return@runOnUiThread
+        if (hardwareProvider != "moyoung" || reconnectJob?.isActive == true) return@runOnUiThread
         reconnectJob = lifecycleScope.launch {
             var waitMs = 3000L
-            while (isActive && hardwareProvider == "rokid" && RokidCredentials.automatic(this@MainActivity)) {
+            while (isActive && hardwareProvider == "moyoung" && MoYoungPairing.automatic(this@MainActivity)) {
                 delay(waitMs)
                 val connected = gate.withLock {
                     val candidate = hardware ?: return@withLock false
@@ -250,12 +233,6 @@ class MainActivity : AppCompatActivity() {
             check(required.all { result[it] ?: granted(it) }) { "Required permission denied" }
         }
     }
-    suspend fun pickLicense(): ByteArray {
-        check(fileResult == null) { "Licence picker still open" }
-        val pending = CompletableDeferred<ByteArray>(); fileResult = pending
-        filePicker.launch(arrayOf("*/*"))
-        return pending.await()
-    }
     override fun onDestroy() {
         reconnectJob?.cancel(); reconnectJob = null
         ConnectionService.onStopped = null
@@ -278,18 +255,6 @@ class MainActivity : AppCompatActivity() {
         // the teacher is shown this side's message rather than a bare JS timeout.
         const val INTERACTIVE_BUDGET_MS = 10 * 60_000L
     }
-}
-
-private fun java.io.InputStream.readBytesBounded(max: Int): ByteArray {
-    val out = ByteArrayOutputStream()
-    val buffer = ByteArray(4096)
-    while (true) {
-        val count = read(buffer)
-        if (count < 0) break
-        require(out.size() + count <= max) { "File too large" }
-        out.write(buffer, 0, count)
-    }
-    return out.toByteArray()
 }
 
 private fun normalizeJpeg(bytes: ByteArray): ByteArray {

@@ -1,3 +1,4 @@
+import { ensureLearningPacks, transaction as packTransaction } from "../lib/learning-packs";
 import { Router, type Request, type Response } from "express";
 import { pool } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
@@ -167,7 +168,24 @@ router.patch(
   "/v1/results/exams/:id",
   staff,
   handle(async (req, res) => {
-    res.json({ exam: await updateExam(requireId(req.params.id, "exam id"), req.body ?? {}) });
+    const examId = requireId(req.params.id, "exam id");
+    if (req.auth?.role === "teacher") {
+      const owned = await pool.query("SELECT e.id FROM result_exams e JOIN classes c ON c.id=e.class_id WHERE e.id=$1 AND c.teacher_id=$2", [examId,req.auth.user_id]);
+      if (!owned.rows.length) throw new ResultsError(403, "Exam not accessible to this teacher");
+    }
+    await ensureLearningPacks();
+    const batch = await pool.query("SELECT exam_id FROM learning_pack_batches WHERE exam_id=$1", [examId]);
+    if (batch.rows.length && (req.body?.status !== "closed" || Object.keys(req.body ?? {}).some(k => k !== "status"))) {
+      throw new ResultsError(409, "Learning packs have been scheduled for this exam. Create a corrected assessment rather than changing evidence behind existing print jobs.");
+    }
+    const exam = await updateExam(examId, req.body ?? {});
+    if (exam.status === "closed") {
+      await ensureLearningPacks();
+      await packTransaction(async q => {
+        await q.query("INSERT INTO learning_pack_batches(exam_id,requested_by) VALUES($1,$2) ON CONFLICT DO NOTHING", [examId,req.auth!.user_id]);
+      });
+    }
+    res.json({ exam });
   }),
 );
 

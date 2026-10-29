@@ -15,6 +15,7 @@ interface Hardware {
     suspend fun capture(): ByteArray
     suspend fun display(text: String)
     suspend fun speak(text: String)
+    suspend fun battery(): Int = error("Battery is unavailable")
     fun capabilities(): JSONObject
     /**
      * How long this hardware's own connect() may run before the vendor SDK gives
