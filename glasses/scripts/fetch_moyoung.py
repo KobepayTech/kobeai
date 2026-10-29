@@ -1,52 +1,94 @@
-"""Fetch the unchanged MoYoung 1.3.6 core AAR from its publisher, verifying both hashes.
-The package declares GPL-3.0. See android/MOYOUNG.md before distributing binaries.
+"""Fetch the MoYoung 1.3.8 Android SDK from the official published package.
+
+The published archive digest is verified against pub.dev's version metadata.
+Only the 1.3.8 package is accepted. No binary is committed to this repository.
+This does not grant distribution rights; see android/MOYOUNG.md.
 """
 import hashlib
 import io
+import json
 from pathlib import Path
+import re
 import tarfile
 import urllib.request
 
-URL = 'https://pub.dev/api/archives/moyoung_glasses_ble_plugin-1.3.6.tar.gz'
-ARCHIVE_SHA256 = '4d2aaf0360c64af6b67f959460fff6bda808de207c27cd775961841f9be22dc3'
-SDK_SHA256 = '6aae64435aaa10b7c6b63b2783068d5de23b443f00636e2cd3903142472c0c86'
-DEST = Path(__file__).resolve().parents[1] / 'android/app/libs/moyoung_glasses_sdk_0.0.7_20260624.aar'
+VERSION = "1.3.8"
+SDK_RELEASE = "1.0.0_20260928"
+BASE = "https://pub.dev"
+ARCHIVE_URL = f"{BASE}/api/archives/moyoung_glasses_ble_plugin-{VERSION}.tar.gz"
+METADATA_URL = f"{BASE}/api/packages/moyoung_glasses_ble_plugin/versions/{VERSION}"
+LIBS = Path(__file__).resolve().parents[1] / "android/app/libs"
+SDK_DEST = LIBS / f"moyoung_glasses_sdk_{SDK_RELEASE}.aar"
+# Old core SDK cannot coexist with the new one.
+OLD_CORE = LIBS / "moyoung_glasses_sdk_0.0.7_20260624.aar"
+MAX_ARCHIVE = 80 * 1024 * 1024
+MAX_AAR = 32 * 1024 * 1024
 
 
-def main():
-    with urllib.request.urlopen(URL, timeout=90) as response:
-        archive = response.read(64 * 1024 * 1024 + 1)
-    if hashlib.sha256(archive).hexdigest() != ARCHIVE_SHA256:
-        raise RuntimeError('MoYoung archive checksum mismatch')
-    extras = {}
-    with tarfile.open(fileobj=io.BytesIO(archive), mode='r:gz') as tar:
-        members = [m for m in tar.getmembers() if m.isfile() and m.name.endswith('/my_galsses_sdk_0.0.7_20260624_release.aar')]
-        if len(members) != 1:
-            raise RuntimeError('Expected one core SDK')
-        source = tar.extractfile(members[0])
-        if source is None:
-            raise RuntimeError('Missing core SDK')
-        sdk = source.read()
-        dependencies = {
-            'jl_audio_decode_V2.1.0_20012-release.aar': '4d808c11e9f16c0f69e1eefbeff3be5b4f0d67dfa25ca78ff996df925b3b56cf',
-            'jl_bt_ota_V1.10.0_10932-release.aar': '7b0671e4f98b39537ed1a0701fcd0aecd16c17eebc43468fa58f17af0e84ee15',
-        }
-        for name, checksum in dependencies.items():
-            member = tar.extractfile('android/libs/' + name)
-            if member is None:
-                raise RuntimeError('Missing SDK dependency: ' + name)
-            data = member.read()
-            if hashlib.sha256(data).hexdigest() != checksum:
-                raise RuntimeError('SDK dependency checksum mismatch: ' + name)
-            extras[name] = data
-    if hashlib.sha256(sdk).hexdigest() != SDK_SHA256:
-        raise RuntimeError('MoYoung SDK checksum mismatch')
-    DEST.parent.mkdir(parents=True, exist_ok=True)
-    DEST.write_bytes(sdk)
-    for name, data in extras.items():
-        (DEST.parent / name).write_bytes(data)
-    print('Verified MoYoung SDK and its referenced Jieli runtime libraries ready.')
+def fetch(url: str, limit: int) -> bytes:
+    with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "K9-SDK-Pin/1.3.8"}), timeout=90) as response:
+        data = response.read(limit + 1)
+    if len(data) > limit:
+        raise RuntimeError(f"Publisher file exceeds expected size: {url}")
+    return data
 
 
-if __name__ == '__main__':
+def main() -> None:
+    meta = json.loads(fetch(METADATA_URL, 2 * 1024 * 1024))
+    expected = meta.get("archive_sha256")
+    if not isinstance(expected, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", expected):
+        raise RuntimeError("Published MoYoung 1.3.8 archive SHA-256 missing; refusing unverified download")
+    archive = fetch(ARCHIVE_URL, MAX_ARCHIVE)
+    actual = hashlib.sha256(archive).hexdigest()
+    if actual.lower() != expected.lower():
+        raise RuntimeError("MoYoung 1.3.8 publisher archive checksum mismatch")
+
+    files: dict[str, bytes] = {}
+    sdk_count = 0
+    with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as tar:
+        for member in tar.getmembers():
+            if not member.isfile():
+                continue
+            name = member.name.lstrip("./")
+            if not name.startswith("android/libs/") or not name.endswith(".aar"):
+                continue
+            filename = Path(name).name
+            if filename != name.split("/")[-1] or not re.fullmatch(r"[A-Za-z0-9_.-]+\\.aar", filename):
+                raise RuntimeError("Unexpected AAR filename")
+            stream = tar.extractfile(member)
+            if stream is None or member.size > MAX_AAR:
+                raise RuntimeError(f"Missing or oversized SDK dependency: {filename}")
+            data = stream.read(MAX_AAR + 1)
+            if len(data) != member.size:
+                raise RuntimeError(f"Truncated SDK dependency: {filename}")
+            if filename.startswith("my_galsses_sdk_"):
+                if filename != f"my_galsses_sdk_{SDK_RELEASE}_release.aar":
+                    raise RuntimeError(f"Unexpected core SDK version: {filename}")
+                sdk_count += 1
+                filename = SDK_DEST.name
+            if filename in files:
+                raise RuntimeError(f"Duplicate SDK dependency: {filename}")
+            files[filename] = data
+
+    if sdk_count != 1:
+        raise RuntimeError(f"Expected one {SDK_RELEASE} core SDK; found {sdk_count}")
+    if "lib-awlicense-1.0.1-release.aar" not in files:
+        raise RuntimeError("Missing new 1.0.0 SDK authorization runtime")
+    LIBS.mkdir(parents=True, exist_ok=True)
+    for name, data in files.items():
+        (LIBS / name).write_bytes(data)
+    OLD_CORE.unlink(missing_ok=True)
+    manifest = {
+        "publisher": "pub.dev",
+        "package": "moyoung_glasses_ble_plugin",
+        "version": VERSION,
+        "archive_sha256": actual,
+        "sdk_release": SDK_RELEASE,
+        "files_sha256": {name: hashlib.sha256(data).hexdigest() for name, data in sorted(files.items())},
+    }
+    (LIBS / "moyoung-verified.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    print(f"Verified MoYoung {VERSION}, core SDK {SDK_RELEASE}, {len(files)} AARs from publisher archive")
+
+
+if __name__ == "__main__":
     main()
