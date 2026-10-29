@@ -36,6 +36,61 @@ gateway can potentially support a second GATT advertising/scan service,
 but simultaneous vendor SDK + mesh traffic requires real hardware testing.
 For schools with many glasses, a separate radio or gateway may be needed.
 
+
+## One compatible link: K9 Gateway BLE GATT
+
+**Decision:** MoYoung glasses retain their existing, unchanged SDK BLE connection.
+A school-owned Android gateway provides a **second, independent BLE GATT
+link** to another provisioned K9 gateway. This link is our compatibility
+adapter. It does not require MoYoung firmware or SDK mesh support.
+
+```text
+MoYoung glasses <-- vendor BLE --> Android K9 gateway
+                                        |
+                              K9 BLE GATT link
+                                        |
+                                Other K9 gateway
+                                        |
+                                   School server
+```
+
+The gateway must support BLE central and peripheral roles and enough
+concurrent connections. A dedicated second Bluetooth controller or
+separate gateway may be needed if the vendor SDK monopolizes the radio.
+**Two gateways need not use the same vendor glasses SDK** to exchange K9
+mesh packets. No claim is made that current glasses relay packets.
+
+### Implemented link adapter
+
+- `glasses/src/k9/K9GatewayMeshBridge.ts` defines the native-to-TypeScript
+  `K9BleLink` contract and joins it to the existing K9 mesh router.
+- Compact binary framing: protocol byte, eight-byte random message token,
+  chunk index and total, plus payload. Reassembles out-of-order frames.
+- Negotiated GATT characteristic value size, bounded 4 KiB packets,
+  256-frame limit, 16 in-flight assemblies and 15-second assembly expiry.
+- A link failure keeps the packet in the router for retry.
+- Reassembled packets still require **school cryptographic verification** by
+  `K9MeshRouter`. GATT pairing alone is not school authorization.
+
+The native Android **BLE GATT characteristic implementation is still missing**.
+A separate school-key enrollment and encryption implementation is also missing.
+The TypeScript adapter is ready to connect to that driver but does not create
+Bluetooth connections itself. BLE fragmentation is not a guarantee of reliable
+delivery: implement link ACK, retries, flow control and MTU tests in the native
+driver. For production, the gateway must authenticate provisioned peer
+identities and reject unknown devices before forwarding.
+
+### Required school-hardware validation
+
+1. Pair glasses through MoYoung SDK on Android gateway A.
+2. Establish the separate K9 GATT link from gateway A to gateway B.
+3. Capture a real JPEG through MoYoung while relaying an encrypted status
+   packet over the gateway link; verify neither transport stalls.
+4. Disconnect school Wi-Fi; relay status over BLE and restore server sync.
+5. Measure connection capacity, battery, latency and radio interference
+   with 2, 10 and then more gateways. Never assume 200 concurrent glasses
+   work from one gateway.
+
 ## Allowed traffic
 
 The mesh router accepts only:
