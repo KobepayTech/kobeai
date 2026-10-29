@@ -24,6 +24,10 @@ import android.os.ParcelUuid
 import android.util.Log
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Independent gateway-to-gateway BLE GATT transport. NOT a MoYoung glasses
@@ -56,6 +60,9 @@ class K9GatewayGattLink(
     private val clients = ConcurrentHashMap<String, BluetoothGatt>()
     private val subscribed = ConcurrentHashMap.newKeySet<String>()
     private val allowedAddresses = ConcurrentHashMap.newKeySet<String>()
+    private val mtuPayload = ConcurrentHashMap<String, Int>()
+    private val pendingAcks = ConcurrentHashMap<String, CompletableDeferred<Boolean>>()
+    private val sendGate = Mutex()
     private val advertiserCallback = object : AdvertiseCallback() {
         override fun onStartFailure(errorCode: Int) {
             advertising = false
@@ -72,6 +79,12 @@ class K9GatewayGattLink(
                 return
             }
             onConnection(device.address, connected)
+        }
+        override fun onMtuChanged(device: BluetoothDevice, mtu: Int) {
+            mtuPayload[device.address] = (mtu - 3).coerceIn(20, MAX_GATT_VALUE)
+        }
+        override fun onNotificationSent(device: BluetoothDevice, status: Int) {
+            pendingAcks.remove(device.address)?.complete(status == BluetoothGatt.GATT_SUCCESS)
         }
         override fun onCharacteristicWriteRequest(
             device: BluetoothDevice, requestId: Int,
@@ -110,13 +123,24 @@ class K9GatewayGattLink(
     private val clientCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             if (status == BluetoothGatt.GATT_SUCCESS && newState == BluetoothProfile.STATE_CONNECTED) {
-                gatt.discoverServices()
+                gatt.requestMtu(247)
                 onConnection(gatt.device.address, true)
             } else {
                 clients.remove(gatt.device.address)
                 onConnection(gatt.device.address, false)
                 gatt.close()
             }
+        }
+        override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
+            mtuPayload[gatt.device.address] =
+                if (status == BluetoothGatt.GATT_SUCCESS) (mtu - 3).coerceIn(20, MAX_GATT_VALUE) else 20
+            gatt.discoverServices()
+        }
+        override fun onCharacteristicWrite(
+            gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int,
+        ) {
+            if (characteristic.uuid == FRAME_UUID)
+                pendingAcks.remove(gatt.device.address)?.complete(status == BluetoothGatt.GATT_SUCCESS)
         }
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
             if (status != BluetoothGatt.GATT_SUCCESS) return
@@ -132,6 +156,12 @@ class K9GatewayGattLink(
                 @Suppress("DEPRECATION")
                 gatt.writeDescriptor(descriptor)
             }
+        }
+        @Suppress("DEPRECATION")
+        override fun onCharacteristicChanged(
+            gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic,
+        ) {
+            onCharacteristicChanged(gatt, characteristic, characteristic.value ?: return)
         }
         override fun onCharacteristicChanged(
             gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray,
@@ -151,6 +181,8 @@ class K9GatewayGattLink(
     fun revokePeer(address: String) {
         allowedAddresses.remove(address)
         subscribed.remove(address)
+        pendingAcks.remove(address)?.complete(false)
+        mtuPayload.remove(address)
         clients.remove(address)?.disconnect()
     }
     fun startPeripheral() {
@@ -187,12 +219,46 @@ class K9GatewayGattLink(
         val gatt = device.connectGatt(context, false, clientCallback, BluetoothDevice.TRANSPORT_LE)
         clients[device.address] = gatt
     }
+    /** Maximum usable ATT value bytes for the current negotiated MTU. */
+    fun payloadSize(address: String): Int = mtuPayload[address] ?: 20
+
     /**
-     * A single BLE frame. The caller must serialize writes and await the
-     * onCharacteristicWrite acknowledgement before sending the next frame.
-     * Never use this method as an acknowledged multi-frame send.
+     * Send one frame with serialized GATT write/notification completion.
+     * This is link-level acknowledgement only, NOT end-to-end mesh delivery.
+     * Callers must send successive frames one at a time.
      */
-    fun writeFrame(address: String, bytes: ByteArray): Boolean {
+    suspend fun sendFrame(address: String, bytes: ByteArray): Boolean = sendGate.withLock {
+        if (bytes.isEmpty() || bytes.size > payloadSize(address) ||
+            !allowedAddresses.contains(address)) return@withLock false
+        val ack = CompletableDeferred<Boolean>()
+        pendingAcks[address] = ack
+        val initiated = writeFrame(address, bytes) || notifyFrame(address, bytes)
+        if (!initiated) {
+            pendingAcks.remove(address)
+            return@withLock false
+        }
+        val result = withTimeoutOrNull(10_000) { ack.await() } ?: false
+        pendingAcks.remove(address)
+        result
+    }
+
+    private fun notifyFrame(address: String, bytes: ByteArray): Boolean {
+        if (!subscribed.contains(address)) return false
+        val device = adapter.getRemoteDevice(address)
+        val characteristic = server?.getService(SERVICE_UUID)?.getCharacteristic(FRAME_UUID)
+            ?: return false
+        return if (Build.VERSION.SDK_INT >= 33)
+            server?.notifyCharacteristicChanged(device, characteristic, false, bytes) ==
+                android.bluetooth.BluetoothStatusCodes.SUCCESS
+        else {
+            @Suppress("DEPRECATION")
+            characteristic.value = bytes
+            @Suppress("DEPRECATION")
+            server?.notifyCharacteristicChanged(device, characteristic, false) == true
+        }
+    }
+
+    private fun writeFrame(address: String, bytes: ByteArray): Boolean {
         if (bytes.isEmpty() || bytes.size > MAX_GATT_VALUE) return false
         if (!allowedAddresses.contains(address)) return false
         val gatt = clients[address] ?: return false
@@ -212,6 +278,9 @@ class K9GatewayGattLink(
     fun stop() {
         clients.values.forEach { it.disconnect(); it.close() }
         clients.clear()
+        pendingAcks.values.forEach { it.complete(false) }
+        pendingAcks.clear()
+        mtuPayload.clear()
         subscribed.clear()
         if (advertising) {
             adapter.bluetoothLeAdvertiser?.stopAdvertising(advertiserCallback)
