@@ -141,3 +141,46 @@ The web app remains the only teacher interface. A gateway is school hardware,
 not an Android/iOS app installed on every teacher phone. Local school Wi-Fi
 remains the primary path for photos, AI and records; mesh is a resilient,
 **low-bandwidth auxiliary transport**.
+
+## Implementation update — 29 October 2026
+
+The following are now present on this development branch:
+
+- `glasses/src/k9/K9SchoolMeshCrypto.ts`: AES-256-GCM encrypted
+  operational payloads with per-school HMAC-SHA-256 integrity, authenticated
+  associated data, bounded lifetimes, and up to four key IDs for rotation.
+  School keys must be independently provisioned into gateway secure storage;
+  do not place them in the teacher web app or commit them to Git.
+- `glasses/android/app/src/main/java/tz/kobe/glasses/K9GatewayGattLink.kt`:
+  native Android GATT peripheral + explicit bonded-peer central link using
+  the **independent K9 service UUID**, separate from the MoYoung SDK.
+  The link supports negotiated MTU, encrypted GATT writes, notifications,
+  callback-based frame acknowledgements, and serial frame writes.
+- `glasses/tests/mesh-crypto.test.ts`: key rotation, encrypted round-trip,
+  forgery rejection and school isolation.
+
+**Do not confuse source-code availability with an end-to-end deployment.**
+The native Android driver is not yet wired into a long-lived gateway service,
+school enrollment, or the TypeScript bridge. There is no tested live Bluetooth
+connection, no persistent encrypted queue, and no server-to-webapp event API.
+A bonded Bluetooth MAC is not an identity proof: production gateway enrollment
+must authenticate a device key and bind it to the school.
+
+### Remaining release blockers
+
+1. Wire `K9GatewayGattLink` callbacks to `K9GatewayMeshBridge` through a
+   production gateway process and provisioned identity mapping.
+2. Provision keys with Android Keystore / device management, not embedded
+   source constants. Rotate and revoke compromised gateway credentials.
+3. Add encrypted durable outbox with message ACK, retry after process death,
+   and idempotent school-server ingestion.
+4. Implement authenticated school API and browser status/alerts; do not allow
+   arbitrary mesh commands to trigger cameras or student-record mutations.
+5. Complete CI Android build, instrumented BLE tests on two actual gateways,
+   MoYoung concurrent radio tests, and offline/online recovery tests.
+6. Verify Android 12+ BLE runtime permissions and background service behavior,
+   plus vendor SDK licensing and offline authorization requirements.
+
+The design borrows BitChat's bounded multi-hop routing, store-and-forward and
+offline-first principles. It **does not** embed BitChat's application, Nostr,
+anonymous public channels, or BitChat packet protocol.
