@@ -23,7 +23,7 @@ output; Bluetooth media playback must be paired and tested separately.
 ## Build
 
 Run `python3 glasses/scripts/fetch_moyoung.py` at repository root. The script pins
-publisher package 1.3.6 and checks both archive and core AAR SHA-256 values.
+publisher package 1.3.8 and checks the downloaded archive against pub.dev's published SHA-256 metadata. The native core is now 1.0.0_20260928, and the download also includes lib-awlicense-1.0.1-release.aar. The script records each AAR's SHA-256 in a local manifest.
 Run the Lens build, then `./gradlew :app:assembleCompanionDebug` in this directory.
 SDK binaries remain ignored by git. CI compiles but does not publish an APK.
 The core SDK references Jieli audio-decoder and OTA classes, so the pinned
@@ -33,19 +33,31 @@ must also be checked before APK distribution. Test runtime behavior on hardware.
 
 ## Licensing and provenance
 
-Publisher: https://pub.dev/packages/moyoung_glasses_ble_plugin/versions/1.3.6
+Publisher: https://pub.dev/packages/moyoung_glasses_ble_plugin/versions/1.3.8
 Example: https://github.com/liangqian609/moyoung_glasses_ble_plugin
 Reference: https://github.com/FerSaiyan/Alternative-HeyCyan-App-and-SDK
 
-The published package declares GPL-3.0; the supplied license is preserved in
-LICENSE-MOYOUNG-SDK. Our original Android companion changes may be distributed
-under GPL-3.0; compatible third-party code retains its notices. This does not
-relicense independent server code. Before distributing a combined APK, provide
-its complete corresponding source (including the vendor SDK source and build
-materials), required notices and any other applicable GPL installation information.
-The AAR alone and the Flutter example repository do not establish availability of
-all corresponding native SDK source. Obtain it from MoYoung or obtain a suitable
-alternative license. No compiled APK is being publicly distributed by this change.
+The current 1.3.8 publisher page lists MIT for the Flutter plugin, whereas the
+older bundled license record refers to GPL-3.0. This discrepancy must be
+resolved before distribution. In particular, the native 1.0.0 AAR and
+lib-awlicense may have separate proprietary/source and runtime authorization
+requirements; a plugin-level MIT label does not automatically license all
+binary dependencies. Obtain written permission and required notices/source
+before distributing a combined APK. The release build remains blocked.
+No compiled APK is publicly distributed by this change.
+
+### 1.3.8 changes relevant to K9
+- Android core updated from 0.0.7_20260624 to 1.0.0_20260928.
+- 1.3.7 added Wi-Fi transport reset/self-healing and changed media download
+  callbacks; 1.3.8 fixes partial/interrupted media import handling.
+- K9 currently uses BLE AI-dialogue still-photo capture, not bulk media import.
+  These upstream fixes do **not** prove better still-photo delivery or
+  compatibility with our W620 firmware. Physical capture tests remain required.
+- The newer SDK invokes a device authorization endpoint; fully offline
+  first-time authorization is **not** guaranteed until tested.
+- Our native bridge has not yet implemented the new bulk-media callback API,
+  Wi-Fi recovery commands, or the new gateway service. SDK upgrade alone does
+  not enable these features.
 
 ## Hardware acceptance gate
 
