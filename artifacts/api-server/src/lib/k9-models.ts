@@ -29,19 +29,40 @@ export type K9ModelsConfig = {
   version: number;
   roots: Record<K9RootName, { path: string; env?: string }>;
   runtime?: {
-    ollama?: { text_model?: string; text_fallbacks?: string[] };
+    ollama?: {
+      text_model?: string;
+      text_fallbacks?: string[];
+      vision_model?: string;
+      vision_fallbacks?: string[];
+    };
     k9_runtime?: { host?: string; port?: number };
     python?: { executable?: string; env?: string };
   };
   models: Record<string, K9ModelEntry>;
 };
 
+function ollamaNames(config: K9ModelsConfig, ids: (string | undefined)[]): string[] {
+  const names = ids
+    .filter((id): id is string => !!id)
+    .map((id) => config.models[id]?.ollama?.name)
+    .filter((name): name is string => !!name);
+  return [...new Set(names)];
+}
+
 /** Ollama model names for K9's text brain: the registry default first, then its fallbacks. */
 export function k9TextModelNames(config: K9ModelsConfig): string[] {
   const runtime = config.runtime?.ollama;
-  const ids = [runtime?.text_model, ...(runtime?.text_fallbacks ?? [])].filter((id): id is string => !!id);
-  const names = ids.map((id) => config.models[id]?.ollama?.name).filter((name): name is string => !!name);
-  return [...new Set(names)];
+  return ollamaNames(config, [runtime?.text_model, ...(runtime?.text_fallbacks ?? [])]);
+}
+
+/**
+ * Ollama model names that can read an image — the paper reader and any image
+ * question use these. Empty on a school whose registry declares no vision
+ * model; callers fall back to a manual path rather than guessing.
+ */
+export function k9VisionModelNames(config: K9ModelsConfig): string[] {
+  const runtime = config.runtime?.ollama;
+  return ollamaNames(config, [runtime?.vision_model, ...(runtime?.vision_fallbacks ?? [])]);
 }
 
 export type K9ModelRegistry = {

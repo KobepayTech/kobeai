@@ -9,6 +9,8 @@ import { startPresenceMonitor } from "./lib/presence-monitor";
 import { startLearningProfileScheduler } from "./lib/learning-profile";
 import { startMagazineScheduler } from "./lib/magazine";
 import { startLessonPlanScheduler } from "./lib/student-development";
+import { startMarketAgent } from "./lib/market-agent";
+import { ensureSkillsSeeded } from "./lib/skill-engine";
 import { startDailyDigest } from "./routes/parent-push";
 import { bootstrapK9School } from "./lib/k9-bootstrap";
 import { mountWebSurfaces } from "./lib/web-host";
@@ -88,4 +90,12 @@ app.listen(port, async (err) => {
   startLearningProfileScheduler();
   startMagazineScheduler();
   startLessonPlanScheduler();
+  startMarketAgent();
+
+  // Seed the skill taxonomy so the first paper a teacher marks already has
+  // skills to map onto. Additive and idempotent; a failure here only means
+  // the first ingest seeds it instead.
+  await ensureSkillsSeeded().catch((err) =>
+    logger.error({ err }, "skill taxonomy seed failed"),
+  );
 });

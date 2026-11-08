@@ -18,6 +18,51 @@ I prefer iterative development, with a focus on delivering functional components
 - Membership KP grant: every successful M-Pesa payment in `central.ts:completePayment` credits `MEMBERSHIP_KP_GRANT` (default 100 KP) inside the same transaction that flips the payment to `success`. If the `users` row doesn't exist yet (student paid for but not provisioned), the grant is parked in `kp_pending_grants` keyed by `student_code` and drained later — see below.
 - Pending-grant drain (`lib/kp.ts:drainPendingGrants`): at-most-once, race-safe via `FOR UPDATE SKIP LOCKED` + a `WHERE claimed_at IS NULL` CAS. Triggered from `GET /v1/student/market/me` so the student sees credits the moment they open the market. It is a no-op (one indexed pre-check) when nothing is pending.
 
+## Question market agent
+- The market is stocked by an agent, not by hand: `lib/market-agent.ts`, scheduled from `index.ts`, plus `market_agent_runs` and `market_agent_settings`. Full design in `docs/K9_MARKET_AGENT.md`.
+- Every posted question is verified by a second model pass with the answer key hidden; a draft the two passes disagree on is never posted. An unreachable brain means "not verified", so nothing is posted — it falls back to recycling `quiz_questions` instead.
+- `kp_reward` is set by the agent from difficulty × scarcity, clamped to the operator's `reward_min`/`reward_max` band. `max_open_questions` caps total open liability. The agent never touches balances; KP still only moves through `kp_ledger`.
+- Students only see `review_status = 'approved'` questions, and only subjects they take once `student_subjects` has rows for them.
+- Operator console at `/central/v1/admin/market-agent` (`super_admin` only) — dry-run plan, settings, review queue, run history.
+
+## School fees (money, NOT KP)
+- `student_kp` is a REWARDS balance and must never be used as an account receivable. School fees live in `fee_structures`, `fee_accounts`, `fee_transactions`, `payment_matches`; full design in `docs/K9_BURSAR_AI.md`.
+- Every write goes through `lib/fees.ts:post()` — routes never touch the tables directly. It takes `SELECT … FOR UPDATE` on the account and writes the ledger row and the cached balance in one transaction, so `fee_accounts.balance_tsh == SUM(fee_transactions.delta_tsh)` always holds. `GET /v1/fees/verify` recomputes and reports drift.
+- Sign convention: a balance is what the student OWES. charge +, payment −, waiver −, reversal = the opposite of the row it undoes. Nothing is edited or deleted.
+- Partial unique indexes are the controls: one payment per `reference`, one charge per `(student_id, fee_structure_id)`.
+- Reconciliation (`lib/payment-reader.ts`, `/v1/fees/reconcile/*`) reads M-Pesa confirmations with a regex first and the vision model second, proposes a student with a stated reason, and posts nothing until a human confirms. Two plausible candidates → no proposal.
+- Removed in this change: `buildBalances()` and the fabricated student list, the hard-coded billing summary, and `/v1/bursar/deposit` (which credited the KP ledger with shillings). Bulk invoicing now uses real parent phones from `parent_children` instead of deriving them from the student id.
+
+## Skill profiles from marking
+- K9 marks nothing. `lib/skill-engine.ts` reads `graded_paper_items` — the teacher's own ticks, crosses and part marks — and maps each to a skill from the curated taxonomy in `lib/skill-taxonomy.ts`. Full design in `docs/K9_SKILL_ENGINE.md`.
+- Tables: `skills` (taxonomy), `skill_observations` (append-only evidence), `student_skill_mastery` (a derived cache — `POST /v1/skills/reindex` rebuilds it), `marking_feedback` (teacher vs K9).
+- The TEACHER'S mark is authoritative everywhere, without exception. `metadata.ai_is_correct` / `ai_marks_awarded` on an item record what a scan proposed; the difference goes to `marking_feedback` and `GET /v1/skills/agreement` publishes the rate.
+- Mapping is keywords first (works with no model at all), model second, and the model only ever picks a code from the existing taxonomy — it cannot invent a skill.
+- Mastery is time-decayed (`SKILL_HALF_LIFE_DAYS`, default 60) and always carries a confidence. One question is a hint, not a diagnosis: trend is not reported below four observations, and the school-wide gap view ignores anything under 30% confidence.
+- A blank answer is classified `unanswered`, never `concept`.
+
+## Subscriptions (per student, per YEAR)
+- Sold per student per year (`SUBSCRIPTION_ANNUAL_TSH`, default 30,000). Keyed to the STUDENT ID, never a phone or device. `monthly_price_tsh` is kept as annual ÷ 12 so existing MRR maths stays correct; `period_price_tsh` is what is actually charged.
+- **The tier boundary lives in exactly one file: `lib/entitlements.ts`.** Baseline (never gated, never for sale): attendance, presence, safety, identity, timetable, exams, results, records. Premium: skill profile, exam analysis, recommendations, longitudinal, revision, learning plan, enhanced parent report. `entitlements.test.ts` fails the build if anything moves across.
+- `requirePremium(feature)` gates on the SUBJECT student's subscription, not the caller's — these routes are staff-facing and a teacher's own account is irrelevant to whether a child's profile is paid for.
+- A locked route answers **200 with a described lock plus the school's own marks**, not 402. The contrast ("48%" vs "48% and here is why") is the commercial argument, rendered where a teacher is already looking.
+- The KP market is NOT gated; it is engagement funded by KP.
+- Deep analysis skips model calls for unsubscribed students to save GPU, but still records the free keyword/rule observations, so subscribing later + `POST /v1/skills/reindex` backfills.
+- Provisioning: `POST /central/v1/roster` gives every new student a trial (`lib/central-sync.ts:pushRosterOnce`, on the sync timer and after every roster commit). `tenants.students_cap` is enforced there.
+- Collection: the school bills the K9 fee on its own fee slip; `POST /v1/subscriptions/activate` takes a `fee_transaction_id` as evidence and calls `POST /central/v1/subscriptions/activate`. Extends from max(today, current expiry), so paying early adds a year.
+- `GET /v1/subscriptions/state` says what enforcement would do today without switching it on. See `docs/K9_SUBSCRIPTIONS.md`.
+
+## School setup and the operator boundary
+- A school server ships with no accounts. `POST /v1/setup/school` (public, once) creates the tenant, the `school_setup` row and the school's own administrator — always role `admin`.
+- **The install flow has no path to `super_admin`.** The operator console requires `K9_OPERATOR_SECRET` in the environment AND the school's setup password at `/v1/setup/operator/unlock`; without the env var that route answers 404. Never set it on a school's server.
+- The dashboard nav is built from `GET /v1/me/capabilities`, defaulting closed. That is the courtesy; `requireAuth(["super_admin"])` on the central router is the enforcement.
+
+## Staff and student onboarding
+- Teachers onboard from a printed QR: `teacher_invites` (token hash only) → `/lens/#/onboard/<token>` → a personalisation form → account minted and signed in. `staff_profiles` holds the nickname, language, teaching style and briefing length K9 uses for them.
+- Class lists and Form 3+ subject-option sheets are photographed, read by the vision model (`lib/paper-reader.ts`), checked by the teacher, then committed. `paper_imports` holds the proposal; nothing writes to `users` until commit. `student_subjects` holds who takes what.
+- `GET /v1/onboarding/face-queue` drives the face walk: one name at a time, shutter, next, into the existing `/v1/faces/students/:code` enrolment.
+- Full flow in `docs/K9_ONBOARDING.md`.
+
 # System Architecture
 
 ## Monorepo Structure

@@ -1,4 +1,6 @@
-import { useState } from "react";
+import { useEffect } from "react";
+import { useLocation } from "wouter";
+import { useQuery } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -10,6 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { School } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { apiGet } from "@/lib/api";
 
 const loginSchema = z.object({
   email: z.string().email("Invalid email address"),
@@ -22,6 +25,20 @@ export default function Login() {
   const { login } = useAuth();
   const { toast } = useToast();
   const teacherLogin = useTeacherLogin();
+  const [, setLocation] = useLocation();
+
+  // A server nobody has set up yet has no accounts to sign in with, so send
+  // whoever opens it to the install wizard instead of a login box they
+  // cannot satisfy.
+  const { data: setupState } = useQuery<{ needs_setup: boolean }>({
+    queryKey: ["setup-state"],
+    queryFn: () => apiGet<{ needs_setup: boolean }>("/v1/setup/state"),
+    retry: false,
+  });
+
+  useEffect(() => {
+    if (setupState?.needs_setup) setLocation("/setup");
+  }, [setupState, setLocation]);
 
   const form = useForm<LoginForm>({
     resolver: zodResolver(loginSchema),

@@ -61,8 +61,120 @@ Shilling (TSh).
 - **Parents** get school-day summaries, progress and approved notices, never
   a live tracking view.
 
-See `docs/K9_ARCHITECTURE.md`, `docs/TEACHER_LENS.md` and
-`docs/K9_MODEL_STACK.md` for the full design.
+See `docs/K9_ARCHITECTURE.md`, `docs/TEACHER_LENS.md`,
+`docs/K9_MODEL_STACK.md`, `docs/K9_ONBOARDING.md`,
+`docs/K9_MARKET_AGENT.md`, `docs/K9_SKILL_ENGINE.md` and
+`docs/K9_BURSAR_AI.md` for the full design.
+
+## Setting a school up
+
+Nobody types a list into a computer.
+
+1. The first person to open the Teacher Dashboard gets the install wizard:
+   the school's name, a setup password, and the school's own administrator.
+   That is the only account the install creates — the KobepayTech operator
+   console is never part of a school install (`docs/K9_ONBOARDING.md`).
+2. The administrator prints teacher QR codes from **Staff & Students**.
+3. A teacher scans one with their own phone. It opens a form — their name,
+   age band, subjects, classes, language, and the name K9 should call them —
+   and creates their account. There is no login screen in the flow.
+4. The same phone photographs the printed class list. The vision model reads
+   it, the teacher checks the rows, and Commit creates the students.
+5. K9 then shows one name at a time: call that student over, tap the shutter,
+   next. That is the face gallery filled in a period, and camera presence
+   starts working.
+6. Finally the Form 3+ subject-option sheet, so nobody is quizzed on a paper
+   they dropped.
+
+Every read is a proposal a human approves. A school with no vision model
+pastes the list in as text through the same parsers.
+
+## Question market
+
+Students browse open questions on a shared classroom PC, rent five minutes of
+exclusive time on one for 10 KP, and win the reward if they answer correctly.
+
+The questions come from an agent running on the school's own models: it reads
+how thin the floor is per subject, what students are actually clearing, and
+which topics they are weak at; writes questions; re-solves each one with the
+answer key hidden and drops the ones the two passes disagree on; prices them
+from difficulty and scarcity inside an operator-set KP band; and sweeps the
+stale ones away. Every cycle is recorded. With no brain installed it recycles
+teacher-authored quiz questions rather than leaving the floor empty.
+
+See `docs/K9_MARKET_AGENT.md`.
+
+## School fees
+
+Fees are a real ledger: `fee_transactions` is append-only and signed,
+`fee_accounts` is the cached balance, and every write goes through one
+function that updates both inside a transaction — so
+`balance == SUM(transactions)` always holds, and `GET /v1/fees/verify`
+proves it. Nothing is edited or deleted; a mistake is corrected by a
+reversal. An M-Pesa receipt can only ever be posted once.
+
+Reconciling those payments is where AI earns its place. The bursar pastes
+(or photographs) the M-Pesa confirmations off the school phone; K9 reads
+them — regex first, because the text is machine-generated, with the vision
+model for statement layouts it does not know — works out whose fees each one
+is from the sending phone, the payer's name and the outstanding balance, and
+says why. Two plausible children produce no proposal at all. The bursar
+confirms, and only then does the ledger move.
+
+See `docs/K9_BURSAR_AI.md`, which also sets out what is deliberately not
+built yet and why.
+
+## Skill profiles
+
+K9 does not mark papers. Teachers do, exactly as they always have, and K9
+reads the marking they already did.
+
+Every tick, cross and part mark on a scanned paper is mapped to a syllabus
+skill, classified by *why* the mark was lost (concept, calculation, careless,
+incomplete, terminology, formula, reasoning, language, unanswered), and folded
+into a per-skill mastery score. So instead of "62% in Chemistry" a teacher
+sees that atomic structure is strong, balancing equations is weak, and the
+mole concept is weaker — and which three things to teach this student next.
+
+Two properties matter most. **The teacher is always right**: where a scan
+proposed a different mark, the teacher's stands and the disagreement is
+recorded, so the gap between what K9 reads and what teachers accept is
+measurable rather than assumed. And **one question is a hint, not a
+diagnosis**: every score carries a confidence, so a teacher can tell a rumour
+from a pattern before spending an intervention on it.
+
+A head teacher gets the form-wide view — "68% of Form 3 are below half on
+simultaneous equations" — which is a remedial lesson somebody can timetable
+before the exam.
+
+See `docs/K9_SKILL_ENGINE.md`.
+
+## What a subscription buys
+
+K9 is sold per student per year (TZS 20,000–50,000). The parent is not buying
+access to an app — no student carries a device — they are buying the
+**intelligence profile**: K9 continuously working out how their child learns
+and helping the school teach them better.
+
+| Every student, paid or not | Subscribed |
+|---|---|
+| Attendance, presence, safety | Skill mastery map |
+| Identity and the face gallery | Why each mark was lost |
+| Timetable and sitting exams | Recommended interventions |
+| Marks, report cards, school records | Progress over time, revision, learning plan, enhanced parent report |
+
+So an unsubscribed student still shows **48% in Mathematics** — that is the
+school's record of its own pupil, not a KobeAI product. A subscribed one adds
+the per-skill breakdown, the main mistake, what to teach next, and the change
+since the last exam.
+
+**A child's attendance, safety and school record are never for sale.** The
+tier boundary lives in one file (`lib/entitlements.ts`) and a test fails the
+build if anyone moves them.
+
+The school collects the fee on its own fee slip and activates the year from
+that receipt — the subscription is keyed to the student ID, never a phone
+number or a device. See `docs/K9_SUBSCRIPTIONS.md`.
 
 ## Printing
 
@@ -160,6 +272,10 @@ mockup sandbox as separate workflows on path-prefix routes.
 
 ### Demo credentials
 
+Development seeds only — `NODE_ENV=development` is the only env in which they
+are honoured, and the desktop/ISO builds do not seed them at all. A real
+school server has no accounts until someone completes the install wizard.
+
 | Role | Login | Password |
 |---|---|---|
 | Teacher | `teacher@school.tz` | `teacher123` |
@@ -179,6 +295,15 @@ mockup sandbox as separate workflows on path-prefix routes.
 | `DEFAULT_OBJECT_STORAGE_BUCKET_ID` | Object storage bucket for uploaded PDFs |
 | `PUBLIC_OBJECT_SEARCH_PATHS` | Object storage public search paths |
 | `PRIVATE_OBJECT_DIR` | Object storage private dir |
+| `K9_OPERATOR_SECRET` | Optional — the ONLY way a `super_admin` can be created. Set it on operator-run servers; never on a school's. Without it `/v1/setup/operator/unlock` answers 404 |
+| `AI_PROVIDER` | `ollama` turns the on-prem brain on (market agent, paper reading, classroom assistant) |
+| `OLLAMA_BASE_URL` | Where Ollama lives (default `http://localhost:11434`) |
+| `OLLAMA_MODEL` | Optional — pins one text model instead of the K9 registry's list |
+| `OLLAMA_VISION_MODEL` | Optional — pins one image-reading model for the paper reader |
+| `ENFORCE_SUBSCRIPTIONS` | `true` gates the K9 intelligence profile on the student's subscription. Never gates attendance, safety, exams or marks. Default `false` (`docs/K9_SUBSCRIPTIONS.md`) |
+| `SUBSCRIPTION_TRIAL_DAYS` | Trial window a newly rostered student gets (default 30) |
+| `SUBSCRIPTION_ANNUAL_TSH` | Price per student per year (default 30,000) |
+| `SKILL_HALF_LIFE_DAYS` | How fast old marking decays out of a skill score (default 60) |
 
 ## Deploying a school server
 
