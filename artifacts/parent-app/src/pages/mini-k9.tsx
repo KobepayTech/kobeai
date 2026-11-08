@@ -29,7 +29,7 @@ export default function MiniK9Page() {
     setSending(true); setAnswer("");
     try {
       const r = await fetch("/api/v1/parent/k9/chat", {
-        method: "POST", headers: { "content-type": "application/json", Authorization: \`Bearer \${token}\` },
+        method: "POST", headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ message }),
       });
       const b = await r.json();
@@ -42,7 +42,7 @@ export default function MiniK9Page() {
     const phone = window.prompt("Phone number for Mini K9 to call");
     if (!phone) return;
     const r = await fetch("/api/v1/parent/k9/call", {
-      method: "POST", headers: { "content-type": "application/json", Authorization: \`Bearer \${token}\` },
+      method: "POST", headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify({ phone, student_code: child.student_code, reason: "Parent requested a Mini K9 school update call" }),
     });
     const b = await r.json();
@@ -73,7 +73,7 @@ export default function MiniK9Page() {
             {(data?.upcoming ?? []).slice(0, 8).map(e => (
               <div key={e.id} className="border-b last:border-0 pb-3 last:pb-0">
                 <div className="font-medium">{e.title}</div>
-                <div className="text-xs text-gray-500">{new Date(e.starts_at).toLocaleString()} {e.location ? \` · \${e.location}\` : ""}</div>
+                <div className="text-xs text-gray-500">{new Date(e.starts_at).toLocaleString()} {e.location ? ` · ${e.location}` : ""}</div>
                 {e.description && <div className="text-xs text-gray-600 mt-1">{e.description}</div>}
               </div>
             ))}

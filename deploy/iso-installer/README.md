@@ -34,8 +34,12 @@ configured KobeAI node.
 - **Caddy 2** with a self-signed cert for `https://kobeai.school` and
   `https://192.168.1.10` (LAN-only, no internet certificate dependency)
 - A ready-to-use `kobeai-admin` CLI on the path
-- An auto-generated 16-character super-admin password, written to
-  `/root/kobeai-credentials.txt` (root-only) and printed on the install screen
+- An auto-generated 16-character **suggested setup password**, written to
+  `/root/kobeai-credentials.txt` (root-only) and printed on the install screen.
+  It is not a login: the server ships with no accounts at all. The school's
+  own administrator is created by the first-run wizard on the Teacher
+  Dashboard, and the KobepayTech operator console is never part of a school
+  install.
 - UFW firewall: SSH + 80 + 443 open; everything else blocked
 
 ### Worker node (desktop, default `192.168.1.11`)
@@ -118,7 +122,11 @@ sudo sync
    ```bash
    sudo cat /root/kobeai-credentials.txt
    ```
-   to get the super-admin password.
+   for the suggested setup password.
+6. Open `https://kobeai.school/teacher/` and complete the first-run wizard:
+   the school's name, that setup password, and the school administrator's
+   details. Then print the teacher QR codes from **Staff & Students** — each
+   teacher scans one and sets themselves up from their own phone.
 
 Total wall-clock time per machine: **20–30 min on a wired connection**, longer
 on the worker because of the AI model downloads (~5 GB).

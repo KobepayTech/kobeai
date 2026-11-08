@@ -17,6 +17,14 @@ Endpoints (JSON; images and audio are base64):
     POST /v1/faces/match                  {a, b}
     POST /v1/reid                         {image, boxes?}
     POST /v1/vad                          {audio (16-bit PCM WAV), threshold?}
+    POST /v1/speaker/embedding            {audio} -> unit-length TitaNet vector
+    POST /v1/diarize                      {audio, min_speakers?, max_speakers?}
+    POST /v1/transcribe                   {audio, language?}
+
+The three audio-identity endpoints return evidence, never an identity. Deciding
+*whose* voice a vector is needs the class roster, the consent record and the
+audit trail, which live in the school server's database, so that decision stays
+there and this runtime stays stateless.
 """
 
 from __future__ import annotations
@@ -126,6 +134,33 @@ class Runtime:
                 "duration_seconds": seconds,
                 "speech_seconds": round(sum(s["end"] - s["start"] for s in segments), 3),
             }
+        elif path == "/v1/speaker/embedding":
+            # The one thing only the runtime can do: audio to a vector. It
+            # deliberately does NOT decide whose voice it is. Identity needs the
+            # class roster, the consent record and the audit trail, all of which
+            # live in the school server's database — see
+            # artifacts/api-server/src/lib/voice-identity.ts. Keeping the
+            # decision there also keeps the runtime stateless, so a classroom PC
+            # rebooting mid-lesson loses nothing.
+            payload = {
+                "embedding": self.engines["speaker_id"].embedding(decode_base64(body.get("audio"), "audio")),
+                "model": "titanet_large",
+            }
+        elif path == "/v1/diarize":
+            # Who spoke when, before anyone is named. The labels are per
+            # recording ("SPEAKER_00"), so the caller diarizes, embeds each
+            # turn, then matches against the roster.
+            turns = self.engines["diarization"].turns(
+                decode_base64(body.get("audio"), "audio"),
+                min_speakers=body.get("min_speakers"),
+                max_speakers=body.get("max_speakers"),
+            )
+            payload = {"turns": turns, "speakers": len({t["speaker"] for t in turns})}
+        elif path == "/v1/transcribe":
+            payload = self.engines["speech_to_text"].transcribe(
+                decode_base64(body.get("audio"), "audio"),
+                language=(str(body["language"]) if body.get("language") else None),
+            )
         else:
             return 404, {"error": "not_found"}
         payload["elapsed_ms"] = round((time.perf_counter() - started) * 1000, 1)

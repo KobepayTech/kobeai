@@ -46,6 +46,14 @@ def require_secret(
         raise HTTPException(status_code=401, detail="invalid K9 runtime credential")
 
 
+# Classroom metadata: warehouse routing and subject agents. Mounted behind the
+# same shared secret as everything else — it was previously written but never
+# included, so none of it was reachable.
+from classroom_api import router as classroom_router  # noqa: E402
+
+app.include_router(classroom_router, dependencies=[Depends(require_secret)])
+
+
 def image_from_bytes(data: bytes) -> Image.Image:
     try:
         return Image.open(io.BytesIO(data)).convert("RGB")

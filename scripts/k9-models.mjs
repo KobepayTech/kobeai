@@ -113,7 +113,13 @@ export function validateConfig(config) {
   }
   const ollamaRuntime = config?.runtime?.ollama;
   if (ollamaRuntime) {
-    for (const id of [ollamaRuntime.text_model, ...(ollamaRuntime.text_fallbacks ?? [])]) {
+    const declared = [
+      ollamaRuntime.text_model,
+      ...(ollamaRuntime.text_fallbacks ?? []),
+      ollamaRuntime.vision_model,
+      ...(ollamaRuntime.vision_fallbacks ?? []),
+    ].filter(Boolean);
+    for (const id of declared) {
       if (!config.models?.[id]?.ollama) errors.push(`runtime.ollama: ${id} is not a model with an ollama name`);
     }
   }
@@ -408,14 +414,24 @@ export async function downloadModels(config, roots, ids = []) {
 // Ollama (text brain)
 // ---------------------------------------------------------------------------
 
+function ollamaModelsFor(config, ids) {
+  const seen = new Set();
+  return ids
+    .filter(Boolean)
+    .map((id) => ({ id, name: config.models[id]?.ollama?.name }))
+    .filter((model) => model.name && !seen.has(model.name) && seen.add(model.name));
+}
+
 /** K9's text models in the order the api-server tries them: default first, then fallbacks. */
 export function ollamaTextModels(config) {
   const runtime = config.runtime?.ollama;
-  const ids = [runtime?.text_model, ...(runtime?.text_fallbacks ?? [])].filter(Boolean);
-  const seen = new Set();
-  return ids
-    .map((id) => ({ id, name: config.models[id]?.ollama?.name }))
-    .filter((model) => model.name && !seen.has(model.name) && seen.add(model.name));
+  return ollamaModelsFor(config, [runtime?.text_model, ...(runtime?.text_fallbacks ?? [])]);
+}
+
+/** K9's image-reading models, in the order the paper reader tries them. */
+export function ollamaVisionModels(config) {
+  const runtime = config.runtime?.ollama;
+  return ollamaModelsFor(config, [runtime?.vision_model, ...(runtime?.vision_fallbacks ?? [])]);
 }
 
 async function fileDigest(file, cache) {
