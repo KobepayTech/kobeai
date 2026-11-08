@@ -1,0 +1,13 @@
+node_modules
+.pnpm-store
+.git
+.github
+*.log
+.env
+.env.*
+!.env.example
+.k9-models
+.kobeos-models
+uploads
+tmp
+dist

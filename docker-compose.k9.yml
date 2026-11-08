@@ -1,0 +1,106 @@
+name: kobeai-k9
+services:
+  postgres:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${K9_POSTGRES_DB:-k9}
+      POSTGRES_USER: ${K9_POSTGRES_USER:-k9}
+      POSTGRES_PASSWORD: ${K9_POSTGRES_PASSWORD:?Set K9_POSTGRES_PASSWORD}
+    volumes:
+      - k9-postgres:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "k9", "-d", "k9"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - k9-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  db-init:
+    build:
+      context: .
+      dockerfile: Dockerfile.k9-api
+      target: build
+    environment:
+      DATABASE_URL: postgresql://${K9_POSTGRES_USER:-k9}:${K9_POSTGRES_PASSWORD:?Set K9_POSTGRES_PASSWORD}@postgres:5432/${K9_POSTGRES_DB:-k9}
+    command: ["pnpm", "--filter", "@workspace/db", "push"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+        restart: true
+
+  runtime:
+    build:
+      context: .
+      dockerfile: docker/k9-runtime.Dockerfile
+    restart: unless-stopped
+    environment:
+      K9_MODELS_CONFIG: /app/config/k9-models.json
+      K9_MODELS_ROOT: /models/k9
+      KOBEOS_MODELS_ROOT: /models/base
+      K9_RUNTIME_SHARED_SECRET: ${K9_RUNTIME_SHARED_SECRET:?Set K9_RUNTIME_SHARED_SECRET}
+      K9_DEVICE: ${K9_DEVICE:-auto}
+      K9_GGUF_CONTEXT: ${K9_GGUF_CONTEXT:-8192}
+      K9_GGUF_GPU_LAYERS: ${K9_GGUF_GPU_LAYERS:--1}
+    expose:
+      - "8766"
+    volumes:
+      - ${K9_MODELS_PATH:-./.k9-models}:/models/k9:ro
+      - ${KOBEOS_MODELS_PATH:-./.kobeos-models}:/models/base:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8766/health', timeout=3).read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.k9-api
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 8080
+      DATABASE_URL: postgresql://${K9_POSTGRES_USER:-k9}:${K9_POSTGRES_PASSWORD:?Set K9_POSTGRES_PASSWORD}@postgres:5432/${K9_POSTGRES_DB:-k9}
+      REDIS_URL: redis://redis:6379
+      K9_DESKTOP: "1"
+      K9_RUNTIME_URL: http://runtime:8766
+      K9_FASTAPI_RUNTIME_URL: http://runtime:8766
+      K9_RUNTIME_SHARED_SECRET: ${K9_RUNTIME_SHARED_SECRET:?Set K9_RUNTIME_SHARED_SECRET}
+      K9_SHARED_SECRET: ${K9_RUNTIME_SHARED_SECRET:?Set K9_RUNTIME_SHARED_SECRET}
+      CORS_ALLOWED_ORIGINS: ${K9_CORS_ALLOWED_ORIGINS:-http://localhost:8080}
+    ports:
+      - "${K9_API_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+        restart: true
+      redis:
+        condition: service_healthy
+        restart: true
+      db-init:
+        condition: service_completed_successfully
+      runtime:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/api/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+volumes:
+  k9-postgres:
+  k9-redis:
