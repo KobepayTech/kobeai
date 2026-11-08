@@ -49,6 +49,8 @@ jobs:
             sleep 1
           done
           NODE_PATH="$RUNNER_TEMP/lens-browser/node_modules" node artifacts/teacher-lens/tests/workspace.cjs
+          NODE_PATH="$RUNNER_TEMP/lens-browser/node_modules" node artifacts/teacher-lens/tests/upload-queue.cjs
+          NODE_PATH="$RUNNER_TEMP/lens-browser/node_modules" node artifacts/teacher-lens/tests/review.cjs
       - name: Compile both native hardware variants
         working-directory: glasses/android
         run: ./gradlew :app:assembleCompanionDebug :app:assembleRayneoDebug --stacktrace

@@ -1,6 +1,7 @@
 import { useServerConnection } from "./serverConnection";
 import { Connections } from "./Connections";
-import { TeacherWorkspace, type CaptureActivity } from "./TeacherWorkspace";
+import { TeacherWorkspace, type PaperReview } from "./TeacherWorkspace";
+import { assertRoom, discardFrame, enqueueFrame, ownerKey, retryFrames, retryNow, settled, startUploads, useUploadQueue } from "./uploadQueue";
 import { useCamera } from "./camera";
 import { captureGlasses, GlassesControl, speakThroughGlasses } from "./glasses";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -261,7 +262,8 @@ type StudentBrief = {
   }>;
 };
 
-type LensUpload = { request_id: number | null; image_key: string | null };
+/** `waiting`: the photo is stored on the phone but the server has not accepted it yet. */
+type LensUpload = { request_id: number | null; image_key: string | null; waiting: boolean };
 
 type ReadItem = {
   question_number: number;
@@ -424,6 +426,10 @@ type LensExam = {
 type ExamStudent = { student_id: number; name: string; student_code: string | null; marks: number | null };
 
 type PaperGraded = {
+  /** This reading had already been decided; nothing new was recorded. */
+  duplicate?: boolean;
+  decision?: "confirmed" | "dismissed" | "auto_recorded";
+  confirmed_student_code?: string | null;
   summary: { total: number; correct: number; score_percent: number | null };
   result: null | {
     marks: number;
@@ -475,16 +481,52 @@ function MarkPanel({
   auth,
   sessionId,
   paper,
+  review,
+  onReviewed,
   onClose,
 }: {
   auth: StoredAuth;
   sessionId: number | null;
   /** The photo taken with the shutter, queued for the K9 brain to read. */
   paper: { requestId: number | null; imageKey: string | null };
+  /**
+   * Set when the sheet is confirming a paper K9 read from a photograph. The
+   * teacher then has to choose the student themselves and say so before
+   * anything is recorded; what K9 read is shown, never applied.
+   */
+  review?: PaperReview;
+  /** A review was saved or set aside: close and say what happened. */
+  onReviewed?: (message: string) => void;
   onClose: () => void;
 }) {
   const [exams, setExams] = useState<LensExam[]>([]);
-  const [examId, setExamId] = useState<number | null>(storedExamId);
+  const [examId, setExamId] = useState<number | null>(() => review?.exam_id ?? storedExamId());
+  const [checked, setChecked] = useState(false);
+  const [photo, setPhoto] = useState<string | null>(null);
+  // K9's own reading of each question, kept so the saved paper records where
+  // the teacher's mark differs from it.
+  const aiItems = useRef(new Map<number, ReadItem>());
+  const [aiStudent, setAiStudent] = useState<{ name: string | null; code: string | null } | null>(
+    review ? { name: review.ai.student_name, code: review.ai.student_code } : null,
+  );
+
+  useEffect(() => {
+    if (!review || !paper.requestId) return;
+    let cancelled = false;
+    let url: string | null = null;
+    fetch(`${auth.api_base}/api/v1/teacher-lens/frame/${paper.requestId}/image`, { headers: { authorization: `Bearer ${auth.token}` } })
+      .then((response) => (response.ok ? response.blob() : null))
+      .then((blob) => {
+        if (!blob || cancelled) return;
+        url = URL.createObjectURL(blob);
+        setPhoto(url);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [auth, paper.requestId, review]);
   const [students, setStudents] = useState<ExamStudent[]>([]);
   const [studentCode, setStudentCode] = useState("");
   const [marksObtained, setMarksObtained] = useState("");
@@ -519,14 +561,18 @@ function MarkPanel({
 
   useEffect(() => {
     try {
-      if (examId) localStorage.setItem(EXAM_STORAGE_KEY, String(examId));
+      // Reviewing an old paper must not change which exam new photographs are
+      // captured for.
+      if (review) {
+        /* leave the stored exam alone */
+      } else if (examId) localStorage.setItem(EXAM_STORAGE_KEY, String(examId));
       else localStorage.removeItem(EXAM_STORAGE_KEY);
     } catch {
       // storage unavailable — the picker still works for this sheet
     }
     setStudents([]);
     if (examId) loadStudents(examId);
-  }, [examId, loadStudents]);
+  }, [examId, loadStudents, review]);
 
   // The brain reads the photo in the background; its answers fill the sheet
   // for the teacher to check before saving.
@@ -563,15 +609,17 @@ function MarkPanel({
               }))
             : prev,
         );
-        const codeOnPaper = result.response?.student_code;
-        if (codeOnPaper) setStudentCode((code) => code || codeOnPaper);
+        for (const it of found) aiItems.current.set(Number(it.question_number), it);
+        // What K9 read about whose paper this is goes on screen as a reading.
+        // It is never put in the student field: a name on a page is a guess
+        // until the teacher has looked at the paper.
+        setAiStudent({ name: result.response?.student_name ?? null, code: result.response?.student_code ?? null });
         const total = result.response?.total_marks_awarded;
         if (total != null) setMarksObtained((marks) => marks || String(total));
         setReadState("read");
         setReadNote(
           `Kobe read ${found.length} answer${found.length === 1 ? "" : "s"}` +
-            (result.response?.student_name ? ` for ${result.response.student_name}` : "") +
-            " — check them before saving.",
+            " — check them against the paper before saving.",
         );
         return;
       }
@@ -616,13 +664,33 @@ function MarkPanel({
         subject: exam ? undefined : subject.trim() || undefined,
         assessment_title: exam ? undefined : assessment.trim() || undefined,
         paper_image_key: paperImageKey ?? undefined,
-        items: filled.map(({ marks_awarded, marks_possible, ...it }) => ({
-          ...it,
-          marks_awarded: num(marks_awarded),
-          marks_possible: num(marks_possible),
-        })),
+        // Saving a paper K9 read: the server records it once per reading and
+        // keeps K9's own reading beside the teacher's choice of student.
+        lens_request_id: review ? paper.requestId : undefined,
+        items: filled.map(({ marks_awarded, marks_possible, ...it }) => {
+          const ai = aiItems.current.get(it.question_number);
+          return {
+            ...it,
+            marks_awarded: num(marks_awarded),
+            marks_possible: num(marks_possible),
+            ...(ai ? { metadata: { ai_is_correct: ai.is_correct ?? undefined, ai_marks_awarded: ai.marks_awarded ?? undefined } } : {}),
+          };
+        }),
       };
       const r = await apiPost<PaperGraded>(auth, "/v1/teacher-lens/paper-graded", payload);
+      if (review && onReviewed) {
+        const name = students.find((s) => s.student_code === code)?.name ?? code;
+        onReviewed(
+          r.duplicate
+            ? r.decision === "dismissed"
+              ? "This paper was already set aside. Nothing was recorded."
+              : `This paper was already saved${r.confirmed_student_code ? ` for ${r.confirmed_student_code}` : ""}. Nothing was recorded twice.`
+            : r.result
+              ? `Saved for ${name}: ${r.result.marks}/${r.result.exam.total_marks} (${r.result.percent}%).`
+              : `Saved for ${name}: ${r.summary.correct} of ${r.summary.total}.`,
+        );
+        return;
+      }
       if (r.result) {
         // The server whispers the result through the earbud. Keep the sheet
         // open on the same exam so the next paper is one tap away.
@@ -674,7 +742,22 @@ function MarkPanel({
   return (
     <div className="lens-sheet" onClick={onClose}>
       <div className="lens-sheet-body" onClick={(e) => e.stopPropagation()}>
-        <h2>Mark paper</h2>
+        <h2>{review ? "Review paper" : "Mark paper"}</h2>
+        {review && (
+          <>
+            <p>
+              Photographed {new Date(review.captured_at).toLocaleString([], { hour: "2-digit", minute: "2-digit", day: "numeric", month: "short" })}.
+              Nothing is recorded until you choose the student and save.
+            </p>
+            {photo ? (
+              <a href={photo} target="_blank" rel="noreferrer">
+                <img className="mark-paper-photo" src={photo} alt="The photographed paper" />
+              </a>
+            ) : (
+              <div className="mark-error">The photograph could not be loaded. Check the marks against the paper itself.</div>
+            )}
+          </>
+        )}
         <label className="mark-label">Exam</label>
         <select
           className="mark-input"
@@ -709,11 +792,17 @@ function MarkPanel({
         )}
 
         <label className="mark-label">Student</label>
+        {aiStudent && (aiStudent.name || aiStudent.code) && (
+          <div className="mark-reading" role="note">
+            K9 read on the paper: {[aiStudent.name && `name “${aiStudent.name}”`, aiStudent.code && `code “${aiStudent.code}”`].filter(Boolean).join(", ")}.
+            This is not confirmed. Choose the student yourself.
+          </div>
+        )}
         {exam && pickable.length > 0 && (
           <select
             className="mark-input"
             value={pickable.some((s) => s.student_code === studentCode) ? studentCode : ""}
-            onChange={(e) => setStudentCode(e.target.value)}
+            onChange={(e) => { setStudentCode(e.target.value); setChecked(false); }}
           >
             <option value="">Pick a student…</option>
             {pickable.map((s) => (
@@ -727,7 +816,7 @@ function MarkPanel({
         <input
           className="mark-input"
           value={studentCode}
-          onChange={(e) => setStudentCode(e.target.value)}
+          onChange={(e) => { setStudentCode(e.target.value); setChecked(false); }}
           placeholder={exam ? "Or type a student code" : "K9-002"}
         />
         {exam ? (
@@ -811,14 +900,61 @@ function MarkPanel({
         <button className="mark-add" onClick={() => setItems((p) => [...p, newItem(p.length + 1)])}>
           + Add another question
         </button>
+        {review && studentCode.trim() && (
+          <label className="mark-check">
+            <input type="checkbox" checked={checked} onChange={(e) => setChecked(e.target.checked)} />
+            I have checked the paper: it belongs to{" "}
+            {students.find((s) => s.student_code === studentCode.trim())?.name ?? studentCode.trim()} and these marks are mine.
+          </label>
+        )}
         <div className="mark-actions">
-          <button className="mark-primary" onClick={submit} disabled={busy || !studentCode.trim()}>
-            {busy ? "Sending…" : exam ? "Record result" : "Send to KobeAI"}
+          <button className="mark-primary" onClick={submit} disabled={busy || !studentCode.trim() || (!!review && !checked)}>
+            {busy ? "Sending…" : review ? "Confirm student and save result" : exam ? "Record result" : "Send to KobeAI"}
           </button>
+          {review && onReviewed && (
+            <button
+              className="mark-ghost"
+              disabled={busy}
+              onClick={async () => {
+                if (!window.confirm("Set this photograph aside? No result will be recorded from it.")) return;
+                setBusy(true);
+                try {
+                  await apiPost(auth, `/v1/teacher-lens/frame/${paper.requestId}/dismiss`, {});
+                  onReviewed("Photograph set aside. Nothing was recorded.");
+                } catch (err) {
+                  setError(errorDetail(err));
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              Not a paper to save
+            </button>
+          )}
           <button className="mark-ghost" onClick={onClose}>{lastResult ? "Done" : "Cancel"}</button>
         </div>
       </div>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// One line on the lens about photos that have not reached the school server.
+// Silent when there is nothing waiting: the common case should not nag.
+// ---------------------------------------------------------------------------
+function UploadSummary({ queue, onOpen }: { queue: ReturnType<typeof useUploadQueue>; onOpen: () => void }) {
+  const waiting = queue.frames.filter((f) => f.state === "pending" || f.state === "uploading").length;
+  const failed = queue.frames.filter((f) => f.state === "failed").length;
+  if (!waiting && !failed) return null;
+  const parts = [
+    waiting ? `${waiting} photo${waiting === 1 ? "" : "s"} saved on this phone, waiting to upload` : "",
+    failed ? `${failed} could not be uploaded` : "",
+  ].filter(Boolean);
+  return (
+    <button className="lens-upload-summary" role="status" onClick={onOpen}>
+      {parts.join(" · ")}
+      {queue.status.needsSignIn ? " · sign in again to send them" : ""} · Review in Activity
+    </button>
   );
 }
 
@@ -833,20 +969,27 @@ export function App() {
   const [connectionsOpen, setConnectionsOpen] = useState(false);
   const [initialServer, setInitialServer] = useState("");
   const [workspaceOpen, setWorkspaceOpen] = useState(true);
-  const [captures, setCaptures] = useState<CaptureActivity[]>([]);
+  const queue = useUploadQueue(auth);
+  // Why the last capture produced no photo. Stays up until a capture succeeds.
+  const [captureProblem, setCaptureProblem] = useState<string | null>(null);
+  const sessionRef = useRef<number | null>(null);
   const [glassesConnected, setGlassesConnected] = useState(false);
   const [glassesSource, setGlassesSource] = useState<string | null>(null);
   const shutterBusy = useRef(false);
   const [mode, setMode] = useState<Mode>("lookup");
   const [sessionId, setSessionId] = useState<number | null>(null);
   const [lookupBrief, setLookupBrief] = useState<StudentBrief | null>(null);
-  const [markOpen, setMarkOpen] = useState<null | { requestId: number | null; imageKey: string | null }>(null);
+  const [markOpen, setMarkOpen] = useState<null | { requestId: number | null; imageKey: string | null; review?: PaperReview }>(null);
+  const [reviews, setReviews] = useState<PaperReview[]>([]);
+  const [reviewsStamp, setReviewsStamp] = useState(0);
   const [toast, setToast] = useState<string | null>(null);
   const [wakeWordOn, setWakeWordOn] = useState<boolean>(false);
   const [studentPicker, setStudentPicker] = useState<null | {
     students: Array<{ student_code: string; student_name: string | null }>;
     imageKey: string | null;
     requestId: number | null;
+    /** Stored on the phone but not yet accepted by the server. */
+    waiting: boolean;
     recognising: boolean;
     hint: string | null;
   }>(null);
@@ -855,15 +998,32 @@ export function App() {
   const pickerRequest = useRef<number | null>(null);
   // Guards the continuous marking tick: one upload in flight at a time.
   const markUploadInFlight = useRef(false);
+  // Marking photographs the paper every 2.5 seconds on its own. That suits a
+  // school server that reads a page in seconds; one that needs minutes per
+  // page is buried by it. Off, marking takes a photograph only on the shutter.
+  const [autoCapture, setAutoCapture] = useState<boolean>(() => {
+    try { return localStorage.getItem("k9-lens.auto-capture") !== "off"; } catch { return true; }
+  });
+  const toggleAutoCapture = () => setAutoCapture((on) => {
+    try { localStorage.setItem("k9-lens.auto-capture", on ? "off" : "on"); } catch { /* this session only */ }
+    return !on;
+  });
   useEffect(() => {
     if (!studentPicker) pickerRequest.current = null;
   }, [studentPicker]);
   const { videoRef, ready: camReady, err: camErr, captureFrame, captureBlob } = useCamera(!!auth && !glassesSource && !workspaceOpen && !connectionsOpen);
 
-  // Start a session as soon as we have auth.
+  // Start a session as soon as we have auth — and keep trying. The lens is
+  // often opened before the school Wi-Fi is: with one attempt, a teacher who
+  // opened it offline stayed without a session after the network came back,
+  // and every photograph on the phone waited for a session that never started.
+  const [sessionAttempt, setSessionAttempt] = useState(0);
   useEffect(() => {
     if (!auth || sessionId != null) return;
     let cancelled = false;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    const again = () => { if (!cancelled) setSessionAttempt((n) => n + 1); };
+    window.addEventListener("online", again);
     (async () => {
       try {
         const r = await apiPost<{ session: { id: number } }>(auth, "/v1/teacher-lens/session", {
@@ -876,13 +1036,44 @@ export function App() {
         }
         setSessionId(r.session.id);
       } catch {
-        setToast("Couldn't start lens session — check the server URL.");
+        if (cancelled) return;
+        if (sessionAttempt === 0) setToast("Couldn't start lens session — check the server URL.");
+        retry = setTimeout(again, Math.min(3000 * 2 ** Math.min(sessionAttempt, 4), 30_000));
       }
     })();
-    return () => { cancelled = true; };
-  }, [auth, mode, sessionId]);
+    return () => { cancelled = true; clearTimeout(retry); window.removeEventListener("online", again); };
+  }, [auth, mode, sessionId, sessionAttempt]);
 
   useWhisperPoll(auth ?? ({ api_base: "", token: "", teacher_name: "" } as StoredAuth), sessionId);
+
+  // Papers K9 has read that are waiting for this teacher to confirm whose
+  // they are. Refreshed while signed in, and at once after a decision or a
+  // finished upload.
+  const uploadedCount = queue.frames.filter((f) => f.state === "done").length;
+  useEffect(() => {
+    if (!auth) {
+      setReviews([]);
+      return;
+    }
+    let stopped = false;
+    const load = async () => {
+      const r = await apiGet<{ reviews: PaperReview[] }>(auth, "/v1/teacher-lens/reviews").catch(() => null);
+      // A server without the review route answers 404 (null here); anything
+      // that is not a list is treated the same way.
+      if (!stopped && r) setReviews(Array.isArray(r.reviews) ? r.reviews : []);
+    };
+    void load();
+    const timer = window.setInterval(load, 20_000);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [auth, reviewsStamp, uploadedCount]);
+
+  // Upload whatever this account has stored on the phone — including frames
+  // from before the app was last closed — for as long as it stays signed in.
+  sessionRef.current = sessionId;
+  useEffect(() => (auth ? startUploads(auth, () => sessionRef.current) : undefined), [auth]);
 
   // End the session on page hide (bfcache-friendly). Best effort.
   useEffect(() => {
@@ -936,46 +1127,42 @@ export function App() {
     }
   }, [auth]);
 
-  // Upload the current frame to /v1/teacher-lens/frame. The server saves it
-  // and queues it for the K9 worker: faces are matched against enrolled
-  // students, paper photos are read by the brain. Best effort — if it fails
-  // the teacher still picks the student or types the marks.
-  const uploadFrame = useCallback(async (): Promise<LensUpload | null> => {
+  // Capture one frame and store it on the phone; the upload queue then sends
+  // it to /v1/teacher-lens/frame, where the server saves it and queues it for
+  // the K9 worker. Storing comes first, so a frame survives the school Wi-Fi
+  // dropping or the app being closed. `waitMs` lets the shutter wait briefly
+  // for the server's answer; continuous marking does not wait at all.
+  //
+  // The camera is whichever one the teacher selected. Glasses that fail to
+  // return a photo throw — they are never replaced by the phone camera.
+  const uploadFrame = useCallback(async (waitMs = 0): Promise<LensUpload | null> => {
     if (!auth) return null;
-    const blob = await captureGlasses() ?? await captureBlob(mode === "mark" ? 1600 : 1280);
+    const owner = ownerKey(auth);
+    await assertRoom(owner);
+    const blob = glassesSource ? await captureGlasses(glassesSource) : await captureBlob(mode === "mark" ? 1600 : 1280);
     if (authRef.current !== auth) throw new Error("Session ended — sign in again");
     if (!blob) return null;
-    const examId = mode === "mark" ? storedExamId() : null;
-    try {
-      const res = await fetch(`${auth.api_base}/api/v1/teacher-lens/frame`, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${auth.token}`,
-          "content-type": "image/jpeg",
-          "x-lens-session-id": String(sessionId ?? ""),
-          "x-lens-mode": mode,
-          ...(examId ? { "x-lens-exam-id": String(examId) } : {}),
-        },
-        body: blob,
-      });
-      if (!res.ok) return null;
-      const body = await res.json();
-      if (authRef.current === auth && body?.request?.id) setCaptures(previous => [{ id: body.request.id, mode, at: new Date().toISOString() }, ...previous].slice(0, 20));
-      return { request_id: body?.request?.id ?? null, image_key: body?.image_key ?? null };
-    } catch {
-      return null;
-    }
-  }, [auth, captureBlob, mode, sessionId]);
+    const frame = await enqueueFrame(owner, { blob, mode, examId: mode === "mark" ? storedExamId() : null });
+    setCaptureProblem(null);
+    const sent = waitMs > 0 ? await settled(frame.id, owner, waitMs) : null;
+    return { request_id: sent?.requestId ?? null, image_key: sent?.imageKey ?? null, waiting: sent?.state !== "done" };
+  }, [auth, captureBlob, glassesSource, mode]);
 
   // Camera-first exam marking: no shutter and no teacher narration are required.
   // K9 samples the teacher's view while they mark normally.
   useEffect(() => {
-    if (mode !== "mark" || !auth || sessionId == null) return;
+    // No session is needed to photograph: frames are stored on the phone and
+    // wait there, so marking can start before the school server is reachable.
+    if (mode !== "mark" || !autoCapture || !auth) return;
     const tick = async () => {
       if (markUploadInFlight.current) return;
       markUploadInFlight.current = true;
       try {
         await uploadFrame();
+      } catch (error) {
+        // A missed frame during marking is a gap in the exam record, so it is
+        // shown until the next frame succeeds rather than flashed as a toast.
+        if (authRef.current === auth) setCaptureProblem(errorDetail(error));
       } finally {
         markUploadInFlight.current = false;
       }
@@ -983,7 +1170,7 @@ export function App() {
     tick();
     const timer = window.setInterval(tick, 2500);
     return () => window.clearInterval(timer);
-  }, [auth, mode, sessionId, uploadFrame]);
+  }, [auth, autoCapture, mode, uploadFrame]);
 
   const runLookup = useCallback(
     async (studentCode: string, quiet = false) => {
@@ -1056,11 +1243,11 @@ export function App() {
 
       if (mode === "lookup") {
         // The picker opens straight away; a recognised face replaces it.
-        const [uploaded, recent] = await Promise.all([uploadFrame(), fetchRecentStudents()]);
+        const [uploaded, recent] = await Promise.all([uploadFrame(8000), fetchRecentStudents()]);
         if (authRef.current !== auth) return;
         const requestId = uploaded?.request_id ?? null;
         pickerRequest.current = requestId;
-        setStudentPicker({ students: recent, imageKey: uploaded?.image_key ?? null, requestId, recognising: requestId !== null, hint: null });
+        setStudentPicker({ students: recent, imageKey: uploaded?.image_key ?? null, requestId, waiting: !!uploaded?.waiting, recognising: requestId !== null, hint: null });
         if (requestId !== null) watchLookup(requestId);
       } else {
         // Manual capture is kept as a recovery action, not the marking
@@ -1068,11 +1255,13 @@ export function App() {
         // paper's result is finalised by the server once it has seen a
         // complete paper. So this uploads one frame and says so, rather than
         // opening a sheet that would claim one shutter press is a whole paper.
-        await uploadFrame();
+        const uploaded = await uploadFrame(8000);
         if (authRef.current !== auth) return;
-        setToast("K9 is reading the marked paper.");
+        setToast(!uploaded ? "No photo was taken — the camera is not ready."
+          : uploaded.waiting ? "Photo saved on this phone. It uploads when the school server is reachable."
+          : "K9 is reading the marked paper.");
       }
-    } catch (error) { setToast(errorDetail(error)); }
+    } catch (error) { setCaptureProblem(errorDetail(error)); }
     finally { shutterBusy.current = false; }
   }, [auth, mode, glassesSource, captureFrame, uploadFrame, fetchRecentStudents, watchLookup]);
 
@@ -1089,6 +1278,8 @@ export function App() {
 
   const selectGlassesSource = useCallback((source: string | null, connected = false) => {
     setGlassesSource(source); setGlassesConnected(connected);
+    // The message described the previous source or connection state.
+    setCaptureProblem(null);
   }, []);
 
   const uptimeLabel = useMemo(() => `Session ${sessionId ?? "starting…"}`, [sessionId]);
@@ -1102,7 +1293,7 @@ export function App() {
             authRef.current = null;
             setGlassesSource(null);
             setGlassesConnected(false);
-            setCaptures([]); setWorkspaceOpen(true); setWakeWordOn(false);
+            setCaptureProblem(null); setReviews([]); setWorkspaceOpen(true); setWakeWordOn(false);
             clearAuth();
             setAuth(null);
             setConnectionsOpen(false);
@@ -1139,7 +1330,9 @@ export function App() {
       </Connections>
       <div className="lens-viewport">
         <video ref={videoRef} playsInline muted />
-        {glassesSource && <div className="frame-cover">Camera: {glassesSource}. Tap the shutter to capture.</div>}
+        {glassesSource && <div className="frame-cover">{glassesConnected
+          ? `Camera: ${glassesSource}. Tap the shutter to capture.`
+          : `${glassesSource} are selected but not connected. Open Connections to connect them, or choose Phone camera there. The phone camera is not used in their place.`}</div>}
         {!glassesSource && !camReady && !camErr && (
           <div className="frame-cover">Requesting camera access…</div>
         )}
@@ -1152,10 +1345,15 @@ export function App() {
         <div className="lens-overlay">
           <div className="headline">{mode === "lookup" ? "Point at a student" : "Point at a marked paper"}</div>
           <div className="sub">
-            K9 continuously reads the marked paper through the camera. The teacher does not read questions or answers aloud.
+            {mode === "mark" && !autoCapture
+              ? "Automatic capture is off. Tap the shutter to photograph a paper."
+              : "K9 continuously reads the marked paper through the camera. The teacher does not read questions or answers aloud."}
           </div>
         </div>
       </div>
+
+      {captureProblem && <div role="alert" className="mark-error lens-capture-problem">{captureProblem}</div>}
+      <UploadSummary queue={queue} onOpen={() => setWorkspaceOpen(true)} />
 
       <div className="lens-tabs">
         <button className={mode === "lookup" ? "active" : ""} onClick={() => setMode("lookup")}>
@@ -1165,6 +1363,9 @@ export function App() {
           Mark paper
         </button>
       </div>
+      <button className="lens-secondary lens-auto-capture" aria-pressed={autoCapture} onClick={toggleAutoCapture}>
+        Automatic capture while marking: {autoCapture ? "on" : "off"}
+      </button>
 
       <div className="lens-actions">
         <button
@@ -1191,7 +1392,9 @@ export function App() {
         </button>
       </div>
 
-      {workspaceOpen && <TeacherWorkspace serverStatus={serverStatus} auth={auth} connected={glassesConnected} source={glassesSource} captures={captures}
+      {workspaceOpen && <TeacherWorkspace serverStatus={serverStatus} auth={auth} connected={glassesConnected} source={glassesSource} queue={queue} reviews={reviews}
+        onReview={(review) => { setWorkspaceOpen(false); setMarkOpen({ requestId: review.request_id, imageKey: null, review }); }}
+        onRetry={(id) => void retryFrames(ownerKey(auth), id)} onRetryNow={retryNow} onDiscard={(id) => void discardFrame(id)}
         onConnections={() => setConnectionsOpen(true)} onClose={() => setWorkspaceOpen(false)} onCapture={next => { setMode(next); setWorkspaceOpen(false); }} onSpeak={speak} />}
       {toast && <div className="lens-toast">{toast}</div>}
 
@@ -1204,7 +1407,9 @@ export function App() {
                 ? "Kobe is recognising the face… or pick the student now."
                 : studentPicker.imageKey
                   ? (studentPicker.hint ?? "Pick the student.")
-                  : "Couldn't send the frame — pick a student manually to continue."}
+                  : studentPicker.waiting
+                    ? "The photo is saved on this phone but has not reached the school server yet — pick a student manually to continue."
+                    : "No photo was taken — pick a student manually to continue."}
             </p>
             {studentPicker.imageKey && (
               <label className="mark-check">
@@ -1249,7 +1454,9 @@ export function App() {
       )}
 
       <LookupPanel auth={auth} sessionId={sessionId} onClose={() => setLookupBrief(null)} brief={lookupBrief} />
-      {markOpen && <MarkPanel auth={auth} sessionId={sessionId} paper={markOpen} onClose={() => setMarkOpen(null)} />}
+      {markOpen && <MarkPanel key={markOpen.requestId ?? "new"} auth={auth} sessionId={sessionId} paper={markOpen} review={markOpen.review}
+        onReviewed={(message) => { setMarkOpen(null); setToast(message); setReviewsStamp((n) => n + 1); setWorkspaceOpen(true); }}
+        onClose={() => { const reviewing = !!markOpen.review; setMarkOpen(null); if (reviewing) setWorkspaceOpen(true); }} />}
     </div>
   );
 }

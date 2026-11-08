@@ -1,12 +1,23 @@
 import { useEffect, useRef, useState } from "react";
 import "./workspace.css";
+import type { QueuedFrame, QueueStatus } from "./uploadQueue";
 
+/** A paper K9 has read that is waiting for the teacher to say whose it is. */
+export type PaperReview = {
+  request_id: number;
+  captured_at: string;
+  read_at: string | null;
+  exam_id: number | null;
+  has_image: boolean;
+  questions: number;
+  /** What K9 read. Shown to the teacher; never used to choose a student. */
+  ai: { student_code: string | null; student_name: string | null; student_confidence: number | null };
+};
 export type TeacherAuth = {
   api_base: string;
   token: string;
   teacher_name: string;
 };
-export type CaptureActivity = { id: number; mode: string; at: string };
 type Period = {
   period_id: number;
   class_name: string | null;
@@ -135,7 +146,12 @@ export function TeacherWorkspace({
   auth,
   connected,
   source,
-  captures,
+  queue,
+  reviews,
+  onReview,
+  onRetry,
+  onRetryNow,
+  onDiscard,
   onCapture,
   onClose,
   onSpeak,
@@ -146,7 +162,15 @@ export function TeacherWorkspace({
   auth: TeacherAuth;
   connected: boolean;
   source: string | null;
-  captures: CaptureActivity[];
+  /** This account's captures stored on the phone, newest first. */
+  queue: { frames: QueuedFrame[]; status: QueueStatus; otherAccounts: number };
+  reviews: PaperReview[];
+  onReview: (review: PaperReview) => void;
+  /** Put one failed capture (or, with no id, all of them) back in line. */
+  onRetry: (id?: string) => void;
+  /** Stop waiting out the backoff and try the server again now. */
+  onRetryNow: () => void;
+  onDiscard: (id: string) => void;
   onCapture: (mode: "lookup" | "mark") => void;
   onClose: () => void;
   onSpeak: (text: string) => void;
@@ -255,6 +279,20 @@ export function TeacherWorkspace({
   // The dependency is the *ids* of the unresolved captures, not the objects:
   // this effect calls setStatuses, and depending on `statuses` would restart
   // the timer on every poll — a 4-second interval turned into a hot loop.
+  // Only uploaded captures have a server request to ask about.
+  const captures = queue.frames.flatMap((f) =>
+    f.state === "done" && f.requestId != null
+      ? [{ id: f.requestId, mode: f.mode, at: f.uploadedAt ?? f.createdAt }]
+      : [],
+  );
+  const waitingFrames = queue.frames.filter(
+    (f) => f.state === "pending" || f.state === "uploading",
+  );
+  const failedFrames = queue.frames.filter((f) => f.state === "failed");
+  const clock = (at: number) =>
+    new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const kind = (mode: string) =>
+    mode === "mark" ? "Paper reading" : "Student lookup";
   const unresolvedIds = captures
     .filter((c) => !statuses[c.id] || statuses[c.id] === "pending")
     .map((c) => c.id);
@@ -379,14 +417,14 @@ export function TeacherWorkspace({
       <header className="teacher-heading">
         <div>
           <span className="teacher-eyebrow">
-            <span className="teacher-logo">k.</span> KobeAI{" "}
+            <span className="teacher-logo">K9</span> KobeAI{" "}
             <span className="teacher-edition">FOR TEACHERS</span>
           </span>
           <h1>
             Hello, {auth.teacher_name.split(" ")[0]}{" "}
             <span className="teacher-greeting">✦</span>
           </h1>
-          <p>A little support. A bigger impact.</p>
+          <p>Your classroom, ready for today.</p>
         </div>
         <button className="teacher-lens-button" onClick={onClose}>
           <ToolIcon name="lens" />
@@ -403,12 +441,12 @@ export function TeacherWorkspace({
         </span>
         <div>
           <strong>
-            {connected ? `${source} connected` : "Your Rokid glasses"}
+            {connected ? `${source} connected` : "Connect your glasses"}
           </strong>
           <small>
             {connected
               ? "Ready for photos and teacher prompts"
-              : "Automatic after first setup"}
+              : "Choose your device in Connections"}
           </small>
         </div>
         <span className="connection-link">Settings ↗</span>
@@ -435,20 +473,20 @@ export function TeacherWorkspace({
             <Status k="today" />
             <article className="teacher-hero">
               <div className="teacher-hero-kicker">
-                <ToolIcon name="Ask Kobe" /> YOUR TEACHING COMPANION
+                <ToolIcon name="Ask Kobe" /> PAPER MARKING
               </div>
               <h2>
-                More time to teach.
+                Capture. Review.
                 <br />
-                More room to inspire.
+                Back to teaching.
               </h2>
               <p>
-                Plan a lesson, find the right explanation,
+                Photograph a marked paper. Check the reading,
                 <br />
-                or give a student a little extra help.
+                confirm the student, and save the result.
               </p>
-              <button onClick={() => setTab("Ask Kobe")}>
-                Let’s prepare a lesson <span aria-hidden="true">↗</span>
+              <button onClick={() => onCapture("mark")}>
+                Start marking <span aria-hidden="true">↗</span>
               </button>
               <div className="teacher-orbit" aria-hidden="true">
                 <i />
@@ -498,9 +536,9 @@ export function TeacherWorkspace({
                 <p>No current or upcoming lessons recorded.</p>
               )}
             <aside className="teacher-card teacher-tip">
-              <h3>A thoughtful teaching partner</h3>
+              <h3>You make the final call</h3>
               <p>
-                Connect Rokid, check the school server, then open Lens. Review
+                Connect your glasses or choose the phone camera. Review
                 AI suggestions before recording marks.
               </p>
             </aside>
@@ -813,24 +851,133 @@ export function TeacherWorkspace({
               </button>
             </div>
             <p className="teacher-muted">
-              Last 20 accepted captures in this sign-in. Cleared on sign-out or
-              reload. A processed capture is not a submitted grade.
+              Every photo is saved on this phone first and stays here until the
+              school server accepts it, including after the app is closed. A
+              processed capture is not a submitted grade.
             </p>
-            {!captures.length && (
+            {reviews.length > 0 && (
+              <section aria-label="Papers to review" className="teacher-queue">
+                <div className="teacher-section-title">
+                  <h3>
+                    {reviews.length} paper{reviews.length === 1 ? "" : "s"} to
+                    review
+                  </h3>
+                </div>
+                <p className="teacher-muted">
+                  K9 has read these. No result is recorded until you choose
+                  the student and save.
+                </p>
+                {reviews.map((r) => (
+                  <article className="teacher-period" key={r.request_id}>
+                    <span>{clock(Date.parse(r.captured_at))}</span>
+                    <div>
+                      <strong>
+                        {r.questions} question{r.questions === 1 ? "" : "s"} read
+                      </strong>
+                      <small>
+                        {r.ai.student_name || r.ai.student_code
+                          ? `K9 read “${r.ai.student_name ?? r.ai.student_code}” on the paper · not confirmed`
+                          : "K9 could not read a name · choose the student"}
+                      </small>
+                      <div className="connection-actions">
+                        <button onClick={() => onReview(r)}>Review</button>
+                      </div>
+                    </div>
+                  </article>
+                ))}
+              </section>
+            )}
+            {queue.status.needsSignIn && (
+              <p role="alert" className="teacher-queue-alert">
+                The school server no longer accepts this sign-in, so uploads
+                are paused. Your photos are safe on this phone. Use
+                Connections → Change server / sign in, and sign in as the same
+                teacher to send them.
+              </p>
+            )}
+            {(waitingFrames.length > 0 || failedFrames.length > 0) && (
+              <section aria-label="Waiting to upload" className="teacher-queue">
+                <div className="teacher-section-title">
+                  <h3>
+                    {waitingFrames.length} waiting to upload
+                    {failedFrames.length
+                      ? ` · ${failedFrames.length} failed`
+                      : ""}
+                  </h3>
+                  <div className="connection-actions">
+                    <button
+                      disabled={!waitingFrames.length || queue.status.needsSignIn}
+                      onClick={onRetryNow}
+                    >
+                      Try now
+                    </button>
+                    {failedFrames.filter((f) => !f.expired).length > 1 && (
+                      <button onClick={() => onRetry()}>Retry all failed</button>
+                    )}
+                  </div>
+                </div>
+                {failedFrames.map((f) => (
+                  <article className="teacher-period teacher-frame-failed" key={f.id}>
+                    <span>{clock(f.createdAt)}</span>
+                    <div>
+                      <strong>{kind(f.mode)} · failed</strong>
+                      <small>{f.lastError ?? "Upload failed."}</small>
+                      <div className="connection-actions">
+                        {!f.expired && (
+                          <button onClick={() => onRetry(f.id)}>Retry</button>
+                        )}
+                        <button
+                          onClick={() => {
+                            if (
+                              window.confirm(
+                                "Remove this photo from the phone? It has not reached the school server and cannot be recovered.",
+                              )
+                            )
+                              onDiscard(f.id);
+                          }}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  </article>
+                ))}
+                {waitingFrames.map((f) => (
+                  <article className="teacher-period" key={f.id}>
+                    <span>{clock(f.createdAt)}</span>
+                    <div>
+                      <strong>
+                        {kind(f.mode)} ·{" "}
+                        {f.state === "uploading" ? "uploading" : "pending"}
+                      </strong>
+                      <small>
+                        {f.lastError ??
+                          (f.state === "uploading"
+                            ? "Sending to the school server…"
+                            : "Saved on this phone. Next in line.")}
+                      </small>
+                    </div>
+                  </article>
+                ))}
+              </section>
+            )}
+            {queue.otherAccounts > 0 && (
+              <p className="teacher-muted">
+                {queue.otherAccounts} photo
+                {queue.otherAccounts === 1 ? "" : "s"} from a different sign-in
+                {queue.otherAccounts === 1 ? " is" : " are"} stored on this
+                phone. They are not shown here and are only sent when that
+                teacher signs in again.
+              </p>
+            )}
+            {!queue.frames.length && !reviews.length && (
               <p>No captures sent yet. Open Lens to begin.</p>
             )}
             {captures.map((c) => (
               <article className="teacher-period" key={c.id}>
-                <span>
-                  {new Date(c.at).toLocaleTimeString([], {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })}
-                </span>
+                <span>{clock(c.at)}</span>
                 <div>
-                  <strong>
-                    {c.mode === "mark" ? "Paper reading" : "Student lookup"}
-                  </strong>
+                  <strong>{kind(c.mode)} · completed</strong>
                   <small>
                     #{c.id} · {statuses[c.id] ?? "Accepted by server"}
                   </small>
